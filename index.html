@@ -6,97 +6,216 @@
 <meta name="robots" content="noindex, nofollow">
 <title>DogPuzzle 관리자</title>
 <style>
+  /* 라이트 모드. 관리자 페이지는 밝은 곳에서 보는 일이 많고 표와 숫자가 대부분이라
+     밝은 바탕이 훨씬 잘 읽힌다. 한 가지 모드로 확실히 만든다 —
+     어중간하게 둘 다 지원하면 어느 쪽도 안 예쁘다.
+
+     크기는 거의 전부 clamp()로 잡았다. 특정 폭에서만 툭 바뀌는 게 아니라
+     화면이 넓어지고 좁아지는 만큼 연속적으로 따라간다. 중간 크기 화면
+     (태블릿 가로, 분할 화면, 작은 노트북)에서 어색해지지 않는 게 목적이다. */
   :root {
-    --bg:#12161b; --card:#1a2028; --line:#263040;
-    --ink:#e6edf5; --dim:#8b9bb0; --accent:#0e8f87; --accent-soft:#17b3a8;
-    --warn:#d9a441; --danger:#d95757;
+    --bg:#f4f6f8;          /* 살짝 푸른 회색. 순백이면 카드가 안 떠 보인다 */
+    --surface:#ffffff;
+    --zebra:#fafbfc;
+    --line:#e3e7ec;
+    --line-strong:#cfd6de;
+    --ink:#1a2430;
+    --dim:#63707e;
+    --accent:#0e8f87;
+    --accent-soft:#17b3a8;
+    --accent-wash:#e6f5f4;
+    --warn:#a3701a;
+    --warn-wash:#fdf4e3;
+    --danger:#cf4040;
+    --danger-wash:#fdeeee;
+    --shadow:0 1px 2px rgba(20,32,45,.05), 0 1px 3px rgba(20,32,45,.04);
+    --shadow-lift:0 4px 16px rgba(20,32,45,.10);
+
+    /* 화면 폭을 따라 같이 자라는 값들 */
+    --r:clamp(10px, 1.4vw, 14px);          /* 모서리 */
+    --gap:clamp(7px, 1.1vw, 12px);         /* 요소 사이 */
+    --pad-x:clamp(11px, 1.6vw, 16px);      /* 안쪽 좌우 */
+    --pad-y:clamp(9px, 1.2vw, 13px);       /* 안쪽 위아래 */
+    --fs:clamp(13px, 0.55vw + 12px, 14.5px);
+    --fs-sm:clamp(11.5px, 0.35vw + 11px, 13px);
   }
   *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
   body{margin:0;background:var(--bg);color:var(--ink);
-       font:14px/1.6 -apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic",sans-serif}
-  .wrap{max-width:1180px;margin:0 auto;padding:28px 20px 60px}
-  h1{font-size:20px;margin:0;letter-spacing:-.2px}
-  .head{display:flex;align-items:center;gap:12px;margin-bottom:22px;flex-wrap:wrap}
+       font:var(--fs)/1.6 -apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo",
+            "Malgun Gothic","Segoe UI",sans-serif;
+       -webkit-font-smoothing:antialiased}
+  .wrap{width:min(1180px, 100%);margin:0 auto;
+        padding:0 clamp(10px, 2.2vw, 22px) clamp(48px, 8vw, 72px)}
+
+  /* ---------------------------------------------------------------- 머리 */
+  h1{font-size:clamp(16px, 1.1vw + 13px, 20px);margin:0;letter-spacing:-.3px;font-weight:800}
+  h2{font-size:clamp(13px, 0.5vw + 11.5px, 15px);margin:clamp(20px,3vw,30px) 0 10px;
+     color:var(--dim);font-weight:700;letter-spacing:.2px}
+  .head{display:flex;align-items:center;gap:var(--gap);margin-bottom:var(--gap);
+        flex-wrap:wrap;position:sticky;top:0;z-index:20;background:var(--bg);
+        padding:clamp(10px,1.8vw,16px) 0 clamp(9px,1.4vw,13px);
+        border-bottom:1px solid var(--line)}
   .head .spacer{flex:1}
-  button{background:var(--accent);color:#fff;border:0;border-radius:8px;
-         padding:9px 16px;font-size:13px;font-weight:700;cursor:pointer}
-  button.ghost{background:transparent;color:var(--dim);border:1px solid var(--line)}
-  button:disabled{opacity:.5;cursor:default}
 
-  .login{max-width:360px;margin:80px auto;background:var(--card);
-         border:1px solid var(--line);border-radius:14px;padding:26px}
-  .login h2{margin:0 0 6px;font-size:17px}
-  .login p{margin:0 0 18px;color:var(--dim);font-size:12.5px}
-  input{width:100%;padding:11px 12px;border-radius:8px;border:1px solid var(--line);
-        background:#0e1319;color:var(--ink);font-size:14px;margin-bottom:10px}
-  .err{color:var(--danger);font-size:12.5px;margin-top:10px;min-height:18px}
+  /* ---------------------------------------------------------------- 버튼 */
+  /* 손가락으로 누르는 화면에서는 38px 밑으로 내려가면 안 눌린다.
+     그래서 최소값만 고정하고 위로만 자라게 둔다. */
+  button{background:var(--accent);color:#fff;border:0;border-radius:calc(var(--r) * .75);
+         padding:calc(var(--pad-y) * .75) var(--pad-x);
+         font-size:var(--fs-sm);font-weight:700;cursor:pointer;
+         min-height:max(38px, 2.6em);transition:filter .12s,background .12s;
+         font-family:inherit;touch-action:manipulation}
+  button:hover{filter:brightness(1.06)}
+  button:active{filter:brightness(.95)}
+  button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  button.ghost{background:var(--surface);color:var(--dim);border:1px solid var(--line-strong)}
+  button.ghost:hover{background:#f0f3f6;color:var(--ink)}
+  button.danger{background:var(--danger)}
+  button.sm{padding:calc(var(--pad-y) * .45) calc(var(--pad-x) * .7);
+            font-size:clamp(11px,.3vw + 10.5px,12.5px);min-height:max(32px, 2.2em)}
+  button:disabled{opacity:.45;cursor:default;filter:none}
 
-  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:22px}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
-  .card .label{color:var(--dim);font-size:11.5px;letter-spacing:.3px}
-  .card .value{font-size:22px;font-weight:800;margin-top:3px;font-variant-numeric:tabular-nums}
+  /* ---------------------------------------------------------------- 로그인 */
+  .login{width:min(380px, 100%);margin:clamp(40px, 12vh, 110px) auto;background:var(--surface);
+         border:1px solid var(--line);border-radius:calc(var(--r) * 1.3);
+         padding:clamp(20px, 4vw, 30px);box-shadow:var(--shadow-lift)}
+  .login h2{margin:0 0 6px;font-size:clamp(16px,1vw+14px,19px);color:var(--ink)}
+  .login p{margin:0 0 18px;color:var(--dim);font-size:var(--fs-sm)}
+  .err{color:var(--danger);font-size:var(--fs-sm);margin-top:10px;min-height:1.3em}
 
-  .toolbar{display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap}
-  select,input[type=search]{background:#0e1319;color:var(--ink);border:1px solid var(--line);
-    border-radius:8px;padding:8px 10px;font-size:13px;width:auto;margin:0}
-  .table-scroll{overflow-x:auto;border:1px solid var(--line);border-radius:12px}
-  table{width:100%;border-collapse:collapse;min-width:720px}
-  th,td{padding:10px 14px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap}
-  th{background:#151b23;color:var(--dim);font-size:11.5px;font-weight:700;letter-spacing:.3px}
+  /* ---------------------------------------------------------------- 입력 */
+  /* 여기만 고정값을 쓴다. 모바일 사파리는 글자가 16px보다 작은 입력칸을 누르면
+     화면을 통째로 확대해 버려서, 표가 화면 밖으로 밀려 나가 아무것도 못 하게 된다.
+     넓은 화면에서만 살짝 줄인다. */
+  input,select,textarea{font-family:inherit;font-size:16px}
+  @media (min-width:721px){ input,select,textarea{font-size:13.5px} }
+  input,textarea,select{width:100%;padding:calc(var(--pad-y) * .8) var(--pad-x);
+    border-radius:calc(var(--r) * .75);border:1px solid var(--line-strong);
+    background:var(--surface);color:var(--ink);margin-bottom:10px;min-height:max(40px, 2.8em)}
+  textarea{resize:vertical;line-height:1.6}
+  input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent);
+    box-shadow:0 0 0 3px var(--accent-wash)}
+  select,input[type=search],input[type=number],input[type=text],input[type=datetime-local]{
+    width:auto;margin:0}
+  input[type=checkbox]{width:auto;min-height:0;margin:0;accent-color:var(--accent);
+    transform:scale(1.15);cursor:pointer}
+
+  /* ---------------------------------------------------------------- 요약 카드 */
+  /* 칸 최소폭도 화면을 따라간다. 좁으면 2열, 넓어질수록 자연스럽게 늘어난다. */
+  .cards{display:grid;gap:var(--gap);margin-bottom:clamp(14px,2.2vw,22px);
+         grid-template-columns:repeat(auto-fit, minmax(clamp(128px, 17vw, 168px), 1fr))}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+        padding:var(--pad-y) var(--pad-x);box-shadow:var(--shadow)}
+  .card .label{color:var(--dim);font-size:clamp(11px,.25vw+10.5px,12px);
+               letter-spacing:.2px;font-weight:600}
+  .card .value{font-size:clamp(18px, 1.6vw + 14px, 24px);font-weight:800;margin-top:2px;
+               font-variant-numeric:tabular-nums;letter-spacing:-.5px}
+
+  /* ---------------------------------------------------------------- 탭 */
+  /* 줄바꿈 대신 옆으로 미는 띠. 두 줄 세 줄로 늘어나면 화면 절반이 탭이 되고
+     정작 내용이 안 보인다. */
+  .tabs{display:flex;gap:6px;margin-bottom:var(--gap);overflow-x:auto;padding-bottom:4px;
+        scrollbar-width:none;-webkit-overflow-scrolling:touch}
+  .tabs::-webkit-scrollbar{display:none}
+  .tabs button{background:var(--surface);color:var(--dim);border:1px solid var(--line);
+               white-space:nowrap;flex:0 0 auto}
+  .tabs button:hover{color:var(--ink)}
+  .tabs button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+
+  /* ---------------------------------------------------------------- 도구줄 */
+  .toolbar{display:flex;gap:8px;align-items:center;margin-bottom:var(--gap);flex-wrap:wrap;
+           background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+           padding:calc(var(--pad-y) * .85) var(--pad-x);box-shadow:var(--shadow)}
+  .toolbar input[type=search]{flex:1 1 min(220px, 100%)}
+  .actions{display:flex;gap:6px;flex-wrap:wrap}
+
+  /* ---------------------------------------------------------------- 표 */
+  /* min-width를 못 박지 않는다. 칸 수가 적은 표까지 억지로 720px가 되면
+     넓은 화면에서 쓸데없이 가로 스크롤이 생긴다. 내용이 정하게 둔다. */
+  .table-scroll{overflow-x:auto;border:1px solid var(--line);border-radius:var(--r);
+                background:var(--surface);box-shadow:var(--shadow);
+                -webkit-overflow-scrolling:touch}
+  table{width:100%;border-collapse:separate;border-spacing:0}
+  th,td{padding:calc(var(--pad-y) * .85) var(--pad-x);text-align:left;white-space:nowrap;
+        border-bottom:1px solid var(--line);background:var(--surface)}
+  th{position:sticky;top:0;z-index:2;background:#f7f9fb;color:var(--dim);
+     font-size:clamp(11px,.25vw+10.5px,12px);font-weight:700;letter-spacing:.3px;
+     border-bottom:1px solid var(--line-strong)}
+  tbody tr:nth-child(even) td{background:var(--zebra)}
+  tbody tr:hover td{background:var(--accent-wash)}
   tr:last-child td{border-bottom:0}
   td.num{text-align:right;font-variant-numeric:tabular-nums}
-  .pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700;margin-left:6px}
-  .pill.today{background:rgba(23,179,168,.16);color:var(--accent-soft)}
-  .pill.heart{background:rgba(217,87,87,.16);color:#e88}
-  .muted{color:var(--dim)}
-  .notice{background:rgba(217,164,65,.12);border:1px solid rgba(217,164,65,.35);
-    color:var(--warn);border-radius:10px;padding:12px 14px;margin-bottom:18px;font-size:13px}
-  .empty{padding:28px;text-align:center;color:var(--dim)}
-  .tabs{display:flex;gap:6px;margin-bottom:18px;flex-wrap:wrap}
-  .tabs button{background:transparent;color:var(--dim);border:1px solid var(--line)}
-  .tabs button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
-  button.danger{background:var(--danger)}
-  button.sm{padding:5px 10px;font-size:12px}
-  .actions{display:flex;gap:6px;flex-wrap:wrap}
-  input[type=number],input[type=text]{background:#0e1319;color:var(--ink);
-    border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px}
-  dialog{background:var(--card);color:var(--ink);border:1px solid var(--line);
-    border-radius:14px;padding:22px;max-width:430px;width:92%}
-  dialog::backdrop{background:rgba(0,0,0,.6)}
-  dialog h3{margin:0 0 12px;font-size:16px}
-  dialog label{display:block;font-size:12px;color:var(--dim);margin:10px 0 4px}
-  dialog input{width:100%;margin:0}
-  .row{display:flex;gap:8px}
-  .row > *{flex:1}
-  h2{font-size:15px;margin:26px 0 10px}
 
-  /* 차트 — 외부 라이브러리 없이 SVG로 그린다 */
-  .chart{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px 8px}
-  .chart svg{width:100%;height:170px;display:block}
+  /* 오른쪽으로 밀었을 때 지금 보는 줄이 누구 것인지 알 수 있게 첫 칸을 붙잡아 둔다.
+     좁은 화면에서만이 아니라 늘 그렇게 둔다 — 칸이 많은 표는 넓은 화면에서도 밀린다. */
+  th:first-child,td:first-child{position:sticky;left:0;z-index:1;
+    box-shadow:1px 0 0 var(--line)}
+  th:first-child{z-index:3}
+
+  /* ---------------------------------------------------------------- 조각 */
+  .pill{display:inline-block;padding:2px 8px;border-radius:999px;
+        font-size:clamp(10.5px,.2vw+10px,11.5px);font-weight:700;margin-left:6px}
+  .pill.today{background:var(--accent-wash);color:var(--accent)}
+  .pill.heart{background:var(--danger-wash);color:var(--danger)}
+  .muted{color:var(--dim)}
+  .notice{background:var(--warn-wash);border:1px solid #f0dcb4;color:var(--warn);
+    border-radius:var(--r);padding:var(--pad-y) var(--pad-x);margin-bottom:var(--gap);
+    font-size:var(--fs-sm);line-height:1.65}
+  .empty{padding:clamp(24px,5vw,38px) 20px;text-align:center;color:var(--dim);
+    background:var(--surface);border:1px dashed var(--line-strong);border-radius:var(--r)}
+  .row{display:flex;gap:8px;flex-wrap:wrap}
+  .row > *{flex:1 1 clamp(120px, 30%, 180px);min-width:0}
+
+  /* ---------------------------------------------------------------- 대화상자 */
+  dialog{background:var(--surface);color:var(--ink);border:1px solid var(--line);
+    border-radius:calc(var(--r) * 1.3);padding:clamp(16px,3vw,24px);
+    width:min(430px, 92vw);box-shadow:var(--shadow-lift)}
+  dialog::backdrop{background:rgba(18,26,36,.45)}
+  dialog h3{margin:0 0 10px;font-size:clamp(15px,.8vw+13px,17px);font-weight:800}
+  dialog label{display:block;font-size:12px;color:var(--dim);margin:12px 0 5px;font-weight:600}
+  dialog input,dialog textarea{width:100%;margin:0}
+
+  /* ---------------------------------------------------------------- 차트 */
+  .chart{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+         padding:var(--pad-y) var(--pad-x) calc(var(--pad-y) * .7);box-shadow:var(--shadow)}
+  .chart svg{width:100%;height:clamp(130px, 18vw, 190px);display:block}
   .chart .gl{stroke:var(--line);stroke-width:1}
   .chart .ax{fill:var(--dim);font-size:11px}
-  .legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:6px}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:8px}
   .lg{display:inline-flex;align-items:center;gap:6px;color:var(--dim);font-size:12px}
   .lg i{width:10px;height:10px;border-radius:3px;display:inline-block}
 
-  .bars{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px}
-  .bar-row{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+  .bars{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+        padding:var(--pad-x);box-shadow:var(--shadow)}
+  .bar-row{display:flex;align-items:center;gap:10px;margin-bottom:9px}
   .bar-row:last-child{margin-bottom:0}
-  .bar-label{width:64px;color:var(--dim);font-size:12.5px;text-align:right}
-  .bar-track{flex:1;height:14px;background:#0e1319;border-radius:7px;overflow:hidden}
-  .bar-fill{display:block;height:100%;background:var(--accent-soft);border-radius:7px}
-  .bar-value{width:56px;text-align:right;font-variant-numeric:tabular-nums;font-size:12.5px}
+  .bar-label{flex:0 0 clamp(46px, 9vw, 78px);color:var(--dim);
+             font-size:var(--fs-sm);text-align:right}
+  .bar-track{flex:1;height:clamp(11px,1.4vw,15px);background:#eef1f4;
+             border-radius:999px;overflow:hidden;min-width:0}
+  .bar-fill{display:block;height:100%;background:var(--accent-soft);border-radius:999px}
+  .bar-value{flex:0 0 clamp(44px, 8vw, 62px);text-align:right;
+             font-variant-numeric:tabular-nums;font-size:var(--fs-sm)}
 
   /* 지급 묶음 명단 */
-  .mem{display:inline-block;padding:2px 8px;margin:2px 4px 2px 0;border-radius:6px;
-       background:#0e1319;color:var(--dim);font-size:12px}
-  .mem.got{background:rgba(23,179,168,.16);color:var(--accent-soft);font-weight:700}
+  .mem{display:inline-block;padding:3px 9px;margin:2px 4px 2px 0;
+       border-radius:calc(var(--r) * .55);background:#eff2f5;color:var(--dim);font-size:12px}
+  .mem.got{background:var(--accent-wash);color:var(--accent);font-weight:700}
 
-  input[type=checkbox]{width:auto;margin:0;accent-color:var(--accent)}
-  textarea{width:100%;padding:11px 12px;border-radius:8px;border:1px solid var(--line);
-    background:#0e1319;color:var(--ink);font-size:14px;font-family:inherit;resize:vertical}
-  input[type=datetime-local]{background:#0e1319;color:var(--ink);border:1px solid var(--line);
-    border-radius:8px;padding:8px 10px;font-size:13px;width:100%}
+  /* ================================================================ 좁은 화면
+     여기서는 크기가 아니라 **배치와 표시 여부**만 바꾼다.
+     크기는 위에서 clamp()가 이미 연속적으로 처리한다. */
+  @media (max-width:720px){
+    .head .muted{display:none}      /* 이메일까지 넣으면 줄이 넘쳐 버튼이 밀린다 */
+
+    /* 도구줄의 버튼 묶음만 한 줄을 다 쓰게 한다.
+       .actions 전체에 걸면 표 안의 관리 버튼까지 세로로 쌓여서
+       모든 행이 세 배로 높아진다(실측). 표 안에서는 옆으로 나란히 둔다. */
+    .toolbar .actions{width:100%}
+    .toolbar .actions button{flex:1 1 auto}
+  }
+  td .actions{flex-wrap:nowrap}
 </style>
 </head>
 <body>

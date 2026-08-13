@@ -5,6 +5,10 @@ let TAB = "players";
 let PLAYERS = [], EVENTS = [], AUDIT = [], REWARDS = [], BATCHES = [], STATS = [], BUCKETS = [];
 let FUNNEL = [], RETENTION = [], NOTICES = [];
 let PAY_DAILY = [], PAY_MONTHLY = [], PAY_PRODUCT = [], PAY_LEDGER = [], COIN_SINKS = [];
+/** 같이하기(대전) — 일자별/계정별/판 크기별 집계와 기능 스위치. */
+let VS_DAILY = [], VS_PLAYERS = [], VS_BOARDS = [], VS_ON = false;
+/** 앱 설정값 전체 (key → value). 업데이트 관문·기능 스위치가 여기 들어 있다. */
+let CONFIG = {};
 /** 회원 id → {orders, revenue, currency}. 회원 목록 옆에 붙여 쓴다. */
 let PAY_TOTALS = {};
 /** 이벤트 이력을 펼쳐 놓은 회원. */
@@ -561,6 +565,145 @@ async function revokeBatch(id) {
 }
 
 // ------------------------------------------------------------------ 표
+async function loadVersus() {
+  try {
+    VS_DAILY = await rpc("admin_versus_daily", { p_days: 30 }) || [];
+    VS_PLAYERS = await rpc("admin_versus_players", { p_limit: 200 }) || [];
+    VS_BOARDS = await rpc("admin_versus_boards") || [];
+    await loadConfig();
+    VS_ON = CONFIG.versus_enabled === true;
+    return null;
+  } catch (e) { return e; }
+}
+
+async function loadConfig() {
+  const { data, error } = await sb.from("app_config").select("*");
+  if (error) throw new Error(error.message);
+  CONFIG = Object.fromEntries((data || []).map((r) => [r.key, r.value]));
+}
+
+/**
+ * 업데이트 관문. 숫자는 Android versionCode / iOS 빌드 번호다.
+ *
+ * 사람이 읽는 1.1.2가 아니라 정수로 비교한다 — 문자열 버전 비교는 "1.10 < 1.9"가 되는
+ * 함정이 있어 반드시 틀린다. 0은 "검사 안 함"이다.
+ */
+function updateTab(err) {
+  if (err) {
+    return `<div class="notice">설정 조회 실패: ${esc(err.message)}<br>
+            sql/migrations/013_app_config.sql을 실행했는지 확인하세요.</div>`;
+  }
+  const g = (k, p) => Number(CONFIG?.[k]?.[p] ?? 0);
+  const url = (p) => String(CONFIG?.store_url?.[p] ?? "");
+  const row = (p, label) => `
+    <tr>
+      <td><b>${label}</b></td>
+      <td class="num"><input type="number" id="min_${p}" value="${g("min_version", p)}" style="width:90px"></td>
+      <td class="num"><input type="number" id="latest_${p}" value="${g("latest_version", p)}" style="width:90px"></td>
+      <td><input type="text" id="url_${p}" value="${esc(url(p))}" placeholder="스토어 주소" style="width:100%"></td>
+    </tr>`;
+  return `
+    <div class="notice">
+      <b>강제 업데이트는 되돌리기 어렵습니다.</b>
+      최소 버전을 지금 배포된 버전보다 높게 넣으면 <b>모든 사용자가 앱을 못 씁니다.</b>
+      새 버전이 스토어에 올라가 심사를 통과한 뒤에 올리세요. 0이면 검사하지 않습니다.
+    </div>
+    <div class="table-scroll"><table style="min-width:640px">
+      <thead><tr>
+        <th>플랫폼</th><th class="num">최소 버전 (강제)</th>
+        <th class="num">최신 버전 (권장)</th><th>스토어 주소</th>
+      </tr></thead>
+      <tbody>${row("android", "Android")}${row("ios", "iOS")}</tbody>
+    </table></div>
+    <div class="toolbar"><button class="sm" id="saveVersions">저장</button></div>`;
+}
+
+async function saveVersions() {
+  const num = (id) => Math.max(0, Number($("#" + id).value) || 0);
+  const min = { android: num("min_android"), ios: num("min_ios") };
+  const latest = { android: num("latest_android"), ios: num("latest_ios") };
+  const store = { android: $("#url_android").value.trim(), ios: $("#url_ios").value.trim() };
+
+  const on = Math.max(min.android, min.ios) > 0;
+  if (on && !confirm(
+    `최소 버전을 Android ${min.android} / iOS ${min.ios}로 올립니다.\n\n` +
+    `이 버전보다 낮은 앱은 즉시 사용할 수 없게 됩니다.\n` +
+    `새 버전이 스토어에 이미 올라가 있는지 확인하셨나요?`)) return;
+
+  await act(async () => {
+    await rpc("admin_set_config", { p_key: "min_version", p_value: min });
+    await rpc("admin_set_config", { p_key: "latest_version", p_value: latest });
+    await rpc("admin_set_config", { p_key: "store_url", p_value: store });
+  }, refresh);
+}
+
+/** 대전 기능을 켜고 끈다. 끄면 앱 대기화면에서 버튼이 사라진다. */
+async function toggleVersus() {
+  const next = !VS_ON;
+  if (!confirm(next
+    ? "같이하기를 켭니다.\n\n앱 대기화면에 버튼이 나타납니다."
+    : "같이하기를 끕니다.\n\n앱에서 버튼이 사라집니다. 이미 진행 중인 방은 그대로 끝납니다.")) return;
+  await act(() => rpc("admin_set_config", { p_key: "versus_enabled", p_value: next }), refresh);
+}
+
+function versusTab(err) {
+  if (err) {
+    return `<div class="notice">대전 집계 조회 실패: ${esc(err.message)}<br>
+            supabase_versus.sql을 실행했는지 확인하세요.</div>`;
+  }
+  const totalMatches = VS_DAILY.reduce((a, r) => a + Number(r.matches || 0), 0);
+  return `
+    <div class="toolbar">
+      <span>같이하기 기능</span>
+      <b style="color:${VS_ON ? "var(--accent)" : "var(--dim)"}">${VS_ON ? "켜짐" : "꺼짐"}</b>
+      <button class="sm" id="toggleVersus">${VS_ON ? "끄기" : "켜기"}</button>
+      <span class="muted" style="font-size:12.5px">
+        앱은 켤 때 이 값을 읽습니다. 이미 실행 중인 앱은 다시 켜야 반영됩니다.
+      </span>
+    </div>
+    <div class="cards">
+      <div class="card"><div class="label">누적 판수 (30일)</div><div class="value">${fmt(totalMatches)}</div></div>
+      <div class="card"><div class="label">참여 계정</div><div class="value">${fmt(VS_PLAYERS.length)}</div></div>
+    </div>
+    <h2>일자별 판수 · 참여자</h2>
+    ${VS_DAILY.length
+      ? lineChart(VS_DAILY.map((r) => r.day), [
+          { name: "판수", color: "#17b3a8", values: VS_DAILY.map((r) => Number(r.matches)) },
+          { name: "참여자", color: "#7aa2f7", values: VS_DAILY.map((r) => Number(r.players)) },
+        ])
+      : `<div class="empty">아직 진행된 판이 없습니다</div>`}
+    <h2>판 크기별</h2>
+    ${VS_BOARDS.length
+      ? barChart(VS_BOARDS.map((r) => ({ bucket: `${r.board_n}×${r.board_n}`, players: Number(r.matches) })))
+      : `<div class="empty">데이터 없음</div>`}
+    <h2>계정별 전적</h2>
+    ${versusPlayersTable()}`;
+}
+
+/** 승률이 아니라 평균 등수가 중심이다 — 인원이 늘면 승률은 자동으로 낮아져서
+ *  잘하는 사람과 못하는 사람을 구분하지 못한다. */
+function versusPlayersTable() {
+  if (!VS_PLAYERS.length) return `<div class="empty">기록이 아직 없습니다</div>`;
+  return `<div class="table-scroll"><table>
+    <thead><tr>
+      <th>닉네임</th><th class="num">판수</th>
+      <th class="num">1등</th><th class="num">2등</th><th class="num">3등</th>
+      <th class="num">평균 등수</th><th class="num">미완주</th>
+      <th class="num">최고 기록</th><th>마지막</th>
+    </tr></thead>
+    <tbody>${VS_PLAYERS.map((r) => `<tr>
+      <td>${esc(r.username || "—")}</td>
+      <td class="num">${fmt(r.played)}</td>
+      <td class="num">${fmt(r.firsts)}</td>
+      <td class="num">${fmt(r.seconds)}</td>
+      <td class="num">${fmt(r.thirds)}</td>
+      <td class="num">${r.avg_rank ?? "—"}</td>
+      <td class="num">${fmt(r.dnf)}</td>
+      <td class="num">${r.best_ms ? (r.best_ms / 1000).toFixed(1) + "초" : "—"}</td>
+      <td>${fmtDate(r.last_played)}</td>
+    </tr>`).join("")}</tbody></table></div>`;
+}
+
 function playersTable() {
   const today = kstToday();
   const q = QUERY.trim().toLowerCase();
@@ -719,7 +862,7 @@ function rewardsTable() {
 }
 
 // ------------------------------------------------------------------ 화면
-function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr) {
+function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, cfgErr) {
   const today = kstToday();
   const active = PLAYERS.filter((p) => p.daily_date === today && (p.daily_score || 0) > 0);
   const totals = PLAYERS.map((p) => p.total_score || 0);
@@ -743,7 +886,7 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr) {
       <div class="card"><div class="label">미수령 보상</div><div class="value">${fmt(REWARDS.filter((r) => !r.claimed_at).length)}</div></div>
     </div>
     <div class="tabs">
-      ${tab("players", "회원")}${tab("charts", "차트")}${tab("events", "이벤트")}${tab("rewards", "보상")}${tab("purchases", "구매")}${tab("notices", "공지")}${tab("audit", "관리 기록")}
+      ${tab("players", "회원")}${tab("charts", "차트")}${tab("events", "이벤트")}${tab("rewards", "보상")}${tab("purchases", "구매")}${tab("versus", "같이하기")}${tab("update", "업데이트")}${tab("notices", "공지")}${tab("audit", "관리 기록")}
     </div>
     ${TAB === "players" ? `
       <div class="toolbar">
@@ -767,6 +910,8 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr) {
     ${TAB === "events" ? eventsTable(eventsErr) : ""}
     ${TAB === "rewards" ? rewardsTable() : ""}
     ${TAB === "purchases" ? purchasesTab(payErr) : ""}
+    ${TAB === "versus" ? versusTab(vsErr) : ""}
+    ${TAB === "update" ? updateTab(cfgErr) : ""}
     ${TAB === "notices" ? noticesTab(noticesErr) : ""}
     ${TAB === "audit" ? auditTable(auditErr) : ""}`;
 
@@ -775,6 +920,14 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr) {
   document.querySelectorAll("[data-tab]").forEach((b) => {
     b.onclick = () => { TAB = b.dataset.tab; refresh(); };
   });
+
+  if (TAB === "versus") {
+    $("#toggleVersus").onclick = toggleVersus;
+  }
+
+  if (TAB === "update" && $("#saveVersions")) {
+    $("#saveVersions").onclick = saveVersions;
+  }
 
   if (TAB === "notices") {
     $("#newNotice").onclick = openNotice;
@@ -866,6 +1019,8 @@ async function boot() {
     await loadBatches().catch(() => {});
   }
   const aerr = TAB === "audit" ? await loadAudit().catch((e) => e) : null;
+  const vserr = TAB === "versus" ? await loadVersus() : null;
+  const cfgerr = TAB === "update" ? await loadConfig().then(() => null).catch((e) => e) : null;
 
   let warn = "";
   if (perr) warn = "회원 조회 실패: " + perr.message;
@@ -873,7 +1028,7 @@ async function boot() {
     warn = "조회 결과가 비어 있습니다. 이 계정이 admins 테이블에 등록됐는지 확인하세요 " +
            "(supabase_admin_access.sql 4번 항목).";
   }
-  render(warn, eerr, serr, nerr, perr2, aerr);
+  render(warn, eerr, serr, nerr, perr2, aerr, vserr, cfgerr);
 }
 
 boot();
