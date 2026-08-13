@@ -649,7 +649,7 @@ async function toggleVersus() {
 function versusTab(err) {
   if (err) {
     return `<div class="notice">대전 집계 조회 실패: ${esc(err.message)}<br>
-            supabase_versus.sql을 실행했는지 확인하세요.</div>`;
+            sql/migrations/014_versus.sql을 실행했는지 확인하세요.</div>`;
   }
   const totalMatches = VS_DAILY.reduce((a, r) => a + Number(r.matches || 0), 0);
   return `
