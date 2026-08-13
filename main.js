@@ -644,7 +644,11 @@ function eventsTable(err) {
     </table></div>`).join("");
 }
 
-function auditTable() {
+function auditTable(err) {
+  // 조회 실패를 "기록 없음"으로 보여주면 원인을 영영 못 찾는다.
+  if (err) return `<div class="notice">관리 기록 조회 실패: ${esc(err.message)}<br>
+    supabase_admin_features.sql이 끝까지 실행됐는지 확인하세요
+    (admin_actions 테이블과 읽기 정책이 필요합니다).</div>`;
   if (!AUDIT.length) return `<div class="empty">기록된 관리 작업이 없습니다</div>`;
   return `<div class="table-scroll"><table>
     <thead><tr><th>시각</th><th>작업</th><th>대상</th><th>내용</th></tr></thead>
@@ -715,7 +719,7 @@ function rewardsTable() {
 }
 
 // ------------------------------------------------------------------ 화면
-function render(warn, eventsErr, statsErr, noticesErr, payErr) {
+function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr) {
   const today = kstToday();
   const active = PLAYERS.filter((p) => p.daily_date === today && (p.daily_score || 0) > 0);
   const totals = PLAYERS.map((p) => p.total_score || 0);
@@ -764,7 +768,7 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr) {
     ${TAB === "rewards" ? rewardsTable() : ""}
     ${TAB === "purchases" ? purchasesTab(payErr) : ""}
     ${TAB === "notices" ? noticesTab(noticesErr) : ""}
-    ${TAB === "audit" ? auditTable() : ""}`;
+    ${TAB === "audit" ? auditTable(auditErr) : ""}`;
 
   $("#refresh").onclick = refresh;
   $("#logout").onclick = async () => { await sb.auth.signOut(); renderLogin(); };
@@ -861,7 +865,7 @@ async function boot() {
     await loadRewards().catch(() => {});
     await loadBatches().catch(() => {});
   }
-  if (TAB === "audit") await loadAudit().catch(() => {});
+  const aerr = TAB === "audit" ? await loadAudit().catch((e) => e) : null;
 
   let warn = "";
   if (perr) warn = "회원 조회 실패: " + perr.message;
@@ -869,7 +873,7 @@ async function boot() {
     warn = "조회 결과가 비어 있습니다. 이 계정이 admins 테이블에 등록됐는지 확인하세요 " +
            "(supabase_admin_access.sql 4번 항목).";
   }
-  render(warn, eerr, serr, nerr, perr2);
+  render(warn, eerr, serr, nerr, perr2, aerr);
 }
 
 boot();
