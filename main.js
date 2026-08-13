@@ -4,8 +4,11 @@ import { sb, $, fmt, fmtDate, esc, kstToday, askReason, rpc } from "./app.js";
 let TAB = "players";
 let PLAYERS = [], EVENTS = [], AUDIT = [], REWARDS = [], BATCHES = [], STATS = [], BUCKETS = [];
 let FUNNEL = [], RETENTION = [], NOTICES = [];
+let PAY_DAILY = [], PAY_MONTHLY = [], PAY_PRODUCT = [], PAY_LEDGER = [], COIN_SINKS = [];
+/** 회원 id → {orders, revenue, currency}. 회원 목록 옆에 붙여 쓴다. */
+let PAY_TOTALS = {};
 /** 이벤트 이력을 펼쳐 놓은 회원. */
-let OPEN_MEMBER = null, MEMBER_EVENTS = [];
+let OPEN_MEMBER = null, MEMBER_EVENTS = [], MEMBER_PAYS = [];
 let SORT = "total_score", QUERY = "", EMAIL = "";
 /** 다중 삭제용 선택 목록. 검색어를 바꿔도 선택은 유지된다 — 여러 번 걸러 가며
  *  고르는 게 자연스럽고, 안 보이는 걸 지우는 사고는 삭제 직전 명단 확인으로 막는다. */
@@ -81,6 +84,28 @@ async function loadStats() {
     RETENTION = await rpc("admin_retention", { p_days: 21 }) || [];
     return null;
   } catch (e) { STATS = []; BUCKETS = []; FUNNEL = []; RETENTION = []; return e; }
+}
+
+async function loadPurchases() {
+  try {
+    PAY_DAILY = await rpc("admin_purchase_daily", { p_days: 30 }) || [];
+    PAY_MONTHLY = await rpc("admin_purchase_monthly", { p_months: 12 }) || [];
+    PAY_PRODUCT = await rpc("admin_purchase_by_product") || [];
+    PAY_LEDGER = await rpc("admin_purchase_ledger", { p_limit: 200 }) || [];
+    COIN_SINKS = await rpc("admin_coin_sinks", { p_days: 30 }) || [];
+    return null;
+  } catch (e) {
+    PAY_DAILY = []; PAY_MONTHLY = []; PAY_PRODUCT = []; PAY_LEDGER = []; COIN_SINKS = [];
+    return e;
+  }
+}
+
+/** 회원 목록에 결제 정보를 붙이려면 목록과 같이 불러와야 한다. */
+async function loadPayTotals() {
+  try {
+    const rows = await rpc("admin_purchase_totals") || [];
+    PAY_TOTALS = Object.fromEntries(rows.map((r) => [r.profile_id, r]));
+  } catch { PAY_TOTALS = {}; }
 }
 
 async function loadNotices() {
@@ -179,6 +204,85 @@ function retentionTable() {
         <span class="muted">(${fmt(r.d7)})</span></td>
     </tr>`).join("")}</tbody></table></div>
     <p class="muted" style="font-size:12px">표본이 적은 날은 비율이 크게 튑니다 — 인원수를 같이 보세요.</p>`;
+}
+
+/** 통화를 섞어 더하면 안 된다 — 통화별로 나눠서 보여준다. */
+const money = (v, cur) => `${fmt(Math.round(Number(v) || 0))} ${esc(cur || "")}`.trim();
+
+function purchasesTab(err) {
+  if (err) return `<div class="notice">구매 조회 실패: ${esc(err.message)}<br>supabase_purchases.sql을 실행했는지 확인하세요.</div>`;
+  if (!PAY_LEDGER.length) {
+    return `<div class="empty">아직 기록된 구매가 없습니다.<br>
+      새 빌드를 배포해야 결제가 서버에 쌓이기 시작합니다 — 과거 결제는 소급되지 않습니다.</div>`;
+  }
+
+  // 통화가 여럿이면 통화마다 선을 하나씩 그린다.
+  const currencies = [...new Set(PAY_DAILY.map((r) => r.currency))];
+  const days = [...new Set(PAY_DAILY.map((r) => r.day))].sort();
+  const colors = ["#17b3a8", "#d9a441", "#7aa2f7", "#d95757"];
+  const series = currencies.map((cur, i) => ({
+    name: cur, color: colors[i % colors.length],
+    values: days.map((d) => Number(PAY_DAILY.find((r) => r.day === d && r.currency === cur)?.revenue || 0)),
+  }));
+
+  const totals = currencies.map((cur) => {
+    const rows = PAY_DAILY.filter((r) => r.currency === cur);
+    return { cur, revenue: rows.reduce((a, r) => a + Number(r.revenue), 0),
+             orders: rows.reduce((a, r) => a + Number(r.orders), 0) };
+  });
+
+  return `
+    <div class="cards">
+      ${totals.map((t) => `<div class="card">
+        <div class="label">최근 30일 매출 (${esc(t.cur)})</div>
+        <div class="value">${fmt(Math.round(t.revenue))}</div></div>`).join("")}
+      <div class="card"><div class="label">결제 건수</div>
+        <div class="value">${fmt(PAY_LEDGER.length)}</div></div>
+      <div class="card"><div class="label">결제한 회원</div>
+        <div class="value">${fmt(new Set(PAY_LEDGER.map((r) => r.profile_id)).size)}</div></div>
+    </div>
+
+    <h2>일자별 매출 (최근 30일)</h2>
+    ${days.length ? lineChart(days, series) : `<div class="empty">데이터 없음</div>`}
+
+    <h2>월별 매출</h2>
+    <div class="table-scroll"><table style="min-width:420px">
+      <thead><tr><th>월</th><th>통화</th><th style="text-align:right">매출</th>
+        <th style="text-align:right">건수</th><th style="text-align:right">인원</th></tr></thead>
+      <tbody>${PAY_MONTHLY.map((r) => `<tr>
+        <td>${esc(r.month)}</td><td class="muted">${esc(r.currency)}</td>
+        <td class="num">${fmt(Math.round(r.revenue))}</td>
+        <td class="num">${fmt(r.orders)}</td><td class="num">${fmt(r.buyers)}</td>
+      </tr>`).join("")}</tbody></table></div>
+
+    <h2>상품별</h2>
+    <div class="table-scroll"><table style="min-width:520px">
+      <thead><tr><th>상품</th><th>종류</th><th>통화</th><th style="text-align:right">매출</th>
+        <th style="text-align:right">건수</th><th style="text-align:right">인원</th></tr></thead>
+      <tbody>${PAY_PRODUCT.map((r) => `<tr>
+        <td>${esc(r.product_id)}</td><td class="muted">${esc(r.kind)}</td>
+        <td class="muted">${esc(r.currency)}</td>
+        <td class="num">${fmt(Math.round(r.revenue))}</td>
+        <td class="num">${fmt(r.orders)}</td><td class="num">${fmt(r.buyers)}</td>
+      </tr>`).join("")}</tbody></table></div>
+
+    <h2>코인을 어디에 썼나 (최근 30일)</h2>
+    ${COIN_SINKS.length
+      ? barChart(COIN_SINKS.map((r) => ({ bucket: r.sink, players: Number(r.spent) })))
+      : `<div class="empty">아직 소모 기록이 없습니다</div>`}
+
+    <h2>원장</h2>
+    <div class="table-scroll"><table>
+      <thead><tr><th>시각</th><th>회원</th><th>상품</th><th style="text-align:right">코인</th>
+        <th style="text-align:right">금액</th><th>스토어</th></tr></thead>
+      <tbody>${PAY_LEDGER.map((r) => `<tr>
+        <td class="muted">${new Date(r.created_at).toLocaleString("ko-KR")}</td>
+        <td>${esc(r.username || (r.profile_id || "").slice(0, 8) || "(삭제됨)")}</td>
+        <td>${esc(r.product_id)}</td>
+        <td class="num">${r.coins ? fmt(r.coins) : "—"}</td>
+        <td class="num">${money(r.amount, r.currency)}</td>
+        <td class="muted">${esc(r.store)}</td>
+      </tr>`).join("")}</tbody></table></div>`;
 }
 
 function noticesTab(err) {
@@ -425,10 +529,13 @@ async function deleteNotice(id) {
 }
 
 async function toggleMember(id) {
-  if (OPEN_MEMBER === id) { OPEN_MEMBER = null; MEMBER_EVENTS = []; render(); return; }
+  if (OPEN_MEMBER === id) { OPEN_MEMBER = null; MEMBER_EVENTS = []; MEMBER_PAYS = []; render(); return; }
   OPEN_MEMBER = id;
   try { MEMBER_EVENTS = await rpc("admin_member_events", { p_target: id, p_limit: 200 }) || []; }
   catch (e) { MEMBER_EVENTS = []; alert("이력 조회 실패: " + e.message); }
+  // 구매 기능을 아직 안 깐 프로젝트에서도 이력은 열려야 한다.
+  try { MEMBER_PAYS = await rpc("admin_member_purchases", { p_target: id, p_limit: 100 }) || []; }
+  catch { MEMBER_PAYS = []; }
   render();
 }
 
@@ -463,7 +570,8 @@ function playersTable() {
     <thead><tr>
       <th style="width:34px"><input type="checkbox" id="pickAll"></th>
       <th>#</th><th>닉네임</th><th style="text-align:right">누적</th>
-      <th style="text-align:right">오늘</th><th>마지막 플레이</th><th>가입일</th><th>관리</th>
+      <th style="text-align:right">오늘</th><th style="text-align:right">결제</th>
+      <th>마지막 플레이</th><th>가입일</th><th>관리</th>
     </tr></thead><tbody>${list.map((p, i) => {
       const played = p.daily_date === today && (p.daily_score || 0) > 0;
       return `<tr>
@@ -475,6 +583,11 @@ function playersTable() {
           ${p.reset_requested_at ? '<span class="pill heart">초기화 대기</span>' : ""}</td>
         <td class="num">${fmt(p.total_score)}</td>
         <td class="num">${played ? fmt(p.daily_score) : '<span class="muted">—</span>'}</td>
+        <td class="num">${(() => {
+          const t = PAY_TOTALS[p.id];
+          return t ? `${money(t.revenue, t.currency)} <span class="muted">(${t.orders})</span>`
+                   : '<span class="muted">—</span>';
+        })()}</td>
         <td class="muted">${fmtDate(p.daily_date)}</td>
         <td class="muted">${fmtDate(p.created_at)}</td>
         <td><div class="actions">
@@ -493,7 +606,18 @@ function playersTable() {
 
 /** 회원 한 명의 최근 행동. 문의가 들어왔을 때 확인할 최소한의 창구다. */
 function memberEventsRow() {
-  const inner = MEMBER_EVENTS.length
+  const pays = MEMBER_PAYS.length
+    ? `<div class="muted" style="font-size:12px;margin:2px 0 6px">구매 내역</div>
+       <div class="table-scroll" style="margin-bottom:10px">
+         <table style="min-width:380px"><tbody>${MEMBER_PAYS.map((p) => `<tr>
+           <td class="muted">${new Date(p.created_at).toLocaleString("ko-KR")}</td>
+           <td>${esc(p.product_id)}</td>
+           <td class="num">${p.coins ? fmt(p.coins) : "—"}</td>
+           <td class="num">${money(p.amount, p.currency)}</td>
+           <td class="muted">${esc(p.store)}</td>
+         </tr>`).join("")}</tbody></table></div>`
+    : "";
+  const inner = pays + (MEMBER_EVENTS.length
     ? `<div class="table-scroll" style="max-height:260px;overflow-y:auto">
          <table style="min-width:380px"><tbody>${MEMBER_EVENTS.map((e) => `<tr>
            <td class="muted">${new Date(e.created_at).toLocaleString("ko-KR")}</td>
@@ -501,8 +625,8 @@ function memberEventsRow() {
            <td class="num">${e.value ?? ""}</td>
            <td class="muted">${esc(e.platform || "")}</td>
          </tr>`).join("")}</tbody></table></div>`
-    : `<div class="muted" style="font-size:12.5px">기록된 이벤트가 없습니다</div>`;
-  return `<tr><td colspan="9" style="white-space:normal">${inner}</td></tr>`;
+    : `<div class="muted" style="font-size:12.5px">기록된 이벤트가 없습니다</div>`);
+  return `<tr><td colspan="10" style="white-space:normal">${inner}</td></tr>`;
 }
 
 function eventsTable(err) {
@@ -591,7 +715,7 @@ function rewardsTable() {
 }
 
 // ------------------------------------------------------------------ 화면
-function render(warn, eventsErr, statsErr, noticesErr) {
+function render(warn, eventsErr, statsErr, noticesErr, payErr) {
   const today = kstToday();
   const active = PLAYERS.filter((p) => p.daily_date === today && (p.daily_score || 0) > 0);
   const totals = PLAYERS.map((p) => p.total_score || 0);
@@ -615,7 +739,7 @@ function render(warn, eventsErr, statsErr, noticesErr) {
       <div class="card"><div class="label">미수령 보상</div><div class="value">${fmt(REWARDS.filter((r) => !r.claimed_at).length)}</div></div>
     </div>
     <div class="tabs">
-      ${tab("players", "회원")}${tab("charts", "차트")}${tab("events", "이벤트")}${tab("rewards", "보상")}${tab("notices", "공지")}${tab("audit", "관리 기록")}
+      ${tab("players", "회원")}${tab("charts", "차트")}${tab("events", "이벤트")}${tab("rewards", "보상")}${tab("purchases", "구매")}${tab("notices", "공지")}${tab("audit", "관리 기록")}
     </div>
     ${TAB === "players" ? `
       <div class="toolbar">
@@ -638,6 +762,7 @@ function render(warn, eventsErr, statsErr, noticesErr) {
     ${TAB === "charts" ? chartsTab(statsErr) : ""}
     ${TAB === "events" ? eventsTable(eventsErr) : ""}
     ${TAB === "rewards" ? rewardsTable() : ""}
+    ${TAB === "purchases" ? purchasesTab(payErr) : ""}
     ${TAB === "notices" ? noticesTab(noticesErr) : ""}
     ${TAB === "audit" ? auditTable() : ""}`;
 
@@ -730,6 +855,8 @@ async function boot() {
   const eerr = TAB === "events" ? await loadEvents() : null;
   const serr = TAB === "charts" ? await loadStats() : null;
   const nerr = TAB === "notices" ? await loadNotices() : null;
+  const perr2 = TAB === "purchases" ? await loadPurchases() : null;
+  if (TAB === "players") await loadPayTotals();
   if (TAB === "rewards" || TAB === "players") {
     await loadRewards().catch(() => {});
     await loadBatches().catch(() => {});
@@ -742,7 +869,7 @@ async function boot() {
     warn = "조회 결과가 비어 있습니다. 이 계정이 admins 테이블에 등록됐는지 확인하세요 " +
            "(supabase_admin_access.sql 4번 항목).";
   }
-  render(warn, eerr, serr, nerr);
+  render(warn, eerr, serr, nerr, perr2);
 }
 
 boot();
