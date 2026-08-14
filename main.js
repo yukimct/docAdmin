@@ -7,6 +7,12 @@ let FUNNEL = [], RETENTION = [], NOTICES = [];
 let PAY_DAILY = [], PAY_MONTHLY = [], PAY_PRODUCT = [], PAY_LEDGER = [], COIN_SINKS = [];
 /** 같이하기(대전) — 일자별/계정별/판 크기별 집계와 기능 스위치. */
 let VS_DAILY = [], VS_PLAYERS = [], VS_BOARDS = [], VS_ON = false;
+/** 지금 살아 있는 대전 방 목록. */
+let VS_ROOMS = [];
+/** 공개 매칭 — 현황 한 줄과 신고 목록. */
+let MATCH = null, REPORTS = [];
+/** 경제 건강 요약 한 줄과 오늘 코인 이상 획득 계정. */
+let ECON = null, ANOMALIES = [];
 /** 앱 설정값 전체 (key → value). 업데이트 관문·기능 스위치가 여기 들어 있다. */
 let CONFIG = {};
 /** 회원 id → {orders, revenue, currency}. 회원 목록 옆에 붙여 쓴다. */
@@ -19,6 +25,8 @@ let SORT = "total_score", QUERY = "", EMAIL = "";
 let SELECTED = new Set();
 /** 보상 탭에서 펼쳐 놓은 묶음 id와 그 명단. */
 let OPEN_BATCH = null, BATCH_MEMBERS = [];
+/** 관리 기록 필터 — 작업 종류와 검색어. */
+let AUDIT_KIND = "", AUDIT_Q = "";
 
 // ------------------------------------------------------------------ 로그인
 function renderLogin(msg) {
@@ -48,6 +56,12 @@ function renderLogin(msg) {
 }
 
 // ------------------------------------------------------------------ 데이터
+async function loadAnomalies() {
+  // 문턱은 설정에서. 경제가 바뀌면 값도 바뀌어야 하니 하드코딩하지 않는다.
+  const th = Number(CONFIG?.anomaly_threshold ?? 3000) || 3000;
+  ANOMALIES = await rpc("admin_coin_anomalies", { p_threshold: th }).catch(() => []) || [];
+}
+
 async function loadPlayers() {
   const { data, error } = await sb.from("profiles").select("*")
     .order(SORT, { ascending: SORT === "username" }).limit(500);
@@ -86,6 +100,7 @@ async function loadStats() {
     BUCKETS = await rpc("admin_level_buckets") || [];
     FUNNEL = await rpc("admin_level_funnel", { p_max: 30 }) || [];
     RETENTION = await rpc("admin_retention", { p_days: 21 }) || [];
+    ECON = (await rpc("admin_economy_health", { p_days: 14 }).catch(() => []))[0] || null;
     return null;
   } catch (e) { STATS = []; BUCKETS = []; FUNNEL = []; RETENTION = []; return e; }
 }
@@ -177,6 +192,15 @@ function chartsTab(err) {
       { name: "신규 가입", color: "#17b3a8", values: STATS.map((r) => Number(r.signups)) },
       { name: "접속자", color: "#7aa2f7", values: STATS.map((r) => Number(r.active)) },
     ])}
+    ${ECON ? `<h2>경제 건강 (최근 14일)</h2>
+    <div class="cards">
+      <div class="card"><div class="label">발행</div><div class="value">${fmt(ECON.earned)}</div></div>
+      <div class="card"><div class="label">소모</div><div class="value">${fmt(ECON.spent)}</div></div>
+      <div class="card"><div class="label">소모/발행</div>
+        <div class="value" style="${Number(ECON.sink_ratio) < 0.35 ? "color:var(--danger)" : ""}">${ECON.sink_ratio}</div></div>
+    </div>
+    ${Number(ECON.sink_ratio) < 0.35 ? `<div class="notice">소모/발행이 0.35 아래입니다 —
+      코인이 쌓이기만 하고 있습니다. 상점 가격이나 판당 지급을 볼 때입니다.</div>` : ""}` : ""}
     <h2>코인 획득 · 소모</h2>
     ${lineChart(days, [
       { name: "획득", color: "#d9a441", values: STATS.map((r) => Number(r.coin_earned)) },
@@ -553,7 +577,9 @@ async function toggleBatch(id) {
 
 async function revokeBatch(id) {
   const b = BATCHES.find((x) => x.id === id);
-  const left = (b?.target_count || 0) - Number(b?.claimed_count || 0);
+  // 등록−수령으로 계산하면 안 된다 — 회수로 지워진 건 등록 숫자에 남아 있어서,
+  // 회수를 반복해도 "17건 회수합니다 → 0건 회수했습니다"만 돌았다(실측).
+  const left = Number(b?.pending_count || 0);
   if (!confirm(`아직 안 받아 간 ${left}건을 회수합니다.\n\n` +
     `이미 받아 간 사람의 코인은 기기에 들어가 있어서 되돌릴 수 없습니다.`)) return;
   const reason = askReason("지급 묶음 회수");
@@ -570,6 +596,9 @@ async function loadVersus() {
     VS_DAILY = await rpc("admin_versus_daily", { p_days: 30 }) || [];
     VS_PLAYERS = await rpc("admin_versus_players", { p_limit: 200 }) || [];
     VS_BOARDS = await rpc("admin_versus_boards") || [];
+    VS_ROOMS = await rpc("admin_versus_rooms").catch(() => []) || [];
+    MATCH = (await rpc("admin_matching_stats").catch(() => []))[0] || null;
+    REPORTS = await rpc("admin_reports", { p_limit: 100 }).catch(() => []) || [];
     await loadConfig();
     VS_ON = CONFIG.versus_enabled === true;
     return null;
@@ -615,7 +644,80 @@ function updateTab(err) {
       </tr></thead>
       <tbody>${row("android", "Android")}${row("ios", "iOS")}</tbody>
     </table></div>
-    <div class="toolbar"><button class="sm" id="saveVersions">저장</button></div>`;
+    <div class="toolbar"><button class="sm" id="saveVersions">저장</button></div>
+
+    <h2>점검 모드</h2>
+    <div class="notice">
+      켜면 앱이 안내 문구를 띄우고 <b>랭킹·같이하기만</b> 잠급니다.
+      레벨 진행(오프라인 게임)은 막지 않습니다. 서버를 못 읽는 앱도 막히지 않습니다.
+    </div>
+    <div class="toolbar">
+      <label class="switch">
+        <input type="checkbox" id="maintOn" ${CONFIG?.maintenance?.on ? "checked" : ""}>
+        <span>점검 중</span>
+      </label>
+      <input type="text" id="maintMsg" placeholder="안내 문구 (비우면 기본 문구)"
+             value="${esc(CONFIG?.maintenance?.message || "")}" style="flex:1">
+      <button class="sm" id="saveMaint">저장</button>
+    </div>
+    <div class="toolbar">
+      <span class="muted">예약(한국시간, 비우면 예약 없음)</span>
+      <input type="datetime-local" id="maintFrom" value="${esc(CONFIG?.maintenance?.starts_at || "")}">
+      <span class="muted">~</span>
+      <input type="datetime-local" id="maintTo" value="${esc(CONFIG?.maintenance?.ends_at || "")}">
+    </div>
+    <div class="muted" style="margin-top:-6px;font-size:12px">
+      예약이 있으면 그 시간 동안 앱이 스스로 점검 상태가 됩니다. 스위치를 켤 필요가 없습니다.
+    </div>
+
+    <h2>서버 주소 이사</h2>
+    <div class="notice">
+      <b>평소에는 비워 두세요.</b> 값을 넣으면 앱이 <b>다음 실행부터</b> 그 주소로 접속합니다.
+      옛 주소를 내리기 전까지는 두 주소가 <b>모두 살아 있어야</b> 합니다.
+      잘못 넣어도 앱은 세 번 실패하면 원래 주소로 스스로 돌아옵니다.
+    </div>
+    <div class="toolbar">
+      <input type="text" id="apiUrl" placeholder="https://api.내도메인.com (비우면 기본 주소)"
+             value="${esc(String(CONFIG?.api_url ?? ""))}" style="flex:1">
+      <button class="danger sm" id="saveApiUrl">저장</button>
+    </div>
+
+    <h2>이상 징후 문턱</h2>
+    <div class="toolbar">
+      <span class="muted">오늘 코인 획득이 이 값 이상이면 상단에 배지로 띄웁니다</span>
+      <input type="number" id="anomalyTh" value="${Number(CONFIG?.anomaly_threshold ?? 3000)}" style="width:110px">
+      <button class="sm" id="saveAnomaly">저장</button>
+    </div>`;
+}
+
+async function saveMaintenance() {
+  const on = $("#maintOn").checked;
+  const message = $("#maintMsg").value.trim();
+  const starts_at = $("#maintFrom").value || "";
+  const ends_at = $("#maintTo").value || "";
+  if (starts_at && ends_at && starts_at >= ends_at) { alert("종료가 시작보다 빠릅니다"); return; }
+  if (on && !confirm("점검 모드를 켭니다.\n\n모든 앱에서 랭킹·같이하기가 잠기고 안내가 뜹니다.")) return;
+  await act(() => rpc("admin_set_config", {
+    p_key: "maintenance", p_value: { on, message, starts_at, ends_at },
+  }), refresh);
+}
+
+async function saveApiUrl() {
+  const v = $("#apiUrl").value.trim();
+  if (v && !/^https:\/\/[a-z0-9.-]+$/i.test(v)) {
+    alert("https://호스트 형태로만 넣어 주세요 (경로·슬래시 없이)");
+    return;
+  }
+  if (v && !confirm(
+    `앱이 다음 실행부터 ${v} 로 접속합니다.\n\n` +
+    `이 주소가 지금 살아 있는지 확인하셨나요?\n` +
+    `옛 주소도 당분간 함께 살려 두어야 합니다.`)) return;
+  await act(() => rpc("admin_set_config", { p_key: "api_url", p_value: v }), refresh);
+}
+
+async function saveAnomalyThreshold() {
+  const th = Math.max(1, Number($("#anomalyTh").value) || 3000);
+  await act(() => rpc("admin_set_config", { p_key: "anomaly_threshold", p_value: th }), refresh);
 }
 
 async function saveVersions() {
@@ -652,6 +754,56 @@ function versusTab(err) {
             sql/migrations/014_versus.sql을 실행했는지 확인하세요.</div>`;
   }
   const totalMatches = VS_DAILY.reduce((a, r) => a + Number(r.matches || 0), 0);
+  const matchPanel = MATCH ? `
+    <h2>공개 매칭 현황</h2>
+    <div class="cards">
+      <div class="card"><div class="label">대기 알림</div><div class="value">${fmt(MATCH.waiting_people)}</div></div>
+      <div class="card"><div class="label">공개 방</div><div class="value">${fmt(MATCH.public_rooms)}</div></div>
+      <div class="card"><div class="label">방치된 방</div>
+        <div class="value" style="${Number(MATCH.stale_rooms) > 0 ? "color:var(--danger)" : ""}">${fmt(MATCH.stale_rooms)}</div></div>
+      <div class="card"><div class="label">빈 방</div>
+        <div class="value" style="${Number(MATCH.empty_rooms) > 0 ? "color:var(--danger)" : ""}">${fmt(MATCH.empty_rooms)}</div></div>
+      <div class="card"><div class="label">미처리 신고</div>
+        <div class="value" style="${Number(MATCH.open_reports) > 0 ? "color:var(--danger)" : ""}">${fmt(MATCH.open_reports)}</div></div>
+    </div>
+    <div class="toolbar">
+      <button class="danger sm" id="purgeRooms">가비지 방 정리</button>
+      <span class="muted">빈 방은 삭제하고, 30분 넘게 소식 없는 방은 닫습니다</span>
+    </div>` : "";
+
+  const reportsTable = REPORTS.length ? `
+    <h2>신고 (${REPORTS.filter((r) => !r.handled_at).length}건 미처리)</h2>
+    <div class="table-scroll"><table style="min-width:640px">
+      <thead><tr><th>시각</th><th>대상</th><th>신고자</th><th>방</th><th>상태</th><th>관리</th></tr></thead>
+      <tbody>${REPORTS.map((r) => `<tr>
+        <td class="muted">${fmtDate(r.created_at)}</td>
+        <td><b>${esc(r.target_name || "(삭제됨)")}</b></td>
+        <td class="muted">${esc(r.reporter_name || "-")}</td>
+        <td class="num muted">${esc(r.room_code || "-")}</td>
+        <td>${r.handled_at ? '<span class="muted">처리됨</span>' : '<span class="pill heart">대기</span>'}</td>
+        <td><div class="actions">
+          ${r.handled_at ? "" : `
+            <button class="ghost sm" data-report-ok="${r.id}">확인만</button>
+            <button class="danger sm" data-report-rename="${r.id}">닉네임 강제 변경</button>`}
+        </div></td>
+      </tr>`).join("")}</tbody>
+    </table></div>` : "";
+
+  const roomsTable = VS_ROOMS.length ? `
+    <h2>지금 열려 있는 방 (${VS_ROOMS.length})</h2>
+    <div class="table-scroll"><table style="min-width:560px">
+      <thead><tr><th>방</th><th>상태</th><th class="num">판</th><th class="num">인원</th>
+                 <th>참가자</th><th>만든 때</th><th>관리</th></tr></thead>
+      <tbody>${VS_ROOMS.map((r) => `<tr>
+        <td class="num"><b>${esc(r.code)}</b></td>
+        <td>${r.status === "playing" ? "대전 중" : "대기"}</td>
+        <td class="num">${r.round_no}/${r.win_target * 2 - 1}</td>
+        <td class="num">${r.players}</td>
+        <td class="muted">${esc(r.usernames || "")}</td>
+        <td class="muted">${fmtDate(r.created_at)}</td>
+        <td><button class="danger sm" data-close-room="${esc(r.code)}">닫기</button></td>
+      </tr>`).join("")}</tbody>
+    </table></div>` : `<h2>지금 열려 있는 방</h2><div class="empty">없습니다</div>`;
   return `
     <div class="toolbar">
       <span>같이하기 기능</span>
@@ -661,6 +813,9 @@ function versusTab(err) {
         앱은 켤 때 이 값을 읽습니다. 이미 실행 중인 앱은 다시 켜야 반영됩니다.
       </span>
     </div>
+    ${matchPanel}
+    ${roomsTable}
+    ${reportsTable}
     <div class="cards">
       <div class="card"><div class="label">누적 판수 (30일)</div><div class="value">${fmt(totalMatches)}</div></div>
       <div class="card"><div class="label">참여 계정</div><div class="value">${fmt(VS_PLAYERS.length)}</div></div>
@@ -707,7 +862,10 @@ function versusPlayersTable() {
 function playersTable() {
   const today = kstToday();
   const q = QUERY.trim().toLowerCase();
-  const list = q ? PLAYERS.filter((p) => (p.username || "").toLowerCase().includes(q)) : PLAYERS;
+  // 닉네임뿐 아니라 프로필 id로도 찾는다 — 문의는 보통 id로 들어온다.
+  const list = q ? PLAYERS.filter((p) =>
+    (p.username || "").toLowerCase().includes(q) ||
+    (p.id || "").toLowerCase().startsWith(q)) : PLAYERS;
   if (!list.length) return `<div class="empty">해당하는 회원이 없습니다</div>`;
   return `<div class="table-scroll"><table>
     <thead><tr>
@@ -793,9 +951,23 @@ function auditTable(err) {
     supabase_admin_features.sql이 끝까지 실행됐는지 확인하세요
     (admin_actions 테이블과 읽기 정책이 필요합니다).</div>`;
   if (!AUDIT.length) return `<div class="empty">기록된 관리 작업이 없습니다</div>`;
-  return `<div class="table-scroll"><table>
+  // 작업 종류·대상으로 거른다. 100건 나열에서 원하는 한 건을 찾는 게 일이었다.
+  const kinds = [...new Set(AUDIT.map((a) => a.action))].sort();
+  const rows = AUDIT.filter((a) =>
+    (!AUDIT_KIND || a.action === AUDIT_KIND) &&
+    (!AUDIT_Q || (a.target_id || "").startsWith(AUDIT_Q) ||
+      JSON.stringify(a.detail || {}).toLowerCase().includes(AUDIT_Q.toLowerCase())));
+  return `<div class="toolbar">
+    <select id="auditKind">
+      <option value="">모든 작업</option>
+      ${kinds.map((k) => `<option value="${esc(k)}" ${k === AUDIT_KIND ? "selected" : ""}>${esc(k)}</option>`).join("")}
+    </select>
+    <input type="search" id="auditQ" placeholder="대상 id·내용 검색" value="${esc(AUDIT_Q)}">
+    <span class="muted">${rows.length} / ${AUDIT.length}건</span>
+  </div>
+  <div class="table-scroll"><table>
     <thead><tr><th>시각</th><th>작업</th><th>대상</th><th>내용</th></tr></thead>
-    <tbody>${AUDIT.map((a) => `<tr>
+    <tbody>${rows.map((a) => `<tr>
       <td class="muted">${new Date(a.created_at).toLocaleString("ko-KR")}</td>
       <td>${esc(a.action)}</td>
       <td class="muted">${esc((a.target_id || "").slice(0, 8))}</td>
@@ -826,7 +998,8 @@ function batchesTable() {
         <td class="num">${fmt(b.claimed_count)} / ${fmt(b.target_count)}</td>
         <td><div class="actions">
           <button class="ghost sm" data-batch="${b.id}">${OPEN_BATCH === b.id ? "접기" : "명단"}</button>
-          ${left > 0 ? `<button class="danger sm" data-revoke="${b.id}">회수</button>` : ""}
+          ${Number(b.pending_count) > 0 ? `<button class="danger sm" data-revoke="${b.id}">회수</button>`
+            : (Number(b.claimed_count) < b.target_count ? `<span class="muted">회수됨</span>` : "")}
         </div></td>
       </tr>`;
       if (OPEN_BATCH !== b.id) return rows;
@@ -885,12 +1058,16 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
       <div class="card"><div class="label">응원해 주신 분</div><div class="value">${fmt(PLAYERS.filter((p) => p.supporter).length)}</div></div>
       <div class="card"><div class="label">미수령 보상</div><div class="value">${fmt(REWARDS.filter((r) => !r.claimed_at).length)}</div></div>
     </div>
+      ${ANOMALIES.length ? `<div class="notice" style="margin-bottom:8px">
+        <b>이상 징후</b> — 오늘 코인 3,000 이상 획득 ${ANOMALIES.length}명:
+        ${ANOMALIES.slice(0, 5).map((a) => `${esc(a.username || "?")} (${fmt(a.earned_today)})`).join(", ")}
+        ${ANOMALIES.length > 5 ? " 외" : ""}</div>` : ""}
     <div class="tabs">
       ${tab("players", "회원")}${tab("charts", "차트")}${tab("events", "이벤트")}${tab("rewards", "보상")}${tab("purchases", "구매")}${tab("versus", "같이하기")}${tab("update", "업데이트")}${tab("notices", "공지")}${tab("audit", "관리 기록")}
     </div>
     ${TAB === "players" ? `
       <div class="toolbar">
-        <input type="search" id="q" placeholder="닉네임 검색" value="${esc(QUERY)}">
+        <input type="search" id="q" placeholder="닉네임 또는 id 검색" value="${esc(QUERY)}">
         <select id="sort">
           <option value="total_score">누적 점수순</option>
           <option value="daily_score">오늘 점수순</option>
@@ -923,10 +1100,55 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
 
   if (TAB === "versus") {
     $("#toggleVersus").onclick = toggleVersus;
+    if ($("#purgeRooms")) {
+      $("#purgeRooms").onclick = async () => {
+        if (!confirm("빈 방을 삭제하고, 30분 넘게 소식 없는 방을 닫습니다.\n\n진행 중인 방은 건드리지 않습니다.")) return;
+        await act(async () => {
+          const n = await rpc("admin_purge_stale_rooms", { p_minutes: 30 });
+          alert(`${n}개를 정리했습니다`);
+        }, refresh);
+      };
+    }
+    document.querySelectorAll("[data-report-ok]").forEach((b) => {
+      b.onclick = async () => {
+        const note = askReason("신고 확인 처리");
+        if (note === null) return;
+        await act(() => rpc("admin_resolve_report", {
+          p_id: Number(b.dataset.reportOk), p_note: note, p_rename: false,
+        }), refresh);
+      };
+    });
+    document.querySelectorAll("[data-report-rename]").forEach((b) => {
+      b.onclick = async () => {
+        if (!confirm("이 회원의 닉네임을 임의값으로 바꿉니다.\n\n본인은 무료로 다시 정할 수 있습니다.")) return;
+        const note = askReason("닉네임 강제 변경");
+        if (note === null) return;
+        await act(() => rpc("admin_resolve_report", {
+          p_id: Number(b.dataset.reportRename), p_note: note, p_rename: true,
+        }), refresh);
+      };
+    });
+    document.querySelectorAll("[data-close-room]").forEach((b) => {
+      b.onclick = async () => {
+        const code = b.dataset.closeRoom;
+        if (!confirm(`방 ${code}을(를) 강제로 닫습니다.\n\n참가자들은 "상대가 나갔어요" 안내와 함께 홈으로 나갑니다.`)) return;
+        const reason = askReason("대전 방 강제 닫기");
+        if (reason === null) return;
+        await act(() => rpc("admin_close_room", { p_code: code, p_reason: reason }), refresh);
+      };
+    });
   }
 
   if (TAB === "update" && $("#saveVersions")) {
     $("#saveVersions").onclick = saveVersions;
+    if ($("#saveMaint")) $("#saveMaint").onclick = saveMaintenance;
+    if ($("#saveAnomaly")) $("#saveAnomaly").onclick = saveAnomalyThreshold;
+    if ($("#saveApiUrl")) $("#saveApiUrl").onclick = saveApiUrl;
+  }
+
+  if (TAB === "audit") {
+    if ($("#auditKind")) $("#auditKind").onchange = (e) => { AUDIT_KIND = e.target.value; render(warn, eventsErr); };
+    if ($("#auditQ")) $("#auditQ").onchange = (e) => { AUDIT_Q = e.target.value; render(warn, eventsErr); };
   }
 
   if (TAB === "notices") {
@@ -1009,6 +1231,8 @@ async function boot() {
   EMAIL = session.user.email || "";
 
   const perr = await loadPlayers();
+  await loadConfig().catch(() => {});   // 문턱·점검 예약이 여기서 온다
+  await loadAnomalies();
   const eerr = TAB === "events" ? await loadEvents() : null;
   const serr = TAB === "charts" ? await loadStats() : null;
   const nerr = TAB === "notices" ? await loadNotices() : null;

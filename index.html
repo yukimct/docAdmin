@@ -45,7 +45,9 @@
        font:var(--fs)/1.6 -apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo",
             "Malgun Gothic","Segoe UI",sans-serif;
        -webkit-font-smoothing:antialiased}
-  .wrap{width:min(1180px, 100%);margin:0 auto;
+  /* 24인치(1920) 모니터에서 좌우가 절반 가까이 놀았다. 1720이면 여백을 조금 남기고
+     화면을 거의 다 쓴다 — 표가 넓어져 관리 버튼 줄바꿈도 줄어든다. */
+  .wrap{width:min(1720px, 100%);margin:0 auto;
         padding:0 clamp(10px, 2.2vw, 22px) clamp(48px, 8vw, 72px)}
 
   /* ---------------------------------------------------------------- 머리 */
@@ -130,6 +132,12 @@
   .toolbar input[type=search]{flex:1 1 min(220px, 100%)}
   .actions{display:flex;gap:6px;flex-wrap:wrap}
 
+  /* 점검 모드 등 켬/끔 스위치 — 체크박스에 라벨을 붙인 단순한 형태 */
+  .switch{display:inline-flex;align-items:center;gap:7px;font-weight:700;
+          padding:8px 12px;background:var(--surface);border:1px solid var(--line);
+          border-radius:var(--r);cursor:pointer;user-select:none}
+  .switch input{accent-color:var(--danger);width:16px;height:16px}
+
   /* ---------------------------------------------------------------- 표 */
   /* min-width를 못 박지 않는다. 칸 수가 적은 표까지 억지로 720px가 되면
      넓은 화면에서 쓸데없이 가로 스크롤이 생긴다. 내용이 정하게 둔다. */
@@ -139,6 +147,10 @@
   table{width:100%;border-collapse:separate;border-spacing:0}
   th,td{padding:calc(var(--pad-y) * .85) var(--pad-x);text-align:left;white-space:nowrap;
         border-bottom:1px solid var(--line);background:var(--surface)}
+  /* 관리 버튼 칸은 줄바꿈을 허락한다. 버튼 8개를 한 줄로 강제하면 표가 화면보다
+     넓어져 마지막 버튼(삭제)이 잘린 채로 보였다 — 가로 스크롤은 되지만 데스크톱
+     마우스로는 스크롤할 생각을 못 한다. 두 줄이 되는 쪽이 훨씬 잘 보인다. */
+  td .actions{white-space:normal;flex-wrap:wrap;max-width:380px;row-gap:4px}
   th{position:sticky;top:0;z-index:2;background:#f7f9fb;color:var(--dim);
      font-size:clamp(11px,.25vw+10.5px,12px);font-weight:700;letter-spacing:.3px;
      border-bottom:1px solid var(--line-strong)}
