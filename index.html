@@ -54,6 +54,18 @@
   h1{font-size:clamp(16px, 1.1vw + 13px, 20px);margin:0;letter-spacing:-.3px;font-weight:800}
   h2{font-size:clamp(13px, 0.5vw + 11.5px, 15px);margin:clamp(20px,3vw,30px) 0 10px;
      color:var(--dim);font-weight:700;letter-spacing:.2px}
+  /* 차트 탭을 "사람 / 경제 / 진행" 덩어리로 갈랐다. h2가 덩어리 이름이고 h3가 그 안의
+     그래프 이름이다 — 둘이 같은 크기면 갈라 놓은 의미가 없어서 h3를 한 단 낮춘다.
+     덩어리 머리에는 윗선을 그어 어디서 새 덩어리가 시작하는지 눈으로 보이게 한다. */
+  h2{border-top:1px solid var(--line);padding-top:clamp(14px,2vw,20px)}
+  h2:first-of-type{border-top:0;padding-top:0}
+  h3.sub{font-size:clamp(12px,.4vw+11px,13.5px);margin:18px 0 8px;
+         color:var(--dim);font-weight:600;opacity:.85}
+  /* KPI 카드의 증감 표시. 숫자보다 작고 흐리게 — 주인공은 값이고 화살표는 곁들이다.
+     좋고 나쁨을 색으로 말하지 않는다(초록/빨강): 코인 순증은 늘어난 게 좋은 건지
+     나쁜 건지 상황에 따라 다르다. 방향만 알려 주고 판단은 사람이 한다. */
+  .dl{font-size:.62em;font-weight:700;margin-left:4px;color:var(--dim);
+      vertical-align:middle;white-space:nowrap}
   .head{display:flex;align-items:center;gap:var(--gap);margin-bottom:var(--gap);
         flex-wrap:wrap;position:sticky;top:0;z-index:20;background:var(--bg);
         padding:clamp(10px,1.8vw,16px) 0 clamp(9px,1.4vw,13px);
@@ -207,11 +219,20 @@
   /* ---------------------------------------------------------------- 대화상자 */
   dialog{background:var(--surface);color:var(--ink);border:1px solid var(--line);
     border-radius:calc(var(--r) * 1.3);padding:clamp(16px,3vw,24px);
-    width:min(430px, 92vw);box-shadow:var(--shadow-lift)}
+    /* 430px에서는 datetime-local이 안 들어갔다 — 브라우저가 주는 고유 최소 너비가
+       200px 남짓이라, 두 개를 나란히 두면 오른쪽이 잘려 나갔다(실측). */
+    width:min(520px, 94vw);box-shadow:var(--shadow-lift)}
   dialog::backdrop{background:rgba(18,26,36,.45)}
   dialog h3{margin:0 0 10px;font-size:clamp(15px,.8vw+13px,17px);font-weight:800}
   dialog label{display:block;font-size:12px;color:var(--dim);margin:12px 0 5px;font-weight:600}
-  dialog input,dialog textarea{width:100%;margin:0}
+  /* box-sizing이 없으면 width:100%에 테두리·안여백이 더해져 칸이 넘친다.
+     min-width:0은 입력칸의 고유 최소 너비가 칸을 밀어내는 걸 막는다. */
+  dialog input,dialog textarea{width:100%;margin:0;min-width:0;box-sizing:border-box}
+  /* flex의 flex-basis는 칸마다 다른 너비가 나온다. 그리드로 두면 **무조건 같은 폭**이고,
+     자리가 모자라면 알아서 아랫줄로 내려간다. */
+  dialog .row{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px}
+  dialog .row.wide{grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}
+  dialog .row > *{min-width:0}
 
   /* ---------------------------------------------------------------- 차트 */
   .chart{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
@@ -269,7 +290,7 @@
   </div>
   <label>메모 (앱에서 사용자에게 보입니다)</label>
   <input type="text" id="gMemo" placeholder="예: 점검 보상">
-  <div class="row">
+  <div class="row wide">
     <div><label>받기 시작 (비우면 즉시)</label><input type="datetime-local" id="gStart"></div>
     <div><label>받기 마감 (비우면 무제한)</label><input type="datetime-local" id="gEnd"></div>
   </div>

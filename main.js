@@ -21,7 +21,7 @@ let CONFIG = {};
 let PAY_TOTALS = {};
 /** 이벤트 이력을 펼쳐 놓은 회원. */
 let OPEN_MEMBER = null, MEMBER_EVENTS = [], MEMBER_PAYS = [];
-let SORT = "total_score", QUERY = "", EMAIL = "";
+let SORT = "total", QUERY = "", EMAIL = "";
 /** 다중 삭제용 선택 목록. 검색어를 바꿔도 선택은 유지된다 — 여러 번 걸러 가며
  *  고르는 게 자연스럽고, 안 보이는 걸 지우는 사고는 삭제 직전 명단 확인으로 막는다. */
 let SELECTED = new Set();
@@ -64,9 +64,29 @@ async function loadAnomalies() {
   ANOMALIES = await rpc("admin_coin_anomalies", { p_threshold: th }).catch(() => []) || [];
 }
 
+/**
+ * 회원 목록.
+ *
+ * 052/053의 admin_players_ranked를 쓴다 — profiles를 직접 읽으면 대전 전적과
+ * 코인 잔액이 안 온다(다른 표에 있다). 정렬도 서버가 한다: 대전 승수처럼 profiles에
+ * 없는 값으로 세우려면 여기서는 방법이 없다.
+ *
+ * **옛 경로를 남겨 둔다.** 관리자 페이지는 서버보다 먼저 배포될 수 있어서, 함수가
+ * 아직 없으면 예전처럼 profiles를 읽어 최소한 목록은 보이게 한다.
+ */
 async function loadPlayers() {
+  const serverSorts = ["total", "daily", "coins", "vs_wins", "coop_wins", "created", "username"];
+  if (serverSorts.includes(SORT)) {
+    const rows = await rpc("admin_players_ranked", { p_sort: SORT, p_limit: 500 })
+                   .catch(() => null);
+    if (rows) { PLAYERS = rows; return null; }
+  }
+  // 되돌아가는 길 — 옛 정렬 이름을 profiles 칸 이름으로 옮긴다.
+  const col = SORT === "daily" ? "daily_score"
+            : SORT === "created" ? "created_at"
+            : SORT === "username" ? "username" : "total_score";
   const { data, error } = await sb.from("profiles").select("*")
-    .order(SORT, { ascending: SORT === "username" }).limit(500);
+    .order(col, { ascending: col === "username" }).limit(500);
   PLAYERS = data || [];
   return error;
 }
@@ -102,7 +122,12 @@ async function loadStats() {
     BUCKETS = await rpc("admin_level_buckets") || [];
     FUNNEL = await rpc("admin_level_funnel", { p_max: 30 }) || [];
     RETENTION = await rpc("admin_retention", { p_days: 21 }) || [];
-    ECON = (await rpc("admin_economy_health", { p_days: 14 }).catch(() => []))[0] || null;
+    // 기간을 30일로 맞춘다. 이 카드만 14일이라 바로 아래 30일 그래프와 숫자가 안 맞았다 —
+    // 같은 화면에서 같은 주제를 다른 창으로 보여 주면 매번 어느 쪽 기간인지 되짚어야 한다.
+    ECON = (await rpc("admin_economy_health", { p_days: 30 }).catch(() => []))[0] || null;
+    // 코인 소모처는 **구매 탭에 있었다.** 구매는 실제 결제(IAP) 이야기고 코인 소모는
+    // 게임 안 경제라 주제가 다르다. 경제를 한자리에 모으려고 이쪽으로 옮겼다.
+    COIN_SINKS = await rpc("admin_coin_sinks", { p_days: 30 }).catch(() => []) || [];
     return null;
   } catch (e) { STATS = []; BUCKETS = []; FUNNEL = []; RETENTION = []; return e; }
 }
@@ -113,10 +138,9 @@ async function loadPurchases() {
     PAY_MONTHLY = await rpc("admin_purchase_monthly", { p_months: 12 }) || [];
     PAY_PRODUCT = await rpc("admin_purchase_by_product") || [];
     PAY_LEDGER = await rpc("admin_purchase_ledger", { p_limit: 200 }) || [];
-    COIN_SINKS = await rpc("admin_coin_sinks", { p_days: 30 }) || [];
     return null;
   } catch (e) {
-    PAY_DAILY = []; PAY_MONTHLY = []; PAY_PRODUCT = []; PAY_LEDGER = []; COIN_SINKS = [];
+    PAY_DAILY = []; PAY_MONTHLY = []; PAY_PRODUCT = []; PAY_LEDGER = [];
     return e;
   }
 }
@@ -184,39 +208,106 @@ function barChart(rows) {
     </div>`).join("")}</div>`;
 }
 
+/**
+ * 한눈 지표(KPI).
+ *
+ * 그래프는 "어떻게 움직였나"를 보여 주지만 "지금 좋은가 나쁜가"에는 바로 답하지 않는다.
+ * 맨 위에 숫자 몇 개를 놓고 **어제·지난주와 견준 화살표**를 붙인다 — 화살표가 없으면
+ * 숫자를 보고도 매번 아래 그래프를 눈으로 훑어야 한다.
+ *
+ * 새 조회를 만들지 않았다. 전부 이미 받아 둔 STATS·RETENTION·ECON에서 나온다.
+ */
+function kpiRow() {
+  if (!STATS.length) return "";
+  const num = (r, k) => Number(r?.[k] ?? 0);
+  const last = STATS[STATS.length - 1];
+  const prev = STATS[STATS.length - 2];
+  // 최근 7일 평균과 그 이전 7일 평균. 하루치는 요일을 타서 혼자서는 못 믿는다.
+  const avg = (arr, k) => (arr.length
+    ? Math.round(arr.reduce((a, r) => a + num(r, k), 0) / arr.length) : 0);
+  const w1 = STATS.slice(-7), w0 = STATS.slice(-14, -7);
+
+  // D1 리텐션은 **어제 가입한 사람은 아직 하루가 안 지났다.** 그래서 마지막 줄이 아니라
+  // 하루 건너뛴 줄을 본다 — 안 그러면 늘 0%에 가깝게 나온다.
+  const rt = RETENTION.filter((r) => Number(r.cohort) > 0);
+  const rtRow = rt.length > 1 ? rt[rt.length - 2] : rt[rt.length - 1];
+  const d1 = rtRow && Number(rtRow.cohort)
+    ? Math.round((Number(rtRow.d1) / Number(rtRow.cohort)) * 100) : null;
+
+  const cards = [
+    ["오늘 접속자", fmt(num(last, "active")), delta(num(last, "active"), num(prev, "active"))],
+    ["오늘 신규", fmt(num(last, "signups")), delta(num(last, "signups"), num(prev, "signups"))],
+    ["7일 평균 접속", fmt(avg(w1, "active")), delta(avg(w1, "active"), avg(w0, "active"))],
+    ["D1 리텐션", d1 == null ? "—" : d1 + "%", ""],
+    ["코인 순증 (오늘)", fmt(num(last, "coin_earned") - num(last, "coin_spent")),
+     delta(num(last, "coin_earned") - num(last, "coin_spent"),
+           num(prev, "coin_earned") - num(prev, "coin_spent"))],
+    ["소모/발행", ECON ? String(ECON.sink_ratio) : "—", ""],
+  ];
+  return `<div class="cards">${cards.map(([label, value, d]) => `
+    <div class="card"><div class="label">${label}</div>
+      <div class="value">${value} ${d}</div></div>`).join("")}</div>`;
+}
+
+/** 어제(또는 지난주) 대비. 0에서 늘어난 건 비율로 말할 수 없어 숫자만 적는다. */
+function delta(now, before) {
+  if (before === 0) return now === 0 ? "" : `<span class="dl">+${fmt(now)}</span>`;
+  const diff = now - before;
+  if (diff === 0) return "";
+  const pct = Math.round((diff / Math.abs(before)) * 100);
+  // 방향은 화살표가 말한다. 색까지 쓰지 않는 이유는 CSS 주석에 적어 뒀다.
+  return `<span class="dl">${diff > 0 ? "▲" : "▼"}${Math.abs(pct)}%</span>`;
+}
+
 function chartsTab(err) {
   if (err) return `<div class="notice">집계 조회 실패: ${esc(err.message)}<br>supabase_admin_v2.sql을 실행했는지 확인하세요.</div>`;
   if (!STATS.length) return `<div class="empty">집계할 데이터가 아직 없습니다</div>`;
   const days = STATS.map((r) => r.day);
+  // 여섯 덩어리가 평평하게 나열돼 있었다. **묻는 질문이 다른 것끼리** 갈라 놓으면
+  // 무엇을 보러 왔는지에 따라 눈이 바로 그 자리로 간다.
+  //   사람 — 몇 명이 들어오고 남는가
+  //   경제 — 코인이 도는가, 쌓이기만 하는가
+  //   진행 — 어디까지 가고 어디서 그만두는가
+  // 모든 창은 **30일로 맞췄다**(경제 건강 카드만 14일이었다).
   return `
-    <h2>신규 가입 · 접속자 (최근 30일)</h2>
+    ${kpiRow()}
+    <h2>사람</h2>
+    <h3 class="sub">신규 가입 · 접속자 (최근 30일)</h3>
     ${lineChart(days, [
       { name: "신규 가입", color: "#17b3a8", values: STATS.map((r) => Number(r.signups)) },
       { name: "접속자", color: "#7aa2f7", values: STATS.map((r) => Number(r.active)) },
     ])}
-    ${ECON ? `<h2>경제 건강 (최근 14일)</h2>
+    <h3 class="sub">리텐션 — 가입일 기준 재방문</h3>
+    ${retentionTable()}
+
+    <h2>경제</h2>
+    ${ECON ? `
     <div class="cards">
-      <div class="card"><div class="label">발행</div><div class="value">${fmt(ECON.earned)}</div></div>
-      <div class="card"><div class="label">소모</div><div class="value">${fmt(ECON.spent)}</div></div>
+      <div class="card"><div class="label">발행 (30일)</div><div class="value">${fmt(ECON.earned)}</div></div>
+      <div class="card"><div class="label">소모 (30일)</div><div class="value">${fmt(ECON.spent)}</div></div>
       <div class="card"><div class="label">소모/발행</div>
         <div class="value" style="${Number(ECON.sink_ratio) < 0.35 ? "color:var(--danger)" : ""}">${ECON.sink_ratio}</div></div>
     </div>
     ${Number(ECON.sink_ratio) < 0.35 ? `<div class="notice">소모/발행이 0.35 아래입니다 —
       코인이 쌓이기만 하고 있습니다. 상점 가격이나 판당 지급을 볼 때입니다.</div>` : ""}` : ""}
-    <h2>코인 획득 · 소모</h2>
+    <h3 class="sub">코인 획득 · 소모</h3>
     ${lineChart(days, [
       { name: "획득", color: "#d9a441", values: STATS.map((r) => Number(r.coin_earned)) },
       { name: "소모", color: "#d95757", values: STATS.map((r) => Number(r.coin_spent)) },
     ])}
-    <h2>누적 점수 분포</h2>
-    ${BUCKETS.length ? barChart(BUCKETS) : `<div class="empty">데이터 없음</div>`}
-    <h2>레벨별 도달 인원 — 어디서 그만두는지</h2>
+    <h3 class="sub">코인을 어디에 썼나</h3>
+    ${COIN_SINKS.length
+      ? barChart(COIN_SINKS.map((r) => ({ bucket: r.sink, players: Number(r.spent) })))
+      : `<div class="empty">아직 소모 기록이 없습니다</div>`}
+
+    <h2>진행</h2>
+    <h3 class="sub">레벨별 도달 인원 — 어디서 그만두는지</h3>
     ${FUNNEL.length
       ? lineChart(FUNNEL.map((r) => String(r.level).padStart(5, "0")),
                   [{ name: "도달 인원", color: "#17b3a8", values: FUNNEL.map((r) => Number(r.players)) }])
       : `<div class="empty">레벨 클리어 기록이 아직 없습니다</div>`}
-    <h2>리텐션 (가입일 기준 재방문)</h2>
-    ${retentionTable()}`;
+    <h3 class="sub">누적 점수 분포</h3>
+    ${BUCKETS.length ? barChart(BUCKETS) : `<div class="empty">데이터 없음</div>`}`;
 }
 
 function retentionTable() {
@@ -295,11 +386,6 @@ function purchasesTab(err) {
         <td class="num">${fmt(Math.round(r.revenue))}</td>
         <td class="num">${fmt(r.orders)}</td><td class="num">${fmt(r.buyers)}</td>
       </tr>`).join("")}</tbody></table></div>
-
-    <h2>코인을 어디에 썼나 (최근 30일)</h2>
-    ${COIN_SINKS.length
-      ? barChart(COIN_SINKS.map((r) => ({ bucket: r.sink, players: Number(r.spent) })))
-      : `<div class="empty">아직 소모 기록이 없습니다</div>`}
 
     <h2>원장</h2>
     <div class="table-scroll"><table>
@@ -404,13 +490,34 @@ async function requestGameReset(id) {
   await act(() => rpc("admin_request_game_reset", { p_target: id, p_reason: reason }), refresh);
 }
 
+/**
+ * 전체 초기화.
+ *
+ * 예전에는 브라우저 prompt에 "daily"를 손으로 쳐 넣게 했다. 무엇을 칠 수 있는지
+ * 안내문을 읽어야 알 수 있었고, 오타는 그냥 실패였고, **대전 전적은 아예 대상에도
+ * 없었다**(사용자 지적). 고를 수 있는 것만 보여 주고 고르게 한다.
+ */
+const RESET_SCOPES = [
+  ["daily",  "오늘 점수만"],
+  ["total",  "누적 점수만"],
+  ["both",   "오늘 + 누적 점수"],
+  ["versus", "대전 전적만 (판·결과·요약을 모두 지웁니다)"],
+  ["all",    "전부 (점수 + 대전 전적)"],
+];
+
 async function resetAllScores() {
-  const scope = window.prompt(
-    "전체 회원의 점수를 초기화합니다.\n\n" +
-    "daily = 오늘 점수만\ntotal = 누적 점수만\nboth = 둘 다\n\n입력:", "daily");
-  if (scope === null) return;
-  if (!["daily", "total", "both"].includes(scope)) { alert("daily, total, both 중 하나만 됩니다"); return; }
-  if (!confirm(`정말로 전체 회원의 ${scope} 점수를 0으로 만들까요? 되돌릴 수 없습니다.`)) return;
+  const menu = RESET_SCOPES.map(([k, label], i) => `${i + 1}. ${label}`).join("\n");
+  const pick = window.prompt(
+    "전체 회원을 초기화합니다. 번호를 고르세요.\n\n" + menu + "\n\n번호:", "1");
+  if (pick === null) return;
+  const chosen = RESET_SCOPES[Number(pick) - 1];
+  if (!chosen) { alert("1~" + RESET_SCOPES.length + " 중 하나를 골라 주세요"); return; }
+  const [scope, label] = chosen;
+  // 대전 전적은 점수와 달리 **줄이 사라진다.** 그 차이를 확인창에 그대로 적는다.
+  const extra = (scope === "versus" || scope === "all")
+    ? "\n\n대전 판·결과·요약이 통째로 삭제됩니다. 랭킹이 비워집니다."
+    : "";
+  if (!confirm(`정말로 전체 회원의 "${label}"을(를) 초기화할까요?${extra}\n\n되돌릴 수 없습니다.`)) return;
   const reason = askReason("전체 점수 초기화");
   if (reason === null) return;
   await act(async () => {
@@ -486,6 +593,14 @@ async function deleteSelected() {
   }, refresh);
 }
 
+/** datetime-local 칸이 먹는 모양("YYYY-MM-DDTHH:mm")으로. toISOString()을 쓰면
+ *  UTC로 바뀌어 한국시간과 9시간 어긋난 값이 칸에 박힌다. */
+function localDatetimeValue(d) {
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+       + `T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 /** id가 null이면 전체 지급. 기간을 비워 두면 제한 없이 받을 수 있다. */
 function openGrant(id) {
   const p = id ? findPlayer(id) : null;
@@ -496,7 +611,12 @@ function openGrant(id) {
     : `전체 회원 ${PLAYERS.length}명에게 지급합니다. 각자 앱을 켤 때 받아갑니다.`;
   $("#gErr").textContent = "";
   ["#gCoins", "#gHints", "#gAutos"].forEach((s) => ($(s).value = 0));
-  ["#gMemo", "#gStart", "#gEnd"].forEach((s) => ($(s).value = ""));
+  $("#gMemo").value = "";
+  // 받기 시작은 **오늘 지금**을 미리 넣어 둔다(사용자 지시). 비워 두면 "즉시"와 같지만,
+  // 빈 칸은 "안 정했다"로도 읽혀서 매번 무엇이 기본인지 다시 생각해야 했다.
+  // 마감은 비워 둔다 — 언제까지 받게 할지는 보상마다 다르고, 잘못 넣으면 못 받는다.
+  $("#gStart").value = localDatetimeValue(new Date());
+  $("#gEnd").value = "";
   dlg.showModal();
   $("#gCancel").onclick = () => dlg.close();
   $("#gOk").onclick = async () => {
@@ -1132,7 +1252,9 @@ function playersTable() {
     <thead><tr>
       <th style="width:34px"><input type="checkbox" id="pickAll"></th>
       <th>#</th><th>닉네임</th><th style="text-align:right">누적</th>
-      <th style="text-align:right">오늘</th><th style="text-align:right">결제</th>
+      <th style="text-align:right">오늘</th><th style="text-align:right">코인</th>
+      <th style="text-align:right">대전 (승-패-무)</th><th style="text-align:right">협동</th>
+      <th style="text-align:right">결제</th>
       <th>마지막 플레이</th><th>가입일</th><th>관리</th>
     </tr></thead><tbody>${list.map((p, i) => {
       const played = p.daily_date === today && (p.daily_score || 0) > 0;
@@ -1145,6 +1267,13 @@ function playersTable() {
           ${p.reset_requested_at ? '<span class="pill heart">초기화 대기</span>' : ""}</td>
         <td class="num">${fmt(p.total_score)}</td>
         <td class="num">${played ? fmt(p.daily_score) : '<span class="muted">—</span>'}</td>
+        <td class="num">${p.coins == null ? '<span class="muted">—</span>' : fmt(p.coins)}</td>
+        <td class="num">${p.vs_played == null ? '<span class="muted">—</span>'
+          : Number(p.vs_played) === 0 ? '<span class="muted">0</span>'
+          : `${fmt(p.vs_wins)}-${fmt(p.vs_losses)}-${fmt(p.vs_draws)}`}</td>
+        <td class="num">${p.coop_played == null ? '<span class="muted">—</span>'
+          : Number(p.coop_played) === 0 ? '<span class="muted">0</span>'
+          : `${fmt(p.coop_wins)} / ${fmt(p.coop_played)}판`}</td>
         <td class="num">${(() => {
           const t = PAY_TOTALS[p.id];
           return t ? `${money(t.revenue, t.currency)} <span class="muted">(${t.orders})</span>`
@@ -1329,9 +1458,12 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
       <div class="toolbar">
         <input type="search" id="q" placeholder="닉네임 또는 id 검색" value="${esc(QUERY)}">
         <select id="sort">
-          <option value="total_score">누적 점수순</option>
-          <option value="daily_score">오늘 점수순</option>
-          <option value="created_at">가입 최신순</option>
+          <option value="total">누적 점수순</option>
+          <option value="daily">오늘 점수순</option>
+          <option value="coins">코인 많은순</option>
+          <option value="vs_wins">대전 승수순</option>
+          <option value="coop_wins">협동 승수순</option>
+          <option value="created">가입 최신순</option>
           <option value="username">닉네임순</option>
         </select>
         <span class="muted" style="font-size:12.5px">기준 ${today} (한국시간)</span>
