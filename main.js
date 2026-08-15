@@ -27,6 +27,8 @@ let SORT = "total", QUERY = "", EMAIL = "";
 let SELECTED = new Set();
 /** 보상 탭에서 펼쳐 놓은 묶음 id와 그 명단. */
 let OPEN_BATCH = null, BATCH_MEMBERS = [];
+/** 보상 탭 안의 하위 탭 — "live"(진행 중) / "done"(지난 것). */
+let BATCH_VIEW = "live";
 /** 관리 기록 필터 — 작업 종류와 검색어. */
 let AUDIT_KIND = "", AUDIT_Q = "";
 
@@ -1397,38 +1399,77 @@ function auditTable(err) {
     </tr>`).join("")}</tbody></table></div>`;
 }
 
+/**
+ * 묶음이 지금 어떤 상태인가.
+ *
+ * 회수는 **아직 안 받은 행만** 지운다(받아 간 코인은 기기에 들어가 있어 못 되돌린다).
+ * 그래서 회수한 묶음은 "받아감 1 / 대상 19, 남은 건수 0"으로 남는다. 이걸 진행 중인
+ * 것과 같은 목록에 두면 끝난 일이 계속 눈에 밟힌다(사용자 지적).
+ */
+function batchState(b, now) {
+  const started = !b.starts_at || new Date(b.starts_at).getTime() <= now;
+  const expired = b.expires_at && new Date(b.expires_at).getTime() <= now;
+  const left = Number(b.pending_count || 0);
+  // revoked_at은 059부터 채워진다. 그 전에 회수한 묶음은 null이라 숫자로 추측한다 —
+  // 받아 간 사람이 대상보다 적은데 남은 건수가 0이면 회수됐거나 대상이 탈퇴한 것이다.
+  const revoked = b.revoked_at || (left === 0 && Number(b.claimed_count || 0) < Number(b.target_count || 0));
+  if (revoked) return { key: "revoked", label: "회수됨", cls: "heart" };
+  if (left === 0) return { key: "allDone", label: "전원 수령", cls: "" };
+  if (expired) return { key: "expired", label: "만료", cls: "heart" };
+  if (!started) return { key: "notYet", label: "대기", cls: "today" };
+  return { key: "live", label: "진행 중", cls: "today" };
+}
+
+/** 아직 사람이 받아 갈 수 있는 묶음인가 — 이것만 "진행 중" 탭에 남는다. */
+function isLiveBatch(st) { return st.key === "live" || st.key === "notYet"; }
+
 function batchesTable() {
   if (!BATCHES.length) return "";
   const now = Date.now();
   const when = (v) => (v ? new Date(v).toLocaleString("ko-KR", { dateStyle: "short", timeStyle: "short" }) : "—");
-  return `<h2>전체 지급 묶음</h2>
+
+  const marked = BATCHES.map((b) => ({ b, st: batchState(b, now) }));
+  const live = marked.filter((m) => isLiveBatch(m.st));
+  const done = marked.filter((m) => !isLiveBatch(m.st));
+  const shown = BATCH_VIEW === "live" ? live : done;
+
+  const tabs = `<div class="subtabs">
+    <button class="${BATCH_VIEW === "live" ? "on" : ""}" data-bview="live">진행 중 <b>${fmt(live.length)}</b></button>
+    <button class="${BATCH_VIEW === "done" ? "on" : ""}" data-bview="done">지난 것 <b>${fmt(done.length)}</b></button>
+  </div>`;
+
+  if (!shown.length) {
+    return `<h2>전체 지급 묶음</h2>${tabs}<div class="empty">${
+      BATCH_VIEW === "live" ? "진행 중인 묶음이 없습니다" : "지난 묶음이 없습니다"}</div>`;
+  }
+
+  return `<h2>전체 지급 묶음</h2>${tabs}
   <div class="table-scroll"><table>
     <thead><tr><th>등록</th><th>내용</th><th>메모</th><th>받을 수 있는 기간</th>
-      <th style="text-align:right">수령</th><th>관리</th></tr></thead>
-    <tbody>${BATCHES.map((b) => {
-      const expired = b.expires_at && new Date(b.expires_at).getTime() <= now;
-      const notYet = b.starts_at && new Date(b.starts_at).getTime() > now;
-      const left = (b.target_count || 0) - Number(b.claimed_count || 0);
+      <th>상태</th><th style="text-align:right">수령</th><th>관리</th></tr></thead>
+    <tbody>${shown.map(({ b, st }) => {
       const rows = `<tr>
         <td class="muted">${when(b.created_at)}</td>
         <td>${[b.coins && `🪙${b.coins}`, b.hints && `💡${b.hints}`, b.autos && `✨${b.autos}`]
               .filter(Boolean).join(" ")}</td>
         <td class="muted">${esc(b.memo || "")}</td>
-        <td class="muted">${when(b.starts_at)} ~ ${when(b.expires_at)}
-          ${expired ? '<span class="pill heart">만료</span>' : ""}
-          ${notYet ? '<span class="pill today">대기</span>' : ""}</td>
+        <td class="muted">${when(b.starts_at)} ~ ${when(b.expires_at)}</td>
+        <td><span class="pill ${st.cls}">${st.label}</span>${
+          st.key === "revoked" && b.revoked_at
+            ? `<div class="muted" style="font-size:11px;margin-top:3px">${when(b.revoked_at)}${
+                b.revoked_count != null ? ` · ${fmt(b.revoked_count)}건` : ""}</div>`
+            : ""}</td>
         <td class="num">${fmt(b.claimed_count)} / ${fmt(b.target_count)}</td>
         <td><div class="actions">
           <button class="ghost sm" data-batch="${b.id}">${OPEN_BATCH === b.id ? "접기" : "명단"}</button>
-          ${Number(b.pending_count) > 0 ? `<button class="danger sm" data-revoke="${b.id}">회수</button>`
-            : (Number(b.claimed_count) < b.target_count ? `<span class="muted">회수됨</span>` : "")}
+          ${Number(b.pending_count) > 0 ? `<button class="danger sm" data-revoke="${b.id}">회수</button>` : ""}
         </div></td>
       </tr>`;
       if (OPEN_BATCH !== b.id) return rows;
       const members = BATCH_MEMBERS.length
         ? BATCH_MEMBERS.map((m) => `<span class="mem ${m.claimed_at ? "got" : ""}">${esc(m.username || "—")}</span>`).join("")
         : '<span class="muted">명단 없음</span>';
-      return rows + `<tr><td colspan="6" style="white-space:normal">
+      return rows + `<tr><td colspan="7" style="white-space:normal">
         <div class="muted" style="font-size:12px;margin-bottom:6px">
           진한 표시가 받아 간 사람입니다</div>${members}</td></tr>`;
     }).join("")}</tbody></table></div>`;
@@ -1600,6 +1641,10 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
   }
 
   if (TAB === "rewards") {
+    document.querySelectorAll("[data-bview]").forEach((b) => {
+      // 화면만 갈아 끼운다 — 같은 BATCHES를 다시 나누는 것뿐이라 서버를 부를 이유가 없다.
+      b.onclick = () => { BATCH_VIEW = b.dataset.bview; OPEN_BATCH = null; BATCH_MEMBERS = []; render(); };
+    });
     document.querySelectorAll("[data-batch]").forEach((b) => {
       b.onclick = () => toggleBatch(Number(b.dataset.batch));
     });
