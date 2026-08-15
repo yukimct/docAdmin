@@ -85,10 +85,20 @@
             border-radius:calc(var(--r) * .75);padding:8px 12px;
             font-size:var(--fs-sm);font-weight:700;cursor:pointer;min-height:0}
   .nav .top:hover{color:var(--ink);background:var(--surface)}
-  .nav .top.on{background:var(--accent);color:#fff}
+  /* 선택된 메뉴는 **초록 덩어리로 칠하지 않는다**(사용자 지적). 머리말은 이미
+     제목·코인·종·버튼이 붙어 있는 자리라, 진한 색 블록이 하나 더 생기면 그쪽으로
+     눈이 끌려가 정작 내용이 밀린다. 옅은 바탕 + 글자색 + 아래 선으로 "여기"만 알린다. */
+  .nav .top.on{background:var(--accent-wash);color:var(--accent);
+               box-shadow:inset 0 -2px 0 var(--accent)}
   .nav .top .caret{opacity:.5;font-size:10px;margin-left:3px}
-  .nav .menu{position:absolute;top:calc(100% + 4px);left:0;z-index:40;
-             min-width:170px;padding:6px;display:none;
+  /* 메뉴를 버튼에 **딱 붙인다**(top:100%, 여백 없음).
+     사이에 빈틈이 있으면 마우스가 그 위를 지나는 순간 :hover가 끊겨 메뉴가 닫힌다 —
+     "다른 메뉴를 고르려고 움직이면 자꾸 꺼진다"의 원인이 이것이었다.
+     보이지 않는 다리를 덧대는 방법도 있지만, 다리는 버튼 너비만 덮어서 대각선으로
+     움직이면 또 샌다. 틈을 아예 없애는 쪽이 경우를 안 남긴다.
+     떨어져 보이게 하는 건 위쪽 안여백이 대신한다. */
+  .nav .menu{position:absolute;top:100%;left:0;z-index:40;
+             min-width:170px;padding:10px 6px 6px;display:none;
              background:var(--surface);border:1px solid var(--line);
              border-radius:var(--r);box-shadow:0 10px 28px rgba(0,0,0,.18)}
   .nav .item:hover .menu, .nav .item:focus-within .menu{display:block}
@@ -98,6 +108,28 @@
                     font-size:var(--fs-sm);font-weight:600;min-height:0}
   .nav .menu button:hover{background:var(--bg)}
   .nav .menu button.on{color:var(--accent);font-weight:800}
+
+  /* 알림 종. **.nav 바깥에 있어서** 위 선택자가 안 먹는다 — 처음에 .item만 주고
+     끝냈다가 팝업이 영영 안 열렸다. 자기 선택자를 따로 준다. */
+  .bell{position:relative}
+  .bell > .top{background:transparent;color:var(--dim);border:0;
+               border-radius:calc(var(--r) * .75);padding:8px 10px;
+               font-size:var(--fs-sm);font-weight:700;cursor:pointer;min-height:0}
+  .bell > .top:hover{background:var(--surface)}
+  .bell .menu{position:absolute;top:100%;right:0;z-index:50;
+              min-width:250px;padding:10px 6px 6px;display:none;
+              background:var(--surface);border:1px solid var(--line);
+              border-radius:var(--r);box-shadow:0 10px 28px rgba(0,0,0,.18)}
+  .bell:hover .menu, .bell:focus-within .menu{display:block}
+  .bell .menu .line{display:flex;align-items:center;gap:8px;padding:8px 8px}
+  .bell .menu .line:hover{background:var(--bg);border-radius:calc(var(--r) * .6)}
+  .bell .menu .line .go{flex:1;text-align:left;background:transparent;border:0;
+                        color:var(--ink);font-size:var(--fs-sm);font-weight:600;
+                        min-height:0;padding:0;cursor:pointer}
+  .bell .menu .line .seen{background:transparent;border:1px solid var(--line);
+                          color:var(--dim);font-size:11px;font-weight:700;
+                          padding:3px 8px;min-height:0;border-radius:99px;cursor:pointer}
+  .bell .menu .empty{padding:10px;font-size:var(--fs-sm)}
   /* 좁은 화면에서는 제목 아래로 내려가 한 줄을 통째로 쓴다. */
   @media (max-width: 700px){
     .nav{width:100%;order:3}

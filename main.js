@@ -947,30 +947,62 @@ async function loadAlerts() {
   ALERTS = (await rpc("admin_alerts", { p_coin_gap: 2000 }).catch(() => []))[0] || null;
 }
 
+/** 확인 표시. 서버에 알림 표가 따로 없어서(개수를 세어 만든 값이라) **그때의 개수**를
+ *  기기에 적어 둔다. 개수가 그대로면 감추고, 늘거나 줄면 다시 보인다 — "확인했다"가
+ *  영영 감추기가 되면 새로 생긴 일까지 놓친다. */
+const SEEN_KEY = "dogadm.alertsSeen";
+
+function seenMap() {
+  try { return JSON.parse(localStorage.getItem(SEEN_KEY) || "{}"); }
+  catch { return {}; }
+}
+
+function markSeen(key, count) {
+  const m = seenMap();
+  m[key] = count;
+  localStorage.setItem(SEEN_KEY, JSON.stringify(m));
+}
+
+const ALERT_ROWS = [
+  ["coin_gap_players", "잔액이 안 맞는 계정", "server"],
+  ["open_reports", "처리 안 된 신고", "versus"],
+  ["unclaimed_rewards", "안 받아 간 보상", "rewards"],
+  ["stale_rooms", "방치된 대전 방", "versus"],
+];
+
+/** 아직 확인 안 한 것만. 개수가 0인 항목은 애초에 알릴 게 없다. */
+function pendingAlerts() {
+  if (!ALERTS) return [];
+  const seen = seenMap();
+  return ALERT_ROWS
+    .map(([k, label, tabId]) => [k, label, tabId, Number(ALERTS[k] || 0)])
+    .filter(([k, , , n]) => n > 0 && seen[k] !== n);
+}
+
 /**
  * 관리자 이메일 옆 알림 종.
  *
  * 왜 필요한가 — 신고·미수령 보상·잔액 이상은 각각 다른 탭에 흩어져 있어서, 무슨 일이
  * 생겼는지 알려면 탭을 하나씩 눌러 봐야 했다. 봐야 할 게 있다는 사실 자체를 한 곳에서
- * 알려 준다. 누르면 그 자리로 데려간다.
+ * 알려 준다.
+ *
+ * 종에는 **숫자만** 붙이고, 목록은 마우스를 올리거나 눌렀을 때만 펼친다(사용자 지시).
+ * 줄마다 "확인"이 있어서 눌러 두면 그 개수인 동안은 다시 안 뜬다.
  */
 function alertBell() {
   if (!ALERTS) return "";
-  const rows = [
-    ["coin_gap_players", "잔액이 안 맞는 계정", "server"],
-    ["open_reports", "처리 안 된 신고", "versus"],
-    ["unclaimed_rewards", "안 받아 간 보상", "rewards"],
-    ["stale_rooms", "방치된 대전 방", "versus"],
-  ].filter(([k]) => Number(ALERTS[k]) > 0);
-  const total = rows.reduce((a, [k]) => a + Number(ALERTS[k]), 0);
-  return `<div class="item" style="position:relative">
+  const rows = pendingAlerts();
+  const total = rows.reduce((a, r) => a + r[3], 0);
+  const list = rows.length
+    ? rows.map(([k, label, tabId, n]) => `<div class="line">
+        <button class="go" data-tab="${tabId}">${label} <b>${fmt(n)}</b></button>
+        <button class="seen" data-seen="${k}" data-seen-n="${n}">확인</button>
+      </div>`).join("")
+    : `<div class="empty">지금은 조용합니다</div>`;
+  return `<div class="bell" tabindex="0">
     <button class="top" title="봐야 할 것">🔔${total
       ? `<span class="pill heart" style="margin-left:4px">${fmt(total)}</span>` : ""}</button>
-    <div class="menu" style="right:0;left:auto;min-width:220px">
-      ${rows.length ? rows.map(([k, label, tabId]) =>
-        `<button data-tab="${tabId}">${label} <b>${fmt(ALERTS[k])}</b></button>`).join("")
-        : `<button disabled style="color:var(--dim)">지금은 조용합니다</button>`}
-    </div>
+    <div class="menu">${list}</div>
   </div>`;
 }
 
@@ -1486,6 +1518,14 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     ${TAB === "server" ? serverTab(serverErr) : ""}`;
 
   $("#refresh").onclick = refresh;
+  // 알림 "확인" — 지금 개수를 적어 두고 종만 다시 그린다. 서버는 건드리지 않는다.
+  document.querySelectorAll("[data-seen]").forEach((b) => {
+    b.onclick = (e) => {
+      e.stopPropagation();
+      markSeen(b.dataset.seen, Number(b.dataset.seenN));
+      render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, cfgErr, serverErr);
+    };
+  });
   const orphan = $("#cleanupOrphans");
   if (orphan) orphan.onclick = async () => {
     if (!confirm("프로필 없이 24시간 넘게 남아 있는 익명 계정을 지웁니다.\n\n되돌릴 수 없습니다.")) return;
