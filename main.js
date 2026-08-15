@@ -6,7 +6,7 @@ let PLAYERS = [], EVENTS = [], AUDIT = [], REWARDS = [], BATCHES = [], STATS = [
 let FUNNEL = [], RETENTION = [], NOTICES = [];
 let PAY_DAILY = [], PAY_MONTHLY = [], PAY_PRODUCT = [], PAY_LEDGER = [], COIN_SINKS = [];
 /** 같이하기(대전) — 일자별/계정별/판 크기별 집계와 기능 스위치. */
-let VS_DAILY = [], VS_PLAYERS = [], VS_BOARDS = [], VS_ON = false;
+let VS_DAILY = [], VS_PLAYERS = [], VS_BOARDS = [], VS_MODES = [], VS_ON = false;
 /** 지금 살아 있는 대전 방 목록. */
 let VS_ROOMS = [];
 /** 공개 매칭 — 현황 한 줄과 신고 목록. */
@@ -596,6 +596,8 @@ async function loadVersus() {
     VS_DAILY = await rpc("admin_versus_daily", { p_days: 30 }) || [];
     VS_PLAYERS = await rpc("admin_versus_players", { p_limit: 200 }) || [];
     VS_BOARDS = await rpc("admin_versus_boards") || [];
+    // 051 — 모드별. 예전 서버(051 미적용)에서는 함수가 없으므로 조용히 빈 배열로 둔다.
+    VS_MODES = await rpc("admin_versus_modes", { p_days: 30 }).catch(() => []) || [];
     VS_ROOMS = await rpc("admin_versus_rooms").catch(() => []) || [];
     MATCH = (await rpc("admin_matching_stats").catch(() => []))[0] || null;
     REPORTS = await rpc("admin_reports", { p_limit: 100 }).catch(() => []) || [];
@@ -820,36 +822,102 @@ function versusTab(err) {
       <div class="card"><div class="label">누적 판수 (30일)</div><div class="value">${fmt(totalMatches)}</div></div>
       <div class="card"><div class="label">참여 계정</div><div class="value">${fmt(VS_PLAYERS.length)}</div></div>
     </div>
-    <h2>일자별 판수 · 참여자</h2>
-    ${VS_DAILY.length
-      ? lineChart(VS_DAILY.map((r) => r.day), [
-          { name: "판수", color: "#17b3a8", values: VS_DAILY.map((r) => Number(r.matches)) },
-          { name: "참여자", color: "#7aa2f7", values: VS_DAILY.map((r) => Number(r.players)) },
-        ])
-      : `<div class="empty">아직 진행된 판이 없습니다</div>`}
+    <h2>일자별 판수 · 참여자 · 무승부</h2>
+    ${versusDailyChart()}
+    <h2>모드별 (30일)</h2>
+    ${versusModesSection()}
     <h2>판 크기별</h2>
     ${VS_BOARDS.length
-      ? barChart(VS_BOARDS.map((r) => ({ bucket: `${r.board_n}×${r.board_n}`, players: Number(r.matches) })))
+      ? barChart(sumBy(VS_BOARDS, (r) => `${r.board_n}×${r.board_n}`, (r) => Number(r.matches)))
       : `<div class="empty">데이터 없음</div>`}
     <h2>계정별 전적</h2>
     ${versusPlayersTable()}`;
 }
 
-/** 승률이 아니라 평균 등수가 중심이다 — 인원이 늘면 승률은 자동으로 낮아져서
- *  잘하는 사람과 못하는 사람을 구분하지 못한다. */
+/** 같은 이름끼리 더해서 barChart가 먹는 모양으로 만든다.
+ *  051부터 서버가 모드까지 쪼개 주므로, 판 크기 그래프는 여기서 다시 합쳐야 한다. */
+function sumBy(rows, keyOf, valOf) {
+  const acc = new Map();
+  for (const r of rows) acc.set(keyOf(r), (acc.get(keyOf(r)) || 0) + valOf(r));
+  return [...acc].map(([bucket, players]) => ({ bucket, players }));
+}
+
+function modeLabel(mode) {
+  return mode === "trio" ? "1:1:1"
+       : mode === "team" ? "2:2"
+       : mode === "coop" ? "🤝2:2 협동"
+       : mode === "duo"  ? "1:1"
+       : mode || "—";
+}
+
+/** 051부터 일자별이 (날짜 × 모드)로 온다. 선 그래프는 날짜 단위라 다시 합친다.
+ *  무승부 선을 같이 그리는 이유: 무승부가 갑자기 늘면 제한 시간이 짧다는 신호다. */
+function versusDailyChart() {
+  if (!VS_DAILY.length) return `<div class="empty">아직 진행된 판이 없습니다</div>`;
+  const days = [...new Set(VS_DAILY.map((r) => r.day))].sort();
+  const pick = (field) => days.map((d) =>
+    VS_DAILY.filter((r) => r.day === d)
+            .reduce((sum, r) => sum + Number(r[field] || 0), 0));
+  return lineChart(days, [
+    { name: "판수", color: "#17b3a8", values: pick("matches") },
+    { name: "참여자", color: "#7aa2f7", values: pick("players") },
+    { name: "무승부", color: "#e0af68", values: pick("draws") },
+  ]);
+}
+
+/** 모드별 — "협동을 붙였는데 사람들이 하기는 하나"에 답하는 자리.
+ *  이탈을 같이 보는 이유: 판수만 많고 중간에 다 나가는 모드는 재미가 아니라
+ *  사람을 붙잡아 두는 시간만 쓰고 있는 것이다. */
+function versusModesSection() {
+  if (!VS_MODES.length) {
+    return `<div class="empty">데이터 없음 (051 적용 후 채워집니다)</div>`;
+  }
+  const chart = barChart(VS_MODES.map((r) => ({
+    bucket: modeLabel(r.mode), players: Number(r.matches),
+  })));
+  const table = `<div class="table-scroll"><table style="min-width:520px">
+    <thead><tr>
+      <th>모드</th><th class="num">판수</th><th class="num">참여자</th>
+      <th class="num">무승부</th><th class="num">이탈</th><th class="num">평균 시간</th>
+    </tr></thead>
+    <tbody>${VS_MODES.map((r) => `<tr>
+      <td>${esc(modeLabel(r.mode))}</td>
+      <td class="num">${fmt(r.matches)}</td>
+      <td class="num">${fmt(r.players)}</td>
+      <td class="num">${fmt(r.draws)}</td>
+      <td class="num">${fmt(r.dnf)}</td>
+      <td class="num">${r.avg_ms ? (r.avg_ms / 1000).toFixed(1) + "초" : "—"}</td>
+    </tr>`).join("")}</tbody></table></div>`;
+  return chart + table;
+}
+
+/** 승/패/무는 앱 랭킹과 **같은 셈법**이다(051) — 두 화면이 다른 숫자를 말하면
+ *  문의가 들어왔을 때 어느 쪽이 맞는지부터 다퉈야 한다.
+ *
+ *  그래도 **평균 등수를 남겨 둔다.** 다인전에서는 인원이 늘수록 승률이 자동으로
+ *  낮아져서, 승률만으로는 잘하는 사람과 못하는 사람이 구분되지 않는다.
+ *
+ *  `?? r.firsts` / `== null` 갈래는 051 이전 서버를 위한 것이다 — 관리자 페이지는
+ *  앱과 달리 배포가 서버보다 먼저 나갈 수 있어서, 없는 칸에 undefined가 찍히면
+ *  표 전체가 "undefined"로 덮인다. */
 function versusPlayersTable() {
   if (!VS_PLAYERS.length) return `<div class="empty">기록이 아직 없습니다</div>`;
-  return `<div class="table-scroll"><table>
+  return `<div class="table-scroll"><table style="min-width:820px">
     <thead><tr>
       <th>닉네임</th><th class="num">판수</th>
-      <th class="num">1등</th><th class="num">2등</th><th class="num">3등</th>
+      <th class="num">승</th><th class="num">패</th><th class="num">무</th>
+      <th class="num">승률</th>
+      <th class="num">2등</th><th class="num">3등</th>
       <th class="num">평균 등수</th><th class="num">미완주</th>
       <th class="num">최고 기록</th><th>마지막</th>
     </tr></thead>
     <tbody>${VS_PLAYERS.map((r) => `<tr>
       <td>${esc(r.username || "—")}</td>
       <td class="num">${fmt(r.played)}</td>
-      <td class="num">${fmt(r.firsts)}</td>
+      <td class="num">${fmt(r.wins ?? r.firsts)}</td>
+      <td class="num">${r.losses == null ? "—" : fmt(r.losses)}</td>
+      <td class="num">${r.draws == null ? "—" : fmt(r.draws)}</td>
+      <td class="num">${r.win_rate == null ? "—" : r.win_rate + "%"}</td>
       <td class="num">${fmt(r.seconds)}</td>
       <td class="num">${fmt(r.thirds)}</td>
       <td class="num">${r.avg_rank ?? "—"}</td>
