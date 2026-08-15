@@ -60,6 +60,38 @@
         border-bottom:1px solid var(--line)}
   .head .spacer{flex:1}
 
+  /* ---------------------------------------------------------------- 상단 메뉴
+     탭을 제목 옆으로 올리고, 결이 비슷한 것끼리 묶어 마우스를 올리면 펼친다.
+     예전에는 탭 9개가 한 줄에 늘어서서 좁은 화면에서 가로로 밀려 났고,
+     "지금 어디를 보고 있는지"보다 "무엇이 있는지"를 찾는 데 시간이 더 들었다.
+
+     :focus-within을 같이 두는 이유 — 마우스가 없는 환경(태블릿, 키보드 이동)에서도
+     열려야 한다. hover만 걸면 그쪽에서는 메뉴가 아예 안 열린다. */
+  .nav{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+  .nav > .item{position:relative}
+  .nav .top{background:transparent;color:var(--dim);border:1px solid transparent;
+            border-radius:calc(var(--r) * .75);padding:8px 12px;
+            font-size:var(--fs-sm);font-weight:700;cursor:pointer;min-height:0}
+  .nav .top:hover{color:var(--ink);background:var(--surface)}
+  .nav .top.on{background:var(--accent);color:#fff}
+  .nav .top .caret{opacity:.5;font-size:10px;margin-left:3px}
+  .nav .menu{position:absolute;top:calc(100% + 4px);left:0;z-index:40;
+             min-width:170px;padding:6px;display:none;
+             background:var(--surface);border:1px solid var(--line);
+             border-radius:var(--r);box-shadow:0 10px 28px rgba(0,0,0,.18)}
+  .nav .item:hover .menu, .nav .item:focus-within .menu{display:block}
+  .nav .menu button{display:block;width:100%;text-align:left;
+                    background:transparent;color:var(--ink);border:0;
+                    border-radius:calc(var(--r) * .6);padding:9px 10px;
+                    font-size:var(--fs-sm);font-weight:600;min-height:0}
+  .nav .menu button:hover{background:var(--bg)}
+  .nav .menu button.on{color:var(--accent);font-weight:800}
+  /* 좁은 화면에서는 제목 아래로 내려가 한 줄을 통째로 쓴다. */
+  @media (max-width: 700px){
+    .nav{width:100%;order:3}
+    .nav .menu{left:auto;right:0}
+  }
+
   /* ---------------------------------------------------------------- 버튼 */
   /* 손가락으로 누르는 화면에서는 38px 밑으로 내려가면 안 눌린다.
      그래서 최소값만 고정하고 위로만 자라게 둔다. */
@@ -117,13 +149,6 @@
   /* ---------------------------------------------------------------- 탭 */
   /* 줄바꿈 대신 옆으로 미는 띠. 두 줄 세 줄로 늘어나면 화면 절반이 탭이 되고
      정작 내용이 안 보인다. */
-  .tabs{display:flex;gap:6px;margin-bottom:var(--gap);overflow-x:auto;padding-bottom:4px;
-        scrollbar-width:none;-webkit-overflow-scrolling:touch}
-  .tabs::-webkit-scrollbar{display:none}
-  .tabs button{background:var(--surface);color:var(--dim);border:1px solid var(--line);
-               white-space:nowrap;flex:0 0 auto}
-  .tabs button:hover{color:var(--ink)}
-  .tabs button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
 
   /* ---------------------------------------------------------------- 도구줄 */
   .toolbar{display:flex;gap:8px;align-items:center;margin-bottom:var(--gap);flex-wrap:wrap;

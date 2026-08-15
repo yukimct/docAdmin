@@ -1,7 +1,9 @@
 // 관리자 화면 — 회원·점수 관리 / 이벤트 집계 / 보상 지급.
 import { sb, $, fmt, fmtDate, esc, kstToday, askReason, rpc } from "./app.js";
 
-let TAB = "players";
+/** 처음 열었을 때 보이는 탭. 차트다(사용자 지시) — 관리자가 가장 자주 확인하는 건
+ *  개별 회원이 아니라 "어제 오늘 뭐가 달라졌나"이기 때문이다. */
+let TAB = "charts";
 let PLAYERS = [], EVENTS = [], AUDIT = [], REWARDS = [], BATCHES = [], STATS = [], BUCKETS = [];
 let FUNNEL = [], RETENTION = [], NOTICES = [];
 let PAY_DAILY = [], PAY_MONTHLY = [], PAY_PRODUCT = [], PAY_LEDGER = [], COIN_SINKS = [];
@@ -649,9 +651,11 @@ function updateTab(err) {
     <div class="toolbar"><button class="sm" id="saveVersions">저장</button></div>
 
     <h2>점검 모드</h2>
+    ${maintenanceBanner()}
     <div class="notice">
       켜면 앱이 안내 문구를 띄우고 <b>랭킹·같이하기만</b> 잠급니다.
       레벨 진행(오프라인 게임)은 막지 않습니다. 서버를 못 읽는 앱도 막히지 않습니다.
+      <br>앱은 <b>1분 안에</b> 스스로 확인합니다 — 사용자가 앱을 껐다 켤 필요가 없습니다.
     </div>
     <div class="toolbar">
       <label class="switch">
@@ -692,13 +696,202 @@ function updateTab(err) {
     </div>`;
 }
 
+/** 지금 점검이 걸려 있는지 한눈에. 스위치 하나만 보고는 "켠 건지 껐는지"를
+ *  매번 다시 읽어야 했다(사용자 지적: "풀렸는지 안 풀렸는지 알 수가 없어").
+ *  예약이 걸려 있으면 스위치가 꺼져 있어도 그 시간에는 점검이라, 그것도 같이 적는다. */
+/**
+ * 상단 메뉴.
+ *
+ * 예전에는 탭 9개가 한 줄에 늘어서 있었다. 좁은 화면에서는 가로로 밀려 나 뒤쪽 탭이
+ * 안 보였고, "지금 어디를 보는지"보다 "무엇이 있는지" 찾는 데 시간이 더 들었다.
+ *
+ * 순서는 자주 쓰는 것부터다(사용자 지시): 차트 → 같이하기 → 회원.
+ * 나머지는 **결로 묶었다.**
+ *   기록 — 지나간 걸 훑어보는 자리(읽기 전용): 이벤트·구매·관리 기록
+ *   운영 — 앱에 지시를 내리는 자리(설정을 바꿈): 업데이트·공지·서버 상태
+ * 이 구분이 있으면 "위험한 버튼이 어디 있나"를 메뉴 이름만 보고 안다.
+ */
+const NAV = [
+  { id: "charts", label: "차트" },
+  { id: "versus", label: "같이하기" },
+  { label: "회원", items: [["players", "회원 목록"], ["rewards", "보상"]] },
+  { label: "기록", items: [["events", "이벤트"], ["purchases", "구매"], ["audit", "관리 기록"]] },
+  { label: "운영", items: [["update", "업데이트"], ["notices", "공지"], ["server", "서버 상태"]] },
+];
+
+let SRV = null, WINNERS = [], TRANSFERS = [], COIN_AUDIT = [];
+
+/** 052·054가 있어야 채워진다. 없는 서버에서는 조용히 빈 값으로 두고 안내만 띄운다 —
+ *  관리자 페이지는 서버보다 먼저 배포될 수 있다. */
+async function loadServer() {
+  try {
+    SRV = (await rpc("admin_server_status").catch(() => []))[0] || null;
+    WINNERS = await rpc("admin_daily_winners", { p_days: 14 }).catch(() => []) || [];
+    TRANSFERS = await rpc("admin_transfers", { p_limit: 50 }).catch(() => []) || [];
+    COIN_AUDIT = await rpc("admin_coin_audit", { p_min_gap: 2000, p_limit: 100 })
+                   .catch(() => []) || [];
+    return null;
+  } catch (e) { return e; }
+}
+
+/**
+ * 서버 상태 — 지금까지 어디서도 볼 수 없던 것들을 모았다.
+ *
+ * 마이그레이션 현황을 맨 위에 두는 이유: "051 적용했나요?"를 사람에게 물어봐야 했던
+ * 자리다. 관리자 화면이 답해야 하는 질문이라 제일 먼저 답한다.
+ */
+function serverTab(err) {
+  if (err) return `<div class="notice">서버 상태 조회 실패: ${esc(err.message)}</div>`;
+  const mig = SRV ? `
+    <div class="cards">
+      <div class="card"><div class="label">적용된 마이그레이션</div>
+        <div class="value">${fmt(SRV.applied)} / ${fmt(SRV.total)}</div></div>
+    </div>
+    ${(SRV.missing || []).length
+      ? `<div class="notice" style="border-color:var(--danger);color:var(--danger)">
+           <b>아직 안 돌린 파일</b> — ${(SRV.missing || []).map(esc).join(", ")}
+         </div>`
+      : `<div class="notice">빠진 파일 없습니다.</div>`}`
+    : `<div class="empty">052를 적용하면 여기에 나옵니다</div>`;
+
+  const audit = COIN_AUDIT.length ? `<div class="table-scroll"><table style="min-width:720px">
+      <thead><tr><th>닉네임</th><th class="num">실제 잔액</th><th class="num">기대 잔액</th>
+        <th class="num">차이</th><th class="num">획득</th><th class="num">소모</th>
+        <th class="num">받은 보상</th><th>가입</th></tr></thead>
+      <tbody>${COIN_AUDIT.map((r) => `<tr>
+        <td>${esc(r.username || "—")}</td>
+        <td class="num">${fmt(r.actual)}</td>
+        <td class="num">${fmt(r.expected)}</td>
+        <td class="num" style="color:var(--danger);font-weight:800">+${fmt(r.gap)}</td>
+        <td class="num">${fmt(r.earned)}</td>
+        <td class="num">${fmt(r.spent)}</td>
+        <td class="num">${fmt(r.granted)}</td>
+        <td class="muted">${fmtDate(r.created_at)}</td>
+      </tr>`).join("")}</tbody></table></div>`
+    : `<div class="empty">차이가 큰 계정이 없습니다</div>`;
+
+  const winners = WINNERS.length ? `<div class="table-scroll"><table style="min-width:420px">
+      <thead><tr><th>날짜</th><th>등수</th><th>닉네임</th><th>수령</th></tr></thead>
+      <tbody>${WINNERS.map((w) => `<tr>
+        <td class="muted">${fmtDate(w.award_date)}</td>
+        <td>${w.rank === 1 ? "🥇" : w.rank === 2 ? "🥈" : "🥉"}</td>
+        <td>${esc(w.username || "— (탈퇴)")}</td>
+        <td>${w.claimed ? '<span class="muted">받아 감</span>'
+                        : '<span class="pill today">대기</span>'}</td>
+      </tr>`).join("")}</tbody></table></div>`
+    : `<div class="empty">아직 없습니다</div>`;
+
+  const transfers = TRANSFERS.length ? `<div class="table-scroll"><table style="min-width:560px">
+      <thead><tr><th>코드</th><th>닉네임</th><th>발급</th><th>상태</th></tr></thead>
+      <tbody>${TRANSFERS.map((t) => `<tr>
+        <td class="num"><b>${esc(t.code)}</b></td>
+        <td>${esc(t.username || "—")}</td>
+        <td class="muted">${fmtDate(t.created_at)}</td>
+        <td>${t.used_at ? `<span class="muted">사용됨 ${fmtDate(t.used_at)}</span>`
+              : t.expired ? '<span class="pill heart">만료</span>'
+              : '<span class="pill today">대기</span>'}</td>
+      </tr>`).join("")}</tbody></table></div>`
+    : `<div class="empty">발급된 코드가 없습니다</div>`;
+
+  return `
+    <h2>마이그레이션</h2>
+    ${mig}
+
+    <h2>코인 잔액 대조 — 이상치</h2>
+    <div class="notice">
+      앱이 올린 잔액과 <b>events로 계산한 잔액</b>을 맞대어 봅니다. 차이가 크게 양수면
+      이벤트 없이 코인이 생긴 것입니다. <b>막지는 않습니다</b> — 오프라인에서 쓰고 늦게
+      올라오거나 기기 이전 직후에도 차이가 날 수 있어, 판단은 사람이 합니다.
+      events는 90일만 보관하므로 <b>가입이 오래된 계정일수록 차이가 크게 나옵니다.</b>
+    </div>
+    ${audit}
+
+    <h2>어제의 랭킹 보상 (최근 14일)</h2>
+    ${winners}
+
+    <h2>기기 이전 코드 (최근 50건)</h2>
+    ${transfers}
+
+    <h2>정리</h2>
+    <div class="toolbar">
+      <span class="muted">프로필 없이 24시간 넘게 남아 있는 익명 계정을 지웁니다 — MAU에 잡힙니다</span>
+      <button class="danger sm" id="cleanupOrphans">고아 계정 정리</button>
+    </div>`;
+}
+
+/** 지금 봐야 할 것들. 054의 admin_alerts가 개수만 세어 준다. */
+let ALERTS = null;
+
+async function loadAlerts() {
+  // 054 이전 서버에서는 함수가 없다. 그때는 종을 아예 안 그린다.
+  ALERTS = (await rpc("admin_alerts", { p_coin_gap: 2000 }).catch(() => []))[0] || null;
+}
+
+/**
+ * 관리자 이메일 옆 알림 종.
+ *
+ * 왜 필요한가 — 신고·미수령 보상·잔액 이상은 각각 다른 탭에 흩어져 있어서, 무슨 일이
+ * 생겼는지 알려면 탭을 하나씩 눌러 봐야 했다. 봐야 할 게 있다는 사실 자체를 한 곳에서
+ * 알려 준다. 누르면 그 자리로 데려간다.
+ */
+function alertBell() {
+  if (!ALERTS) return "";
+  const rows = [
+    ["coin_gap_players", "잔액이 안 맞는 계정", "server"],
+    ["open_reports", "처리 안 된 신고", "versus"],
+    ["unclaimed_rewards", "안 받아 간 보상", "rewards"],
+    ["stale_rooms", "방치된 대전 방", "versus"],
+  ].filter(([k]) => Number(ALERTS[k]) > 0);
+  const total = rows.reduce((a, [k]) => a + Number(ALERTS[k]), 0);
+  return `<div class="item" style="position:relative">
+    <button class="top" title="봐야 할 것">🔔${total
+      ? `<span class="pill heart" style="margin-left:4px">${fmt(total)}</span>` : ""}</button>
+    <div class="menu" style="right:0;left:auto;min-width:220px">
+      ${rows.length ? rows.map(([k, label, tabId]) =>
+        `<button data-tab="${tabId}">${label} <b>${fmt(ALERTS[k])}</b></button>`).join("")
+        : `<button disabled style="color:var(--dim)">지금은 조용합니다</button>`}
+    </div>
+  </div>`;
+}
+
+function navBar() {
+  return `<nav class="nav">${NAV.map((g) => {
+    if (!g.items) {
+      return `<div class="item"><button class="top ${TAB === g.id ? "on" : ""}"
+                data-tab="${g.id}">${g.label}</button></div>`;
+    }
+    const active = g.items.some(([id]) => id === TAB);
+    return `<div class="item">
+      <button class="top ${active ? "on" : ""}">${g.label}<span class="caret">▾</span></button>
+      <div class="menu">${g.items.map(([id, label]) =>
+        `<button class="${TAB === id ? "on" : ""}" data-tab="${id}">${label}</button>`).join("")}</div>
+    </div>`;
+  }).join("")}</nav>`;
+}
+
+function maintenanceBanner() {
+  const m = CONFIG?.maintenance || {};
+  const on = m.on === true;
+  const sched = m.starts_at && m.ends_at ? `${m.starts_at} ~ ${m.ends_at}` : "";
+  return `<div class="notice" style="${on
+      ? "border-color:var(--danger);color:var(--danger);font-weight:800"
+      : ""}">
+    지금 상태: <b>${on ? "🛠 점검 중 (앱이 잠겨 있습니다)" : "정상 — 잠긴 것 없음"}</b>
+    ${sched ? `<br><span class="muted">예약: ${esc(sched)} (한국시간)</span>` : ""}
+  </div>`;
+}
+
 async function saveMaintenance() {
   const on = $("#maintOn").checked;
   const message = $("#maintMsg").value.trim();
   const starts_at = $("#maintFrom").value || "";
   const ends_at = $("#maintTo").value || "";
   if (starts_at && ends_at && starts_at >= ends_at) { alert("종료가 시작보다 빠릅니다"); return; }
-  if (on && !confirm("점검 모드를 켭니다.\n\n모든 앱에서 랭킹·같이하기가 잠기고 안내가 뜹니다.")) return;
+  // 켤 때만 묻고 끌 때는 안 물었다 — 푼 줄 알았는데 안 풀렸는지, 실수로 풀었는지
+  // 알 길이 없었다(사용자 지적). 양쪽 다 묻고, 지금 상태는 위 배너로 늘 보인다.
+  const was = CONFIG?.maintenance?.on === true;
+  if (on && !was && !confirm("점검 모드를 켭니다.\n\n모든 앱에서 랭킹·같이하기가 잠기고 안내가 뜹니다.\n앱은 1분 안에 반영합니다.")) return;
+  if (!on && was && !confirm("점검 모드를 풉니다.\n\n랭킹·같이하기가 다시 열립니다.")) return;
   await act(() => rpc("admin_set_config", {
     p_key: "maintenance", p_value: { on, message, starts_at, ends_at },
   }), refresh);
@@ -1103,16 +1296,17 @@ function rewardsTable() {
 }
 
 // ------------------------------------------------------------------ 화면
-function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, cfgErr) {
+function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, cfgErr, serverErr) {
   const today = kstToday();
   const active = PLAYERS.filter((p) => p.daily_date === today && (p.daily_score || 0) > 0);
   const totals = PLAYERS.map((p) => p.total_score || 0);
-  const tab = (id, label) => `<button class="${TAB === id ? "on" : ""}" data-tab="${id}">${label}</button>`;
 
   $("#app").innerHTML = `
     <div class="head">
       <h1>🐾 DogPuzzle 관리자</h1>
+      ${navBar()}
       <div class="spacer"></div>
+      ${alertBell()}
       <span class="muted" style="font-size:12.5px">${esc(EMAIL)}</span>
       <button class="ghost" id="refresh">새로고침</button>
       <button class="ghost" id="logout">로그아웃</button>
@@ -1130,9 +1324,7 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
         <b>이상 징후</b> — 오늘 코인 3,000 이상 획득 ${ANOMALIES.length}명:
         ${ANOMALIES.slice(0, 5).map((a) => `${esc(a.username || "?")} (${fmt(a.earned_today)})`).join(", ")}
         ${ANOMALIES.length > 5 ? " 외" : ""}</div>` : ""}
-    <div class="tabs">
-      ${tab("players", "회원")}${tab("charts", "차트")}${tab("events", "이벤트")}${tab("rewards", "보상")}${tab("purchases", "구매")}${tab("versus", "같이하기")}${tab("update", "업데이트")}${tab("notices", "공지")}${tab("audit", "관리 기록")}
-    </div>
+
     ${TAB === "players" ? `
       <div class="toolbar">
         <input type="search" id="q" placeholder="닉네임 또는 id 검색" value="${esc(QUERY)}">
@@ -1158,9 +1350,18 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     ${TAB === "versus" ? versusTab(vsErr) : ""}
     ${TAB === "update" ? updateTab(cfgErr) : ""}
     ${TAB === "notices" ? noticesTab(noticesErr) : ""}
-    ${TAB === "audit" ? auditTable(auditErr) : ""}`;
+    ${TAB === "audit" ? auditTable(auditErr) : ""}
+    ${TAB === "server" ? serverTab(serverErr) : ""}`;
 
   $("#refresh").onclick = refresh;
+  const orphan = $("#cleanupOrphans");
+  if (orphan) orphan.onclick = async () => {
+    if (!confirm("프로필 없이 24시간 넘게 남아 있는 익명 계정을 지웁니다.\n\n되돌릴 수 없습니다.")) return;
+    await act(async () => {
+      const n = await rpc("admin_cleanup_orphan_users", { p_older_than_hours: 24 });
+      alert(`${n}개 계정을 정리했습니다`);
+    }, refresh);
+  };
   $("#logout").onclick = async () => { await sb.auth.signOut(); renderLogin(); };
   document.querySelectorAll("[data-tab]").forEach((b) => {
     b.onclick = () => { TAB = b.dataset.tab; refresh(); };
@@ -1313,6 +1514,9 @@ async function boot() {
   const aerr = TAB === "audit" ? await loadAudit().catch((e) => e) : null;
   const vserr = TAB === "versus" ? await loadVersus() : null;
   const cfgerr = TAB === "update" ? await loadConfig().then(() => null).catch((e) => e) : null;
+  const sverr = TAB === "server" ? await loadServer() : null;
+  // 알림은 **새로고침할 때만** 가져온다(사용자 지시) — 따로 도는 타이머는 두지 않는다.
+  await loadAlerts();
 
   let warn = "";
   if (perr) warn = "회원 조회 실패: " + perr.message;
@@ -1320,7 +1524,7 @@ async function boot() {
     warn = "조회 결과가 비어 있습니다. 이 계정이 admins 테이블에 등록됐는지 확인하세요 " +
            "(supabase_admin_access.sql 4번 항목).";
   }
-  render(warn, eerr, serr, nerr, perr2, aerr, vserr, cfgerr);
+  render(warn, eerr, serr, nerr, perr2, aerr, vserr, cfgerr, sverr);
 }
 
 boot();
