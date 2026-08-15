@@ -1423,27 +1423,10 @@ function batchState(b, now) {
 /** 아직 사람이 받아 갈 수 있는 묶음인가 — 이것만 "진행 중" 탭에 남는다. */
 function isLiveBatch(st) { return st.key === "live" || st.key === "notYet"; }
 
-function batchesTable() {
-  if (!BATCHES.length) return "";
-  const now = Date.now();
+function batchesTable(shown) {
+  if (!shown.length) return "";
   const when = (v) => (v ? new Date(v).toLocaleString("ko-KR", { dateStyle: "short", timeStyle: "short" }) : "—");
-
-  const marked = BATCHES.map((b) => ({ b, st: batchState(b, now) }));
-  const live = marked.filter((m) => isLiveBatch(m.st));
-  const done = marked.filter((m) => !isLiveBatch(m.st));
-  const shown = BATCH_VIEW === "live" ? live : done;
-
-  const tabs = `<div class="subtabs">
-    <button class="${BATCH_VIEW === "live" ? "on" : ""}" data-bview="live">진행 중 <b>${fmt(live.length)}</b></button>
-    <button class="${BATCH_VIEW === "done" ? "on" : ""}" data-bview="done">지난 것 <b>${fmt(done.length)}</b></button>
-  </div>`;
-
-  if (!shown.length) {
-    return `<h2>전체 지급 묶음</h2>${tabs}<div class="empty">${
-      BATCH_VIEW === "live" ? "진행 중인 묶음이 없습니다" : "지난 묶음이 없습니다"}</div>`;
-  }
-
-  return `<h2>전체 지급 묶음</h2>${tabs}
+  return `<h2>전체 지급 묶음</h2>
   <div class="table-scroll"><table>
     <thead><tr><th>등록</th><th>내용</th><th>메모</th><th>받을 수 있는 기간</th>
       <th>상태</th><th style="text-align:right">수령</th><th>관리</th></tr></thead>
@@ -1475,26 +1458,63 @@ function batchesTable() {
     }).join("")}</tbody></table></div>`;
 }
 
-function rewardsTable() {
-  if (!REWARDS.length && !BATCHES.length) return `<div class="empty">지급한 보상이 없습니다</div>`;
-  if (!REWARDS.length) return batchesTable();
-  const rows = `<div class="table-scroll"><table>
+/**
+ * 개별 지급 한 건의 상태. 묶음과 같은 말을 쓴다 — 같은 화면에서 다른 낱말을 쓰면
+ * 두 표가 다른 것을 재는 것처럼 읽힌다.
+ */
+function rewardState(r, now) {
+  if (r.claimed_at) return { key: "claimed", label: "받아감", cls: "" };
+  if (r.expires_at && new Date(r.expires_at).getTime() <= now) return { key: "expired", label: "만료", cls: "heart" };
+  if (r.starts_at && new Date(r.starts_at).getTime() > now) return { key: "notYet", label: "대기", cls: "today" };
+  return { key: "live", label: "안 받아감", cls: "today" };
+}
+
+function rewardsRows(shown) {
+  if (!shown.length) return "";
+  return `<h2>개별 지급</h2><div class="table-scroll"><table>
     <thead><tr><th>시각</th><th>대상</th><th style="text-align:right">코인</th>
       <th style="text-align:right">힌트</th><th style="text-align:right">자동</th>
-      <th>메모</th><th>수령</th></tr></thead>
-    <tbody>${REWARDS.map((r) => {
+      <th>메모</th><th>상태</th></tr></thead>
+    <tbody>${shown.map(({ r, st }) => {
       const who = PLAYERS.find((p) => p.id === r.profile_id);
       return `<tr>
         <td class="muted">${new Date(r.created_at).toLocaleString("ko-KR")}</td>
         <td>${esc(who?.username || (r.profile_id || "").slice(0, 8))}</td>
         <td class="num">${fmt(r.coins)}</td><td class="num">${fmt(r.hints)}</td><td class="num">${fmt(r.autos)}</td>
         <td class="muted">${esc(r.memo || "")}</td>
-        <td>${r.claimed_at
-          ? `<span class="muted">${new Date(r.claimed_at).toLocaleDateString("ko-KR")}</span>`
-          : '<span class="pill today">대기</span>'}</td>
+        <td><span class="pill ${st.cls}">${st.label}</span>${
+          r.claimed_at ? `<div class="muted" style="font-size:11px;margin-top:3px">${
+            new Date(r.claimed_at).toLocaleDateString("ko-KR")}</div>` : ""}</td>
       </tr>`;
     }).join("")}</tbody></table></div>`;
-  return batchesTable() + `<h2>개별 지급</h2>` + rows;
+}
+
+function rewardsTable() {
+  const now = Date.now();
+
+  // **개별 지급 표에는 묶음에 딸린 행을 넣지 않는다.** pending_rewards를 통째로 읽어
+  // 오다 보니 19명에게 묶음으로 주면 개별 지급에도 19줄이 그대로 따라 나왔다
+  // (사용자 지적). 묶음은 위 표에서 한 줄로 이미 보여 준다.
+  const singles = REWARDS.filter((r) => !r.batch_id).map((r) => ({ r, st: rewardState(r, now) }));
+  const marked = BATCHES.map((b) => ({ b, st: batchState(b, now) }));
+
+  const liveB = marked.filter((m) => isLiveBatch(m.st));
+  const doneB = marked.filter((m) => !isLiveBatch(m.st));
+  const liveS = singles.filter((m) => m.st.key === "live" || m.st.key === "notYet");
+  const doneS = singles.filter((m) => !(m.st.key === "live" || m.st.key === "notYet"));
+
+  if (!marked.length && !singles.length) return `<div class="empty">지급한 보상이 없습니다</div>`;
+
+  const live = BATCH_VIEW === "live";
+  // 탭 하나로 두 표를 같이 거른다 — 표마다 탭을 두면 어느 쪽을 보고 있는지 헷갈린다.
+  const tabs = `<div class="subtabs">
+    <button class="${live ? "on" : ""}" data-bview="live">진행 중 <b>${fmt(liveB.length + liveS.length)}</b></button>
+    <button class="${!live ? "on" : ""}" data-bview="done">지난 것 <b>${fmt(doneB.length + doneS.length)}</b></button>
+  </div>`;
+
+  const body = batchesTable(live ? liveB : doneB) + rewardsRows(live ? liveS : doneS);
+  return tabs + (body || `<div class="empty">${
+    live ? "진행 중인 지급이 없습니다" : "지난 지급이 없습니다"}</div>`);
 }
 
 // ------------------------------------------------------------------ 화면
