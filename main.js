@@ -603,6 +603,41 @@ function localDatetimeValue(d) {
        + `T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+/**
+ * 이벤트 기간을 정한다. 둘 다 비우면 상시다(기본 14종이 그렇다).
+ *
+ * 보상 지급과 같은 대화상자 틀을 쓴다 — 관리자가 이미 아는 모양이라 새로 배울 게 없다.
+ */
+function openEventWhen(id) {
+  const ev = VS_EVENTS.find((x) => x.id === id);
+  if (!ev) return;
+  const dlg = $("#evDlg");
+  $("#evTitle").textContent = `${ev.code} 기간`;
+  const toLocal = (v) => {
+    if (!v) return "";
+    const d = new Date(v);
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+         + `T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+  $("#evStart").value = toLocal(ev.starts_at);
+  $("#evEnd").value = toLocal(ev.ends_at);
+  $("#evErr").textContent = "";
+  dlg.showModal();
+  $("#evCancel").onclick = () => dlg.close();
+  $("#evOk").onclick = async () => {
+    const at = (v) => (v ? new Date(v).toISOString() : null);
+    const starts = at($("#evStart").value), ends = at($("#evEnd").value);
+    if (starts && ends && ends <= starts) { $("#evErr").textContent = "종료가 시작보다 빠릅니다"; return; }
+    await act(async () => {
+      const { error } = await sb.from("versus_events")
+        .update({ starts_at: starts, ends_at: ends }).eq("id", id);
+      if (error) throw error;
+      dlg.close();
+    }, refresh);
+  };
+}
+
 /** id가 null이면 전체 지급. 기간을 비워 두면 제한 없이 받을 수 있다. */
 function openGrant(id) {
   const p = id ? findPlayer(id) : null;
@@ -725,6 +760,9 @@ async function loadVersus() {
     VS_ROOMS = await rpc("admin_versus_rooms").catch(() => []) || [];
     MATCH = (await rpc("admin_matching_stats").catch(() => []))[0] || null;
     REPORTS = await rpc("admin_reports", { p_limit: 100 }).catch(() => []) || [];
+    // 061 — 이벤트 목록. 아직 안 올린 서버에서는 표가 통째로 빠질 뿐 나머지는 그대로 돈다.
+    VS_EVENTS = (await sb.from("versus_events").select("*").order("category").order("code")
+      .then((r) => r.data).catch(() => null)) || [];
     await loadConfig();
     VS_ON = CONFIG.versus_enabled === true;
     return null;
@@ -842,6 +880,8 @@ const NAV = [
 ];
 
 let SRV = null, WINNERS = [], TRANSFERS = [], COIN_AUDIT = [];
+/** 대전 이벤트(061) — 돌발 상황 14종. 기간과 on/off를 여기서 만진다. */
+let VS_EVENTS = [];
 
 /** 052·054가 있어야 채워진다. 없는 서버에서는 조용히 빈 값으로 두고 안내만 띄운다 —
  *  관리자 페이지는 서버보다 먼저 배포될 수 있다. */
@@ -1097,6 +1137,63 @@ async function toggleVersus() {
   await act(() => rpc("admin_set_config", { p_key: "versus_enabled", p_value: next }), refresh);
 }
 
+/**
+ * 대전 이벤트(061) 표.
+ *
+ * 여기서 끄면 **다음 판부터** 안 뽑힌다. 이미 시작된 판은 서버가 뽑아 둔 목록으로
+ * 끝까지 간다 — 판 도중에 규칙이 바뀌면 그게 더 이상하다.
+ *
+ * 각 갈래(이로움·해로움·중립)에 **최소 두 개는 남겨 둬야 한다.** 뽑기가 2·2·1이라
+ * 한 갈래가 두 개 미만이면 그 판은 사건이 다섯 개가 안 된다.
+ */
+function versusEventsTable() {
+  if (!VS_EVENTS.length) return "";
+  const KIND = { buff: "이로움", debuff: "해로움", neutral: "중립" };
+  const CLS = { buff: "today", debuff: "heart", neutral: "" };
+  const when = (v) => (v ? new Date(v).toLocaleString("ko-KR", { dateStyle: "short", timeStyle: "short" }) : "—");
+  const now = Date.now();
+
+  // 갈래마다 몇 개가 살아 있는지 — 두 개 미만이면 경고한다.
+  const alive = {};
+  for (const e of VS_EVENTS) {
+    const on = e.enabled
+      && (!e.starts_at || new Date(e.starts_at).getTime() <= now)
+      && (!e.ends_at || new Date(e.ends_at).getTime() > now);
+    if (on) alive[e.category] = (alive[e.category] || 0) + 1;
+  }
+  const need = { buff: 2, debuff: 2, neutral: 1 };
+  const short = Object.entries(need).filter(([k, v]) => (alive[k] || 0) < v);
+  const warn = short.length
+    ? `<div class="notice" style="border-color:var(--danger);color:var(--danger)">
+         ${short.map(([k, v]) => `${KIND[k]}이 ${v}개 이상 켜져 있어야 합니다 (지금 ${alive[k] || 0}개)`).join(" · ")}
+         <br>부족하면 그 판은 사건이 다섯 개가 안 됩니다.</div>`
+    : "";
+
+  return `<h2>대전 이벤트</h2>
+  <div class="muted" style="font-size:12.5px;margin-bottom:8px">
+    판마다 <b>이로움 2 · 해로움 2 · 중립 1</b>로 뽑습니다. 끄면 다음 판부터 빠집니다.
+  </div>${warn}
+  <div class="table-scroll"><table>
+    <thead><tr><th>갈래</th><th>이름</th><th>설정</th><th>기간</th><th>상태</th><th>관리</th></tr></thead>
+    <tbody>${VS_EVENTS.map((e) => {
+      const started = !e.starts_at || new Date(e.starts_at).getTime() <= now;
+      const ended = e.ends_at && new Date(e.ends_at).getTime() <= now;
+      const on = e.enabled && started && !ended;
+      const state = !e.enabled ? "꺼짐" : ended ? "기간 끝" : !started ? "대기" : "켜짐";
+      return `<tr>
+        <td><span class="pill ${CLS[e.category] || ""}">${KIND[e.category] || e.category}</span></td>
+        <td>${esc(e.code)}</td>
+        <td class="muted">${esc(JSON.stringify(e.config))}</td>
+        <td class="muted">${when(e.starts_at)} ~ ${when(e.ends_at)}</td>
+        <td>${on ? '<b style="color:var(--accent)">켜짐</b>' : `<span class="muted">${state}</span>`}</td>
+        <td><div class="actions">
+          <button class="ghost sm" data-evtoggle="${e.id}">${e.enabled ? "끄기" : "켜기"}</button>
+          <button class="ghost sm" data-evwhen="${e.id}">기간</button>
+        </div></td>
+      </tr>`;
+    }).join("")}</tbody></table></div>`;
+}
+
 function versusTab(err) {
   if (err) {
     return `<div class="notice">대전 집계 조회 실패: ${esc(err.message)}<br>
@@ -1162,6 +1259,7 @@ function versusTab(err) {
         앱은 켤 때 이 값을 읽습니다. 이미 실행 중인 앱은 다시 켜야 반영됩니다.
       </span>
     </div>
+    ${versusEventsTable()}
     ${matchPanel}
     ${roomsTable}
     ${reportsTable}
@@ -1611,6 +1709,20 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
         }, refresh);
       };
     }
+    document.querySelectorAll("[data-evtoggle]").forEach((b) => {
+      b.onclick = async () => {
+        const ev = VS_EVENTS.find((x) => String(x.id) === b.dataset.evtoggle);
+        if (!ev) return;
+        await act(async () => {
+          const { error } = await sb.from("versus_events")
+            .update({ enabled: !ev.enabled }).eq("id", ev.id);
+          if (error) throw error;
+        }, refresh);
+      };
+    });
+    document.querySelectorAll("[data-evwhen]").forEach((b) => {
+      b.onclick = () => openEventWhen(Number(b.dataset.evwhen));
+    });
     document.querySelectorAll("[data-report-ok]").forEach((b) => {
       b.onclick = async () => {
         const note = askReason("신고 확인 처리");
