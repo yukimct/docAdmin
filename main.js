@@ -1172,11 +1172,16 @@ async function toggleVersusEvents() {
  *   바꾸는 곳, 현황은 보는 곳이다.
  */
 function versusSetupTab() {
+  // 상태 글자와 동작 버튼을 나란히 두면 어느 쪽이 지금 상태인지 매번 다시 읽어야
+  // 한다(사용자 지적). 토글은 손잡이 위치가 곧 상태다 — 옆 글자는 확인용이다.
   const sw = (label, on, id, note) => `
     <div class="toolbar">
       <span style="min-width:120px"><b>${label}</b></span>
-      <b style="color:${on ? "var(--accent)" : "var(--dim)"}">${on ? "켜짐" : "꺼짐"}</b>
-      <button class="sm" id="${id}">${on ? "끄기" : "켜기"}</button>
+      <label class="tgl">
+        <input type="checkbox" id="${id}" ${on ? "checked" : ""}>
+        <span class="tgl-track"><span class="tgl-thumb"></span></span>
+        <b class="tgl-state" style="color:${on ? "var(--accent)" : "var(--dim)"}">${on ? "켜짐" : "꺼짐"}</b>
+      </label>
       <span class="muted" style="font-size:12.5px">${note}</span>
     </div>`;
   return `
@@ -1800,8 +1805,16 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
   });
 
   if (TAB === "versusset") {
-    $("#toggleVersus").onclick = toggleVersus;
-    $("#toggleVsEvents").onclick = toggleVersusEvents;
+    // 체크박스는 **누르는 순간 눈으로 먼저 넘어간다.** 확인창에서 취소하면 서버는
+    // 그대로인데 화면만 바뀐 채 남으므로, 끝난 뒤 실제 값으로 되돌려 놓는다.
+    // (성공했으면 refresh가 화면을 다시 그리므로 이 줄은 무해하게 지나간다.)
+    const bindToggle = (id, fn, cur) => {
+      const el = $("#" + id);
+      if (!el) return;
+      el.onchange = async () => { await fn(); el.checked = cur(); };
+    };
+    bindToggle("toggleVersus", toggleVersus, () => VS_ON);
+    bindToggle("toggleVsEvents", toggleVersusEvents, () => EV_ON);
     document.querySelectorAll("[data-evtoggle]").forEach((b) => {
       b.onclick = async () => {
         const ev = VS_EVENTS.find((x) => String(x.id) === b.dataset.evtoggle);
