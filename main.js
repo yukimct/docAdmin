@@ -823,8 +823,10 @@ function updateTab(err) {
         <input type="checkbox" id="maintOn" ${CONFIG?.maintenance?.on ? "checked" : ""}>
         <span>점검 중</span>
       </label>
-      <input type="text" id="maintMsg" placeholder="안내 문구 (비우면 기본 문구)"
-             value="${esc(CONFIG?.maintenance?.message || "")}" style="flex:1">
+      <!-- input[type=text]은 줄바꿈을 담지 못해 엔터를 쳐도 한 줄로 붙었다
+           (사용자 제보). 앱은 두 줄 이상도 그대로 그리므로 textarea로 바꾼다. -->
+      <textarea id="maintMsg" rows="2" placeholder="안내 문구 (비우면 기본 문구) — 줄바꿈 가능"
+                style="flex:1;resize:vertical;font:inherit">${esc(CONFIG?.maintenance?.message || "")}</textarea>
       <button class="sm" id="saveMaint">저장</button>
     </div>
     <div class="toolbar">
