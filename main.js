@@ -1281,6 +1281,36 @@ function anomalyTab() {
  * 각 갈래(이로움·해로움·중립)에 **최소 두 개는 남겨 둬야 한다.** 뽑기가 2·2·1이라
  * 한 갈래가 두 개 미만이면 그 판은 사건이 다섯 개가 안 된다.
  */
+/**
+ * 사건 14종의 **앱에 보이는 모습** — 아이콘·이름·설명.
+ *
+ * 왜 여기에 또 적나
+ *   DB에는 `code`와 `title_key`(ev_lock)만 있다. 사람이 읽는 이름은 앱의 Localization
+ *   안에 있어서, 관리자 페이지는 보여 줄 한글 이름을 애초에 가진 적이 없었다.
+ *   그래서 표에 `autodog` 같은 코드만 떴고, 어느 사건을 끄는 건지 알 수 없었다
+ *   (2026-08-17 지적). 아이콘도 앱과 같은 것을 써야 "화면에서 본 그것"과 이어진다.
+ *
+ * **앱 문구가 원본이다.** 여기를 고칠 일이 생기면 Localization.kt / Localization.swift의
+ * ev_* 값을 함께 고쳐야 한다. 어긋나면 관리자에서 끈 사건과 사용자가 본 사건이
+ * 서로 다른 이름으로 불린다.
+ */
+const EV_INFO = {
+  gift:     ["🎁", "선물",     "모두 뼈다귀를 하나 더 받았어요"],
+  extend:   ["⏰", "연장",     "제한 시간이 10초 늘었어요"],
+  reveal:   ["👀", "살짝 귀띔", "정답 칸 하나가 잠깐 보여요"],
+  autodog:  ["🐶", "저절로",   "댕댕이 한 마리가 알아서 앉았어요"],
+  lens:     ["🔍", "돋보기",   "구역 경계가 또렷해졌어요"],
+  fog:      ["🌫️", "안개",     "잠시 판이 뿌옇게 가려져요"],
+  eraser:   ["🧽", "지우개",   "찍어 둔 ✕ 표시가 절반 지워졌어요"],
+  lock:     ["🔒", "구역 잠금", "한 구역이 잠시 잠겼어요"],
+  thief:    ["🦴", "뼈 도둑",  "모두 뼈다귀를 하나 잃었어요"],
+  thin_ice: ["🧊", "살얼음",   "잠시 실수하면 뼈다귀를 두 개 잃어요"],
+  gray:     ["🌑", "암전",     "잠시 색이 사라져요"],
+  shake:    ["💫", "흔들흔들", "판이 잠시 흔들려요"],
+  flip:     ["🔄", "거꾸로",   "판이 잠시 좌우로 뒤집혀 보여요"],
+  flash:    ["⚡", "번쩍",     "완성된 판이 아주 잠깐 스쳐 가요"],
+};
+
 function versusEventsTable() {
   if (!VS_EVENTS.length) return "";
   const KIND = { buff: "이로움", debuff: "해로움", neutral: "중립" };
@@ -1315,9 +1345,21 @@ function versusEventsTable() {
       const ended = e.ends_at && new Date(e.ends_at).getTime() <= now;
       const on = e.enabled && started && !ended;
       const state = !e.enabled ? "꺼짐" : ended ? "기간 끝" : !started ? "대기" : "켜짐";
+      // 목록에 없는 코드는 **DB에만 있고 앱은 모르는 사건**이다. 물음표로 눈에 띄게 둔다 —
+      // 조용히 코드만 보여 주면 왜 앱에서 아무 일도 안 일어나는지 알 수 없다.
+      const info = EV_INFO[e.code] || ["❓", e.code, "앱에 이 코드가 없습니다"];
       return `<tr>
         <td><span class="pill ${CLS[e.category] || ""}">${KIND[e.category] || e.category}</span></td>
-        <td>${esc(e.code)}</td>
+        <td>
+          <div style="display:flex;align-items:center;gap:9px">
+            <span style="font-size:20px;line-height:1">${info[0]}</span>
+            <div>
+              <b>${esc(info[1])}</b>
+              <div class="muted" style="font-size:12px">${esc(info[2])}</div>
+              <div class="muted" style="font-size:11px;opacity:.7">${esc(e.code)}</div>
+            </div>
+          </div>
+        </td>
         <td class="muted">${esc(JSON.stringify(e.config))}</td>
         <td class="muted">${when(e.starts_at)} ~ ${when(e.ends_at)}</td>
         <td>${on ? '<b style="color:var(--accent)">켜짐</b>' : `<span class="muted">${state}</span>`}</td>
