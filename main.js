@@ -765,6 +765,7 @@ async function loadVersus() {
       .then((r) => r.data).catch(() => null)) || [];
     await loadConfig();
     VS_ON = CONFIG.versus_enabled === true;
+    EV_ON = CONFIG.versus_events_on !== false;
     return null;
   } catch (e) { return e; }
 }
@@ -831,9 +832,15 @@ function updateTab(err) {
       <input type="datetime-local" id="maintFrom" value="${esc(CONFIG?.maintenance?.starts_at || "")}">
       <span class="muted">~</span>
       <input type="datetime-local" id="maintTo" value="${esc(CONFIG?.maintenance?.ends_at || "")}">
+      <!-- 저장은 원래 윗줄에만 있었다. 같은 함수가 예약까지 함께 저장하는데도,
+           **예약을 입력하는 줄에 버튼이 없으니** 시간을 넣고 그냥 넘어가게 된다
+           (사용자 제보: 시간을 넣었는데 서버에 안 들어가 있었다).
+           두 버튼 다 이 화면의 점검 설정을 통째로 저장한다. -->
+      <button class="sm" id="saveMaintSched">저장</button>
     </div>
     <div class="muted" style="margin-top:-6px;font-size:12px">
       예약이 있으면 그 시간 동안 앱이 스스로 점검 상태가 됩니다. 스위치를 켤 필요가 없습니다.
+      <b>넣은 뒤 저장을 눌러야</b> 반영됩니다.
     </div>
 
     <h2>서버 주소 이사</h2>
@@ -873,13 +880,16 @@ function updateTab(err) {
  */
 const NAV = [
   { id: "charts", label: "차트" },
-  { id: "versus", label: "같이하기" },
+  { label: "같이하기", items: [["versus", "현황"], ["versusset", "설정"]] },
   { label: "회원", items: [["players", "회원 목록"], ["rewards", "보상"]] },
   { label: "기록", items: [["events", "이벤트"], ["purchases", "구매"], ["audit", "관리 기록"]] },
-  { label: "운영", items: [["update", "업데이트"], ["notices", "공지"], ["server", "서버 상태"]] },
+  { label: "운영", items: [["anomaly", "이상 징후"], ["update", "업데이트"],
+                          ["notices", "공지"], ["server", "서버 상태"]] },
 ];
 
 let SRV = null, WINNERS = [], TRANSFERS = [], COIN_AUDIT = [];
+/** 062 — 대전 이벤트 전체 스위치. 키가 없는 서버에서는 켜진 것으로 본다(서버와 같은 규칙). */
+let EV_ON = true;
 /** 대전 이벤트(061) — 돌발 상황 14종. 기간과 on/off를 여기서 만진다. */
 let VS_EVENTS = [];
 
@@ -959,7 +969,9 @@ function serverTab(err) {
     <h2>마이그레이션</h2>
     ${mig}
 
-    <h2>코인 잔액 대조 — 이상치</h2>
+    <h2>코인 잔액 대조</h2>
+    <div class="muted" style="margin-bottom:6px">
+      운영 → <b>이상 징후</b>에 같은 표가 다른 항목과 함께 있습니다.</div>
     <div class="notice">
       앱이 올린 잔액과 <b>events로 계산한 잔액</b>을 맞대어 봅니다. 차이가 크게 양수면
       이벤트 없이 코인이 생긴 것입니다. <b>막지는 않습니다</b> — 오프라인에서 쓰고 늦게
@@ -1006,7 +1018,7 @@ function markSeen(key, count) {
 }
 
 const ALERT_ROWS = [
-  ["coin_gap_players", "잔액이 안 맞는 계정", "server"],
+  ["coin_gap_players", "잔액이 안 맞는 계정", "anomaly"],
   ["open_reports", "처리 안 된 신고", "versus"],
   ["unclaimed_rewards", "안 받아 간 보상", "rewards"],
   ["stale_rooms", "방치된 대전 방", "versus"],
@@ -1041,10 +1053,13 @@ function alertBell() {
         <button class="seen" data-seen="${k}" data-seen-n="${n}">확인</button>
       </div>`).join("")
     : `<div class="empty">지금은 조용합니다</div>`;
+  // 종은 "무엇이 몇 건"까지만 말한다. 자세히 보려면 한 페이지에 모아 둔 곳으로 보낸다.
+  const more = `<div class="line" style="border-top:1px solid var(--line);margin-top:4px">
+      <button class="go" data-tab="anomaly">이상 징후 모두 보기</button></div>`;
   return `<div class="bell" tabindex="0">
     <button class="top" title="봐야 할 것">🔔${total
       ? `<span class="pill heart" style="margin-left:4px">${fmt(total)}</span>` : ""}</button>
-    <div class="menu">${list}</div>
+    <div class="menu">${list}${more}</div>
   </div>`;
 }
 
@@ -1135,6 +1150,99 @@ async function toggleVersus() {
     ? "같이하기를 켭니다.\n\n앱 대기화면에 버튼이 나타납니다."
     : "같이하기를 끕니다.\n\n앱에서 버튼이 사라집니다. 이미 진행 중인 방은 그대로 끝납니다.")) return;
   await act(() => rpc("admin_set_config", { p_key: "versus_enabled", p_value: next }), refresh);
+}
+
+/** 062 — 사건 전체를 한 번에. 개별 on/off와 기간은 건드리지 않아 되켜면 그대로 돌아온다. */
+async function toggleVersusEvents() {
+  const next = !EV_ON;
+  if (!confirm(next
+    ? "대전 이벤트를 켭니다.\n\n다음 판부터 판마다 5개가 다시 뽑힙니다."
+    : "대전 이벤트를 끕니다.\n\n다음 판부터 사건이 하나도 안 나옵니다.\n개별 설정과 기간은 그대로 남아, 다시 켜면 지금 상태로 돌아옵니다.")) return;
+  await act(() => rpc("admin_set_config", { p_key: "versus_events_on", p_value: next }), refresh);
+}
+
+/**
+ * 같이하기 **설정** — 스위치만 모아 둔 자리.
+ *
+ * 왜 나눴나 (사용자 지시: "사용량을 보는 곳과 관리를 하는건 분리 해야지")
+ *   예전에는 현황·신고·방 목록·집계와 스위치가 한 페이지에 다 있어서 화면이 길었고,
+ *   무엇보다 **구경하러 들어간 자리에 위험한 버튼이 섞여 있었다.** 여기는 앱 동작을
+ *   바꾸는 곳, 현황은 보는 곳이다.
+ */
+function versusSetupTab() {
+  const sw = (label, on, id, note) => `
+    <div class="toolbar">
+      <span style="min-width:120px"><b>${label}</b></span>
+      <b style="color:${on ? "var(--accent)" : "var(--dim)"}">${on ? "켜짐" : "꺼짐"}</b>
+      <button class="sm" id="${id}">${on ? "끄기" : "켜기"}</button>
+      <span class="muted" style="font-size:12.5px">${note}</span>
+    </div>`;
+  return `
+    <h2>기능 스위치</h2>
+    ${sw("같이하기", VS_ON, "toggleVersus",
+         "앱은 켤 때 이 값을 읽습니다. 이미 실행 중인 앱은 다시 켜야 반영됩니다.")}
+    ${sw("대전 이벤트", EV_ON, "toggleVsEvents",
+         "다음 판부터 적용됩니다. 진행 중인 판은 그대로 끝납니다.")}
+    ${EV_ON ? "" : `<div class="notice">전체가 꺼져 있어 아래 개별 설정은 지금 효과가 없습니다.
+        다시 켜면 이 상태 그대로 돌아옵니다.</div>`}
+    ${versusEventsTable()}`;
+}
+
+/**
+ * 이상 징후 — 봐야 할 것만 한 페이지에.
+ *
+ * 왜 필요한가 (사용자 요청)
+ *   코인 급증은 상단 배너, 잔액 대조는 서버 상태 탭, 신고와 방치된 방은 같이하기 탭에
+ *   흩어져 있었다. "지금 이상한 게 있나?"를 알려면 세 곳을 돌아야 했다.
+ *
+ * 여기서는 **고치지 않는다.** 처리 버튼은 각자의 관리 자리에 그대로 두고, 여기서는
+ * 무엇이 몇 건인지만 보여 준 뒤 그 자리로 보낸다.
+ */
+function anomalyTab() {
+  const th = Number(CONFIG?.anomaly_threshold ?? 3000) || 3000;
+  const openReports = REPORTS.filter((r) => !r.handled_at).length;
+  const stale = Number(MATCH?.stale_rooms || 0);
+  const card = (label, n, tab) => `
+    <div class="card"><div class="label">${label}</div>
+      <div class="value" style="${n > 0 ? "color:var(--danger)" : ""}">${fmt(n)}</div>
+      ${n > 0 && tab ? `<button class="ghost sm" data-tab="${tab}">보러 가기</button>` : ""}</div>`;
+
+  const anomalies = ANOMALIES.length ? `<div class="table-scroll"><table style="min-width:420px">
+      <thead><tr><th>닉네임</th><th class="num">오늘 획득</th><th>가입</th></tr></thead>
+      <tbody>${ANOMALIES.map((a) => `<tr>
+        <td>${esc(a.username || "—")}</td>
+        <td class="num" style="color:var(--danger);font-weight:800">${fmt(a.earned_today)}</td>
+        <td class="muted">${fmtDate(a.created_at)}</td>
+      </tr>`).join("")}</tbody></table></div>`
+    : `<div class="empty">문턱(${fmt(th)})을 넘은 계정이 없습니다</div>`;
+
+  const audit = COIN_AUDIT.length ? `<div class="table-scroll"><table style="min-width:640px">
+      <thead><tr><th>닉네임</th><th class="num">실제</th><th class="num">기대</th>
+        <th class="num">차이</th><th class="num">획득</th><th class="num">소모</th></tr></thead>
+      <tbody>${COIN_AUDIT.map((r) => `<tr>
+        <td>${esc(r.username || "—")}</td>
+        <td class="num">${fmt(r.actual)}</td>
+        <td class="num">${fmt(r.expected)}</td>
+        <td class="num" style="color:var(--danger);font-weight:800">+${fmt(r.gap)}</td>
+        <td class="num">${fmt(r.earned)}</td>
+        <td class="num">${fmt(r.spent)}</td>
+      </tr>`).join("")}</tbody></table></div>`
+    : `<div class="empty">잔액이 어긋난 계정이 없습니다</div>`;
+
+  return `
+    <div class="cards">
+      ${card("코인 급증", ANOMALIES.length, null)}
+      ${card("잔액 불일치", COIN_AUDIT.length, null)}
+      ${card("미처리 신고", openReports, "versus")}
+      ${card("방치된 방", stale, "versus")}
+    </div>
+    <h2>오늘 코인 ${fmt(th)} 이상 획득</h2>
+    <div class="muted" style="margin-bottom:6px">문턱은 운영 → 업데이트에서 바꿉니다.</div>
+    ${anomalies}
+    <h2>코인 잔액 대조 (054 · 막지 않고 보고만)</h2>
+    <div class="muted" style="margin-bottom:6px">
+      실제 잔액이 기대값보다 2,000 넘게 많은 계정입니다. 기기 시계를 돌렸거나 결제 취소가 섞였을 수 있습니다.</div>
+    ${audit}`;
 }
 
 /**
@@ -1251,15 +1359,8 @@ function versusTab(err) {
       </tr>`).join("")}</tbody>
     </table></div>` : `<h2>지금 열려 있는 방</h2><div class="empty">없습니다</div>`;
   return `
-    <div class="toolbar">
-      <span>같이하기 기능</span>
-      <b style="color:${VS_ON ? "var(--accent)" : "var(--dim)"}">${VS_ON ? "켜짐" : "꺼짐"}</b>
-      <button class="sm" id="toggleVersus">${VS_ON ? "끄기" : "켜기"}</button>
-      <span class="muted" style="font-size:12.5px">
-        앱은 켤 때 이 값을 읽습니다. 이미 실행 중인 앱은 다시 켜야 반영됩니다.
-      </span>
-    </div>
-    ${versusEventsTable()}
+    ${VS_ON ? "" : `<div class="notice" style="border-color:var(--danger);color:var(--danger)">
+        같이하기가 <b>꺼져 있습니다</b> — 설정에서 켤 수 있습니다.</div>`}
     ${matchPanel}
     ${roomsTable}
     ${reportsTable}
@@ -1640,10 +1741,6 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
       <div class="card"><div class="label">응원해 주신 분</div><div class="value">${fmt(PLAYERS.filter((p) => p.supporter).length)}</div></div>
       <div class="card"><div class="label">미수령 보상</div><div class="value">${fmt(REWARDS.filter((r) => !r.claimed_at).length)}</div></div>
     </div>
-      ${ANOMALIES.length ? `<div class="notice" style="margin-bottom:8px">
-        <b>이상 징후</b> — 오늘 코인 3,000 이상 획득 ${ANOMALIES.length}명:
-        ${ANOMALIES.slice(0, 5).map((a) => `${esc(a.username || "?")} (${fmt(a.earned_today)})`).join(", ")}
-        ${ANOMALIES.length > 5 ? " 외" : ""}</div>` : ""}
 
     ${TAB === "players" ? `
       <div class="toolbar">
@@ -1671,6 +1768,8 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     ${TAB === "rewards" ? rewardsTable() : ""}
     ${TAB === "purchases" ? purchasesTab(payErr) : ""}
     ${TAB === "versus" ? versusTab(vsErr) : ""}
+    ${TAB === "versusset" ? versusSetupTab() : ""}
+    ${TAB === "anomaly" ? anomalyTab() : ""}
     ${TAB === "update" ? updateTab(cfgErr) : ""}
     ${TAB === "notices" ? noticesTab(noticesErr) : ""}
     ${TAB === "audit" ? auditTable(auditErr) : ""}
@@ -1698,17 +1797,9 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     b.onclick = () => { TAB = b.dataset.tab; refresh(); };
   });
 
-  if (TAB === "versus") {
+  if (TAB === "versusset") {
     $("#toggleVersus").onclick = toggleVersus;
-    if ($("#purgeRooms")) {
-      $("#purgeRooms").onclick = async () => {
-        if (!confirm("빈 방을 삭제하고, 30분 넘게 소식 없는 방을 닫습니다.\n\n진행 중인 방은 건드리지 않습니다.")) return;
-        await act(async () => {
-          const n = await rpc("admin_purge_stale_rooms", { p_minutes: 30 });
-          alert(`${n}개를 정리했습니다`);
-        }, refresh);
-      };
-    }
+    $("#toggleVsEvents").onclick = toggleVersusEvents;
     document.querySelectorAll("[data-evtoggle]").forEach((b) => {
       b.onclick = async () => {
         const ev = VS_EVENTS.find((x) => String(x.id) === b.dataset.evtoggle);
@@ -1723,6 +1814,18 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     document.querySelectorAll("[data-evwhen]").forEach((b) => {
       b.onclick = () => openEventWhen(Number(b.dataset.evwhen));
     });
+  }
+
+  if (TAB === "versus") {
+    if ($("#purgeRooms")) {
+      $("#purgeRooms").onclick = async () => {
+        if (!confirm("빈 방을 삭제하고, 30분 넘게 소식 없는 방을 닫습니다.\n\n진행 중인 방은 건드리지 않습니다.")) return;
+        await act(async () => {
+          const n = await rpc("admin_purge_stale_rooms", { p_minutes: 30 });
+          alert(`${n}개를 정리했습니다`);
+        }, refresh);
+      };
+    }
     document.querySelectorAll("[data-report-ok]").forEach((b) => {
       b.onclick = async () => {
         const note = askReason("신고 확인 처리");
@@ -1756,6 +1859,7 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
   if (TAB === "update" && $("#saveVersions")) {
     $("#saveVersions").onclick = saveVersions;
     if ($("#saveMaint")) $("#saveMaint").onclick = saveMaintenance;
+    if ($("#saveMaintSched")) $("#saveMaintSched").onclick = saveMaintenance;
     if ($("#saveAnomaly")) $("#saveAnomaly").onclick = saveAnomalyThreshold;
     if ($("#saveApiUrl")) $("#saveApiUrl").onclick = saveApiUrl;
   }
