@@ -764,8 +764,6 @@ async function loadVersus() {
     VS_EVENTS = (await sb.from("versus_events").select("*").order("category").order("code")
       .then((r) => r.data).catch(() => null)) || [];
     await loadConfig();
-    VS_ON = CONFIG.versus_enabled === true;
-    EV_ON = CONFIG.versus_events_on !== false;
     return null;
   } catch (e) { return e; }
 }
@@ -774,6 +772,13 @@ async function loadConfig() {
   const { data, error } = await sb.from("app_config").select("*");
   if (error) throw new Error(error.message);
   CONFIG = Object.fromEntries((data || []).map((r) => [r.key, r.value]));
+  // **스위치 값은 여기서 만든다.** 예전에는 loadVersus 안에 있었는데, boot()는 그 함수를
+  // `TAB === "versus"`일 때만 부른다. 그래서 **설정 탭에서는 서버 값을 한 번도 안 읽고**
+  // 파일 맨 위의 초기값(VS_ON=false, EV_ON=true)을 그대로 그렸다 — 서버가 무엇이든
+  // 늘 "같이하기 꺼짐 / 대전 이벤트 켜짐"으로 보였다(2026-08-17 제보).
+  // loadConfig는 탭과 무관하게 boot()가 항상 부르므로 여기 두면 어느 탭에서도 맞는다.
+  VS_ON = CONFIG.versus_enabled === true;
+  EV_ON = CONFIG.versus_events_on !== false;
 }
 
 /**
@@ -1145,22 +1150,37 @@ async function saveVersions() {
   }, refresh);
 }
 
-/** 대전 기능을 켜고 끈다. 끄면 앱 대기화면에서 버튼이 사라진다. */
+/**
+ * 대전 기능을 켜고 끈다. 끄면 앱 대기화면에서 버튼이 사라진다.
+ *
+ * **성패를 돌려준다** — 부르는 쪽(토글)이 취소·실패일 때만 눌린 것을 물려야 하는데,
+ * act()가 오류를 alert으로 삼켜서 그냥은 알 길이 없다.
+ */
 async function toggleVersus() {
   const next = !VS_ON;
   if (!confirm(next
     ? "같이하기를 켭니다.\n\n앱 대기화면에 버튼이 나타납니다."
-    : "같이하기를 끕니다.\n\n앱에서 버튼이 사라집니다. 이미 진행 중인 방은 그대로 끝납니다.")) return;
-  await act(() => rpc("admin_set_config", { p_key: "versus_enabled", p_value: next }), refresh);
+    : "같이하기를 끕니다.\n\n앱에서 버튼이 사라집니다. 이미 진행 중인 방은 그대로 끝납니다.")) return false;
+  let ok = false;
+  await act(async () => {
+    await rpc("admin_set_config", { p_key: "versus_enabled", p_value: next });
+    ok = true;   // refresh가 실패해도 저장은 된 것이다 — 물리면 오히려 거짓말이 된다
+  }, refresh);
+  return ok;
 }
 
 /** 062 — 사건 전체를 한 번에. 개별 on/off와 기간은 건드리지 않아 되켜면 그대로 돌아온다. */
 async function toggleVersusEvents() {
   const next = !EV_ON;
   if (!confirm(next
-    ? "대전 이벤트를 켭니다.\n\n다음 판부터 판마다 5개가 다시 뽑힙니다."
-    : "대전 이벤트를 끕니다.\n\n다음 판부터 사건이 하나도 안 나옵니다.\n개별 설정과 기간은 그대로 남아, 다시 켜면 지금 상태로 돌아옵니다.")) return;
-  await act(() => rpc("admin_set_config", { p_key: "versus_events_on", p_value: next }), refresh);
+    ? "대전 이벤트를 켭니다.\n\n다음 판부터 판마다 5개가 다시 뽑힙니다.\n판 시작 여유도 6초 → 8초가 됩니다(사건을 읽을 시간)."
+    : "대전 이벤트를 끕니다.\n\n다음 판부터 사건이 하나도 안 나옵니다.\n판 시작 여유는 8초 → 6초로 줄어듭니다.\n개별 설정과 기간은 그대로 남아, 다시 켜면 지금 상태로 돌아옵니다.")) return false;
+  let ok = false;
+  await act(async () => {
+    await rpc("admin_set_config", { p_key: "versus_events_on", p_value: next });
+    ok = true;
+  }, refresh);
+  return ok;
 }
 
 /**
@@ -1806,15 +1826,24 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
 
   if (TAB === "versusset") {
     // 체크박스는 **누르는 순간 눈으로 먼저 넘어간다.** 확인창에서 취소하면 서버는
-    // 그대로인데 화면만 바뀐 채 남으므로, 끝난 뒤 실제 값으로 되돌려 놓는다.
-    // (성공했으면 refresh가 화면을 다시 그리므로 이 줄은 무해하게 지나간다.)
-    const bindToggle = (id, fn, cur) => {
+    // 그대로인데 화면만 바뀐 채 남는다. 그래서 되돌리기가 필요하다.
+    //
+    // 다만 **되돌릴 값을 밖에서 읽으면 안 된다.** 처음에는 `el.checked = VS_ON`으로
+    // 썼는데, 성공한 경우에도 아직 갱신되지 않은 옛 VS_ON을 되써서 "켰는데 다시
+    // 꺼지는" 것처럼 보였다. 실제 서버 값은 이미 바뀐 뒤였다(2026-08-17 제보).
+    // 지금은 **취소·실패일 때만** 눌린 것을 물리는 방식이라, 밖의 값을 볼 일이 없다.
+    const bindToggle = (id, fn) => {
       const el = $("#" + id);
       if (!el) return;
-      el.onchange = async () => { await fn(); el.checked = cur(); };
+      el.onchange = async () => {
+        el.disabled = true;   // 응답을 기다리는 동안 두 번 눌러 상태가 엇갈리는 것을 막는다
+        try {
+          if (!(await fn())) el.checked = !el.checked;
+        } finally { el.disabled = false; }
+      };
     };
-    bindToggle("toggleVersus", toggleVersus, () => VS_ON);
-    bindToggle("toggleVsEvents", toggleVersusEvents, () => EV_ON);
+    bindToggle("toggleVersus", toggleVersus);
+    bindToggle("toggleVsEvents", toggleVersusEvents);
     document.querySelectorAll("[data-evtoggle]").forEach((b) => {
       b.onclick = async () => {
         const ev = VS_EVENTS.find((x) => String(x.id) === b.dataset.evtoggle);
@@ -1960,7 +1989,10 @@ function bindRowActions() {
   });
 }
 
-async function refresh() { boot(); }
+// **await를 빠뜨리면 안 된다.** act(fn, refresh)가 `await done?.()`로 이걸 기다리는데,
+// boot()를 안 기다리면 화면을 다시 그리기도 전에 호출한 쪽이 이어서 돈다. 토글에서
+// 그 틈에 옛 값을 되써서 "켰는데 다시 꺼지는" 것처럼 보였다.
+async function refresh() { await boot(); }
 
 async function boot() {
   const { data: { session } } = await sb.auth.getSession();
@@ -1981,6 +2013,13 @@ async function boot() {
   }
   const aerr = TAB === "audit" ? await loadAudit().catch((e) => e) : null;
   const vserr = TAB === "versus" ? await loadVersus() : null;
+  // 설정 탭도 개별 사건 표를 그린다. 이 목록을 안 가져오면 versusEventsTable이
+  // `if (!VS_EVENTS.length) return ""`로 **조용히 빈 화면**을 준다 — 표가 없는 것인지
+  // 사건이 없는 것인지 구별이 안 된다. 스위치만 있는 탭이라 나머지 집계는 안 부른다.
+  if (TAB === "versusset") {
+    VS_EVENTS = (await sb.from("versus_events").select("*").order("category").order("code")
+      .then((r) => r.data).catch(() => null)) || [];
+  }
   const cfgerr = TAB === "update" ? await loadConfig().then(() => null).catch((e) => e) : null;
   const sverr = TAB === "server" ? await loadServer() : null;
   // 알림은 **새로고침할 때만** 가져온다(사용자 지시) — 따로 도는 타이머는 두지 않는다.
