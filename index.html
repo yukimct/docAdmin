@@ -132,8 +132,19 @@
   .bell .menu .empty{padding:10px;font-size:var(--fs-sm)}
   /* 좁은 화면에서는 제목 아래로 내려가 한 줄을 통째로 쓴다. */
   @media (max-width: 700px){
-    .nav{width:100%;order:3}
-    .nav .menu{left:auto;right:0}
+    /* 메뉴를 **항목이 아니라 줄 전체**를 기준으로 편다.
+       항목 기준으로 두면 왼쪽 항목의 메뉴는 왼쪽으로, 오른쪽 항목의 메뉴는 오른쪽으로
+       화면을 벗어난다. 예전에는 `left:auto;right:0`으로 오른쪽에 맞춰 뒤집었는데,
+       그건 오른쪽 끝 항목만 구하고 **왼쪽 항목을 대신 잘라 먹었다** — 폰에서
+       "같이하기 ▾"를 열면 현황·설정이 "황·정"으로만 보였다(2026-08-17 제보).
+       한쪽으로 미는 한 반대쪽이 넘치므로, 아예 줄 폭을 다 쓰게 해서 경우를 없앤다.
+
+       .item의 position:relative를 static으로 되돌려야 기준이 .nav로 올라간다.
+       그러면 top:100%가 항목 아래가 아니라 **줄 아래**를 뜻하게 되는데, 폰에서는
+       nav가 한 줄을 통째로 쓰므로 결과가 같다. */
+    .nav{width:100%;order:3;position:relative}
+    .nav > .item{position:static}
+    .nav .menu{left:0;right:0;min-width:0}
   }
 
   /* ---------------------------------------------------------------- 버튼 */
