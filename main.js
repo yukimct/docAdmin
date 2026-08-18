@@ -949,14 +949,18 @@ function serverTab(err) {
       </tr>`).join("")}</tbody></table></div>`
     : `<div class="empty">차이가 큰 계정이 없습니다</div>`;
 
-  const winners = WINNERS.length ? `<div class="table-scroll"><table style="min-width:420px">
-      <thead><tr><th>날짜</th><th>등수</th><th>닉네임</th><th>수령</th></tr></thead>
+  // 065 — 10등까지, 코인·아이템·수령 여부. 지난 것(어제 이전)의 "대기"는 소멸이다:
+  // 순위 보상은 다음 날 하루만 받을 수 있다(매일 접속 유도, 사용자 확정).
+  const winners = WINNERS.length ? `<div class="table-scroll"><table style="min-width:560px">
+      <thead><tr><th>날짜</th><th>등수</th><th>닉네임</th><th>코인</th><th>아이템</th><th>수령</th></tr></thead>
       <tbody>${WINNERS.map((w) => `<tr>
         <td class="muted">${fmtDate(w.award_date)}</td>
-        <td>${w.rank === 1 ? "🥇" : w.rank === 2 ? "🥈" : "🥉"}</td>
+        <td>${w.rank === 1 ? "🥇" : w.rank === 2 ? "🥈" : w.rank === 3 ? "🥉" : w.rank + "등"}</td>
         <td>${esc(w.username || "— (탈퇴)")}</td>
+        <td class="num">${(w.coins ?? "").toLocaleString ? (w.coins).toLocaleString() : w.coins ?? ""}</td>
+        <td class="muted">${(w.hints || w.autos) ? `힌트 ${w.hints} · 자동 ${w.autos}` : "—"}</td>
         <td>${w.claimed ? '<span class="muted">받아 감</span>'
-                        : '<span class="pill today">대기</span>'}</td>
+                        : '<span class="pill heart">소멸/대기</span>'}</td>
       </tr>`).join("")}</tbody></table></div>`
     : `<div class="empty">아직 없습니다</div>`;
 
