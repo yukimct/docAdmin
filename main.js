@@ -5,7 +5,7 @@ import { sb, $, fmt, fmtDate, esc, kstToday, askReason, rpc } from "./app.js";
  *  개별 회원이 아니라 "어제 오늘 뭐가 달라졌나"이기 때문이다. */
 let TAB = "charts";
 let PLAYERS = [], EVENTS = [], AUDIT = [], REWARDS = [], BATCHES = [], STATS = [], BUCKETS = [];
-let FUNNEL = [], RETENTION = [], NOTICES = [];
+let FUNNEL = [], RETENTION = [], NOTICES = [], PUSHES = [];
 let PAY_DAILY = [], PAY_MONTHLY = [], PAY_PRODUCT = [], PAY_LEDGER = [], COIN_SINKS = [];
 /** 같이하기(대전) — 일자별/계정별/판 크기별 집계와 기능 스위치. */
 let VS_DAILY = [], VS_PLAYERS = [], VS_BOARDS = [], VS_MODES = [], VS_ON = false;
@@ -158,6 +158,12 @@ async function loadPayTotals() {
 async function loadNotices() {
   try { NOTICES = await rpc("admin_notices") || []; return null; }
   catch (e) { NOTICES = []; return e; }
+}
+
+/** 067이 없는 서버에서도 페이지는 떠야 한다 — 관리자 페이지가 서버보다 먼저 배포될 수 있다. */
+async function loadPush() {
+  try { PUSHES = await rpc("admin_push_list", { p_limit: 50 }) || []; return null; }
+  catch (e) { PUSHES = []; return e; }
 }
 
 // ------------------------------------------------------------------ 차트
@@ -426,6 +432,36 @@ function noticesTab(err) {
             ${expired ? '<span class="pill heart">만료</span>' : ""}
             ${notYet ? '<span class="pill today">대기</span>' : ""}</td>
           <td><button class="danger sm" data-delnotice="${n.id}">삭제</button></td>
+        </tr>`;
+      }).join("")}</tbody></table></div>`}`;
+}
+
+function pushTab(err) {
+  if (err) return `<div class="notice">푸시 조회 실패: ${esc(err.message)}<br>sql/migrations/067_push.sql을 실행했는지 확인하세요.</div>`;
+  const when = (v) => (v ? new Date(v).toLocaleString("ko-KR", { dateStyle: "short", timeStyle: "short" }) : "—");
+  const TARGETS = { all: "전체", inactive_7d: "7일 미접속", top100: "상위 100", user: "지정" };
+  return `<div class="toolbar">
+      <span class="muted" style="font-size:12.5px">기기 알림으로 나갑니다 — <b>보낸 뒤에는 되돌릴 수 없습니다</b></span>
+      <div style="flex:1"></div>
+      <button class="sm" id="newPush">푸시 발송</button>
+    </div>
+    ${!PUSHES.length ? `<div class="empty">발송한 푸시가 없습니다</div>` : `
+    <div class="table-scroll"><table>
+      <thead><tr><th>등록</th><th>제목</th><th>본문</th><th>대상</th><th>예약</th><th>결과</th><th>관리</th></tr></thead>
+      <tbody>${PUSHES.map((m) => {
+        const sent = !!m.sent_at;
+        return `<tr>
+          <td class="muted">${when(m.created_at)}</td>
+          <td>${esc(m.title)}</td>
+          <td class="muted" style="white-space:normal;max-width:320px">${esc(m.body)}</td>
+          <td class="muted">${TARGETS[m.target] || esc(m.target)}${
+            m.target === "user" && m.target_arg ? `<br><span style="font-size:11px">${esc(m.target_arg)}</span>` : ""}</td>
+          <td class="muted">${when(m.scheduled_at)}</td>
+          <td>${sent
+            ? `<span class="pill today">보냄</span> ${fmt(m.sent_count)}건${
+                m.fail_count ? ` <span class="pill heart">실패 ${fmt(m.fail_count)}</span>` : ""}`
+            : '<span class="pill">대기</span>'}</td>
+          <td>${sent ? "" : `<button class="danger sm" data-cancelpush="${m.id}">취소</button>`}</td>
         </tr>`;
       }).join("")}</tbody></table></div>`}`;
 }
@@ -708,6 +744,58 @@ function openNotice() {
   };
 }
 
+/** 발송은 되돌릴 수 없다. **보내기 전에 몇 대에 가는지 숫자를 보여준다.** */
+function openPush() {
+  const dlg = $("#pushDlg");
+  ["#pTitle", "#pBody", "#pWhen", "#pArg", "#pLink"].forEach((x) => ($(x).value = ""));
+  $("#pTarget").value = "all";
+  $("#pArgRow").style.display = "none";
+  $("#pErr").textContent = "";
+  $("#pCount").textContent = "받을 기기: —";
+
+  const countAudience = async () => {
+    const target = $("#pTarget").value;
+    const arg = $("#pArg").value.trim();
+    if (target === "user" && !arg) { $("#pCount").textContent = "받을 기기: —"; return; }
+    try {
+      const n = await rpc("admin_push_audience", { p_target: target, p_target_arg: arg || null });
+      $("#pCount").textContent = `받을 기기: ${fmt(n ?? 0)}대`;
+    } catch { $("#pCount").textContent = "받을 기기: 확인 실패"; }
+  };
+  $("#pTarget").onchange = () => {
+    $("#pArgRow").style.display = $("#pTarget").value === "user" ? "" : "none";
+    countAudience();
+  };
+  $("#pArg").oninput = countAudience;
+  countAudience();
+
+  dlg.showModal();
+  $("#pCancel").onclick = () => dlg.close();
+  $("#pOk").onclick = async () => {
+    const title = $("#pTitle").value.trim(), body = $("#pBody").value.trim();
+    if (!title || !body) { $("#pErr").textContent = "제목과 본문을 모두 입력하세요"; return; }
+    const target = $("#pTarget").value, arg = $("#pArg").value.trim();
+    if (target === "user" && !arg) { $("#pErr").textContent = "사용자 ID를 입력하세요"; return; }
+    // 되돌릴 수 없으니 한 번 더 묻는다. 몇 대에 가는지도 같이 보여준다.
+    if (!confirm(`${$("#pCount").textContent}\n\n"${title}"\n\n보낸 뒤에는 취소할 수 없습니다. 발송할까요?`)) return;
+    const at = (v) => (v ? new Date(v).toISOString() : null);
+    try {
+      await rpc("admin_send_push", {
+        p_title: title, p_body: body, p_target: target,
+        p_target_arg: arg || null, p_scheduled_at: at($("#pWhen").value),
+        p_link: $("#pLink").value.trim() || null,
+      });
+      dlg.close();
+      refresh();
+    } catch (e) { $("#pErr").textContent = e.message; }
+  };
+}
+
+async function cancelPush(id) {
+  if (!confirm("아직 안 나간 발송을 취소합니다.")) return;
+  await act(() => rpc("admin_cancel_push", { p_id: id }), refresh);
+}
+
 async function deleteNotice(id) {
   if (!confirm("이 공지를 삭제합니다. 아직 못 본 사람은 앞으로도 못 봅니다.")) return;
   const reason = askReason("공지 삭제");
@@ -891,7 +979,7 @@ const NAV = [
   { label: "회원", items: [["players", "회원 목록"], ["rewards", "보상"]] },
   { label: "기록", items: [["events", "이벤트"], ["purchases", "구매"], ["audit", "관리 기록"]] },
   { label: "운영", items: [["anomaly", "이상 징후"], ["update", "업데이트"],
-                          ["notices", "공지"], ["server", "서버 상태"]] },
+                          ["notices", "공지"], ["push", "푸시"], ["server", "서버 상태"]] },
 ];
 
 let SRV = null, WINNERS = [], TRANSFERS = [], COIN_AUDIT = [];
@@ -1790,7 +1878,7 @@ function rewardsTable() {
 }
 
 // ------------------------------------------------------------------ 화면
-function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, cfgErr, serverErr) {
+function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, cfgErr, serverErr, pushErr) {
   const today = kstToday();
   const active = PLAYERS.filter((p) => p.daily_date === today && (p.daily_score || 0) > 0);
   const totals = PLAYERS.map((p) => p.total_score || 0);
@@ -1845,6 +1933,7 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     ${TAB === "anomaly" ? anomalyTab() : ""}
     ${TAB === "update" ? updateTab(cfgErr) : ""}
     ${TAB === "notices" ? noticesTab(noticesErr) : ""}
+    ${TAB === "push" ? pushTab(pushErr) : ""}
     ${TAB === "audit" ? auditTable(auditErr) : ""}
     ${TAB === "server" ? serverTab(serverErr) : ""}`;
 
@@ -1854,7 +1943,7 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     b.onclick = (e) => {
       e.stopPropagation();
       markSeen(b.dataset.seen, Number(b.dataset.seenN));
-      render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, cfgErr, serverErr);
+      render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, cfgErr, serverErr, pushErr);
     };
   });
   const orphan = $("#cleanupOrphans");
@@ -1965,6 +2054,12 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
       b.onclick = () => deleteNotice(Number(b.dataset.delnotice));
     });
   }
+  if ($("#newPush")) {
+    $("#newPush").onclick = openPush;
+    document.querySelectorAll("[data-cancelpush]").forEach((b) => {
+      b.onclick = () => cancelPush(Number(b.dataset.cancelpush));
+    });
+  }
 
   if (TAB === "rewards") {
     document.querySelectorAll("[data-bview]").forEach((b) => {
@@ -2068,6 +2163,7 @@ async function boot() {
   }
   const cfgerr = TAB === "update" ? await loadConfig().then(() => null).catch((e) => e) : null;
   const sverr = TAB === "server" ? await loadServer() : null;
+  const pusherr = TAB === "push" ? await loadPush() : null;
   // 알림은 **새로고침할 때만** 가져온다(사용자 지시) — 따로 도는 타이머는 두지 않는다.
   await loadAlerts();
 
@@ -2077,7 +2173,7 @@ async function boot() {
     warn = "조회 결과가 비어 있습니다. 이 계정이 admins 테이블에 등록됐는지 확인하세요 " +
            "(supabase_admin_access.sql 4번 항목).";
   }
-  render(warn, eerr, serr, nerr, perr2, aerr, vserr, cfgerr, sverr);
+  render(warn, eerr, serr, nerr, perr2, aerr, vserr, cfgerr, sverr, pusherr);
 }
 
 boot();

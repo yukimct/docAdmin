@@ -391,6 +391,36 @@
     <button id="evOk">저장</button>
   </div>
 </dialog>
+<dialog id="pushDlg">
+  <h3>푸시 발송</h3>
+  <div class="muted" style="font-size:12.5px">기기 알림으로 나갑니다. <b>보낸 뒤에는 되돌릴 수 없습니다.</b></div>
+  <label>제목</label>
+  <input type="text" id="pTitle" placeholder="예: 오늘의 퍼즐이 기다려요">
+  <label>본문</label>
+  <textarea id="pBody" rows="3" placeholder="알림에 그대로 보입니다"></textarea>
+  <div class="row">
+    <div><label>대상</label>
+      <select id="pTarget">
+        <option value="all">전체</option>
+        <option value="inactive_7d">7일 이상 안 푼 사람</option>
+        <option value="top100">오늘 랭킹 상위 100명</option>
+        <option value="user">특정 사용자</option>
+      </select>
+    </div>
+    <div><label>예약 (비우면 즉시)</label><input type="datetime-local" id="pWhen"></div>
+  </div>
+  <div id="pArgRow" style="display:none"><label>사용자 ID</label>
+    <input type="text" id="pArg" placeholder="profiles.id (uuid)"></div>
+  <label>눌렀을 때 열 곳 (선택)</label>
+  <input type="text" id="pLink" placeholder="예: /vs/ABCD — 비우면 그냥 앱을 엽니다">
+  <div class="muted" id="pCount" style="font-size:12.5px;margin-top:10px">받을 기기: —</div>
+  <div class="err" id="pErr"></div>
+  <div class="actions" style="margin-top:16px;justify-content:flex-end">
+    <button class="ghost" id="pCancel">취소</button>
+    <button id="pOk">발송</button>
+  </div>
+</dialog>
+
 <dialog id="noticeDlg">
   <h3>공지 작성</h3>
   <div class="muted" style="font-size:12.5px">앱이 접속할 때 가장 최근 공지 하나를 한 번만 보여줍니다.</div>
