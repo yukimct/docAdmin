@@ -1261,12 +1261,20 @@ async function toggleVersus() {
   return ok;
 }
 
-/** 062 — 사건 전체를 한 번에. 개별 on/off와 기간은 건드리지 않아 되켜면 그대로 돌아온다. */
+/**
+ * 062 — 「장난」 전체를 한 번에. 개별 on/off와 기간은 건드리지 않아 되켜면 그대로 돌아온다.
+ *
+ * ⚠️ **DB와 코드는 events다**(versus_events·pick_round_events·versus_events_on).
+ * **화면에서만 「장난」**이라 부른다 — "사건"은 사고·범죄처럼 들리는데 열넷 중 다섯은
+ * 선물·연장 같은 좋은 것이라 담기지 않는다. 앱도 같은 말을 쓴다(versus_pranks).
+ *
+ * ⚠️ **이건 전체 스위치다.** 068부터는 방장도 방마다 끌 수 있고, **둘 다 켜져야** 나온다.
+ */
 async function toggleVersusEvents() {
   const next = !EV_ON;
   if (!confirm(next
-    ? "대전 이벤트를 켭니다.\n\n다음 판부터 판마다 5개가 다시 뽑힙니다.\n판 시작 여유도 6초 → 8초가 됩니다(사건을 읽을 시간)."
-    : "대전 이벤트를 끕니다.\n\n다음 판부터 사건이 하나도 안 나옵니다.\n판 시작 여유는 8초 → 6초로 줄어듭니다.\n개별 설정과 기간은 그대로 남아, 다시 켜면 지금 상태로 돌아옵니다.")) return false;
+    ? "「장난」을 켭니다.\n\n다음 판부터 판마다 5개가 다시 뽑힙니다.\n판 시작 여유도 6초 → 8초가 됩니다(읽을 시간).\n\n방장이 방마다 따로 끌 수도 있습니다 — 그 방은 그대로 꺼진 채입니다."
+    : "「장난」을 끕니다.\n\n다음 판부터 선물·안개 같은 것이 하나도 안 나옵니다.\n판 시작 여유는 8초 → 6초로 줄어듭니다.\n개별 설정과 기간은 그대로 남아, 다시 켜면 지금 상태로 돌아옵니다.")) return false;
   let ok = false;
   await act(async () => {
     await rpc("admin_set_config", { p_key: "versus_events_on", p_value: next });
@@ -1300,8 +1308,8 @@ function versusSetupTab() {
     <h2>기능 스위치</h2>
     ${sw("같이하기", VS_ON, "toggleVersus",
          "앱은 켤 때 이 값을 읽습니다. 이미 실행 중인 앱은 다시 켜야 반영됩니다.")}
-    ${sw("대전 이벤트", EV_ON, "toggleVsEvents",
-         "다음 판부터 적용됩니다. 진행 중인 판은 그대로 끝납니다.")}
+    ${sw("장난", EV_ON, "toggleVsEvents",
+         "다음 판부터 적용됩니다. 진행 중인 판은 그대로 끝납니다. 방장이 방마다 따로 끌 수도 있습니다(068).")}
     ${EV_ON ? "" : `<div class="notice">전체가 꺼져 있어 아래 개별 설정은 지금 효과가 없습니다.
         다시 켜면 이 상태 그대로 돌아옵니다.</div>`}
     ${versusEventsTable()}`;
@@ -1423,10 +1431,10 @@ function versusEventsTable() {
   const warn = short.length
     ? `<div class="notice" style="border-color:var(--danger);color:var(--danger)">
          ${short.map(([k, v]) => `${KIND[k]}이 ${v}개 이상 켜져 있어야 합니다 (지금 ${alive[k] || 0}개)`).join(" · ")}
-         <br>부족하면 그 판은 사건이 다섯 개가 안 됩니다.</div>`
+         <br>부족하면 그 판은 장난이 다섯 개가 안 됩니다.</div>`
     : "";
 
-  return `<h2>대전 이벤트</h2>
+  return `<h2>장난</h2>
   <div class="muted" style="font-size:12.5px;margin-bottom:8px">
     판마다 <b>이로움 2 · 해로움 2 · 중립 1</b>로 뽑습니다. 끄면 다음 판부터 빠집니다.
   </div>${warn}
@@ -1508,12 +1516,16 @@ function versusTab(err) {
     <h2>지금 열려 있는 방 (${VS_ROOMS.length})</h2>
     <div class="table-scroll"><table style="min-width:560px">
       <thead><tr><th>방</th><th>상태</th><th class="num">판</th><th class="num">인원</th>
-                 <th>참가자</th><th>만든 때</th><th>관리</th></tr></thead>
+                 <th>장난</th><th>참가자</th><th>만든 때</th><th>관리</th></tr></thead>
       <tbody>${VS_ROOMS.map((r) => `<tr>
         <td class="num"><b>${esc(r.code)}</b></td>
         <td>${r.status === "playing" ? "대전 중" : "대기"}</td>
         <td class="num">${r.round_no}/${r.win_target * 2 - 1}</td>
         <td class="num">${r.players}</td>
+        <!-- 070. **꺼진 방만 눈에 띄게** 적는다 — 켜진 것이 기본이라 전부 칠하면
+             무엇이 예외인지 안 보인다. 070 이전 서버는 값이 없으므로 켜진 것으로 본다. -->
+        <td>${r.events_on === false
+              ? `<span style="color:var(--danger)">꺼짐</span>` : `<span class="muted">켜짐</span>`}</td>
         <td class="muted">${esc(r.usernames || "")}</td>
         <td class="muted">${fmtDate(r.created_at)}</td>
         <td><button class="danger sm" data-close-room="${esc(r.code)}">닫기</button></td>
