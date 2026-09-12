@@ -1394,22 +1394,36 @@ function anomalyTab() {
  * ev_* 값을 함께 고쳐야 한다. 어긋나면 관리자에서 끈 사건과 사용자가 본 사건이
  * 서로 다른 이름으로 불린다.
  */
+//
+// **이모지를 쓰지 않는다**(사용자 지시, 2026-09-13). 앱은 이미 손그림 PNG를
+// 쓰는데 관리자 화면만 이모지면, 「안개」가 앱에서는 파스텔 구름이고 여기서는
+// 🌫️라서 같은 것을 말하는지 눈으로 확인할 수가 없다.
+//
+// ⚠️ **여기 이름은 앱의 drawable 이름 그대로다**(ev_fog ↔ R.drawable.ev_fog ↔
+// iOS의 evFog). 사건을 새로 만들면 `admin/img/`에도 같은 이름으로 넣어야 한다 —
+// `admin/sync_img.py`가 앱 그림에서 줄여 만든다.
 const EV_INFO = {
-  gift:     ["🎁", "선물",     "모두 뼈다귀를 하나 더 받았어요"],
-  extend:   ["⏰", "연장",     "제한 시간이 10초 늘었어요"],
-  reveal:   ["👀", "살짝 귀띔", "정답 칸 하나가 잠깐 보여요"],
-  autodog:  ["🐶", "저절로",   "댕댕이 한 마리가 알아서 앉았어요"],
-  lens:     ["🔍", "돋보기",   "구역 경계가 또렷해졌어요"],
-  fog:      ["🌫️", "안개",     "잠시 판이 뿌옇게 가려져요"],
-  eraser:   ["🧽", "지우개",   "찍어 둔 ✕ 표시가 절반 지워졌어요"],
-  lock:     ["🔒", "구역 잠금", "한 구역이 잠시 잠겼어요"],
-  thief:    ["🦴", "뼈 도둑",  "모두 뼈다귀를 하나 잃었어요"],
-  thin_ice: ["🧊", "살얼음",   "잠시 실수하면 뼈다귀를 두 개 잃어요"],
-  gray:     ["🌑", "암전",     "잠시 색이 사라져요"],
-  shake:    ["💫", "흔들흔들", "판이 잠시 흔들려요"],
-  flip:     ["🔄", "거꾸로",   "판이 잠시 좌우로 뒤집혀 보여요"],
-  flash:    ["⚡", "번쩍",     "완성된 판이 아주 잠깐 스쳐 가요"],
+  gift:     ["ev_gift",     "선물",     "모두 뼈다귀를 하나 더 받았어요"],
+  extend:   ["ev_extend",   "연장",     "제한 시간이 10초 늘었어요"],
+  reveal:   ["ev_reveal",   "살짝 귀띔", "정답 칸 하나가 잠깐 보여요"],
+  autodog:  ["ev_autodog",  "저절로",   "댕댕이 한 마리가 알아서 앉았어요"],
+  lens:     ["ev_lens",     "돋보기",   "구역 경계가 또렷해졌어요"],
+  fog:      ["ev_fog",      "안개",     "잠시 판이 뿌옇게 가려져요"],
+  eraser:   ["ev_eraser",   "지우개",   "찍어 둔 X 표시가 절반 지워졌어요"],
+  lock:     ["ev_lock",     "구역 잠금", "한 구역이 잠시 잠겼어요"],
+  thief:    ["ev_thief",    "뼈 도둑",  "모두 뼈다귀를 하나 잃었어요"],
+  thin_ice: ["ev_thin_ice", "살얼음",   "잠시 실수하면 뼈다귀를 두 개 잃어요"],
+  gray:     ["ev_gray",     "암전",     "잠시 색이 사라져요"],
+  shake:    ["ev_shake",    "흔들흔들", "판이 잠시 흔들려요"],
+  flip:     ["ev_flip",     "거꾸로",   "판이 잠시 좌우로 뒤집혀 보여요"],
+  flash:    ["ev_flash",    "번쩍",     "완성된 판이 아주 잠깐 스쳐 가요"],
 };
+
+/** 앱 그림 한 장. 이름은 앱의 drawable 이름과 같다. */
+function appIcon(name, px = 22, alt = "") {
+  return `<img src="img/${name}.png" alt="${esc(alt)}" width="${px}" height="${px}"
+               style="object-fit:contain;vertical-align:middle" loading="lazy">`;
+}
 
 function versusEventsTable() {
   if (!VS_EVENTS.length) return "";
@@ -1447,12 +1461,12 @@ function versusEventsTable() {
       const state = !e.enabled ? "꺼짐" : ended ? "기간 끝" : !started ? "대기" : "켜짐";
       // 목록에 없는 코드는 **DB에만 있고 앱은 모르는 사건**이다. 물음표로 눈에 띄게 둔다 —
       // 조용히 코드만 보여 주면 왜 앱에서 아무 일도 안 일어나는지 알 수 없다.
-      const info = EV_INFO[e.code] || ["❓", e.code, "앱에 이 코드가 없습니다"];
+      const info = EV_INFO[e.code] || ["ev_unknown", e.code, "앱에 이 코드가 없습니다"];
       return `<tr>
         <td><span class="pill ${CLS[e.category] || ""}">${KIND[e.category] || e.category}</span></td>
         <td>
           <div style="display:flex;align-items:center;gap:9px">
-            <span style="font-size:20px;line-height:1">${info[0]}</span>
+            ${appIcon(info[0], 26, info[1])}
             <div>
               <b>${esc(info[1])}</b>
               <div class="muted" style="font-size:12px">${esc(info[2])}</div>
@@ -1795,6 +1809,27 @@ function batchState(b, now) {
 /** 아직 사람이 받아 갈 수 있는 묶음인가 — 이것만 "진행 중" 탭에 남는다. */
 function isLiveBatch(st) { return st.key === "live" || st.key === "notYet"; }
 
+/**
+ * 보상 묶음 한 칸 — "코인 300 · 힌트 2".
+ *
+ * **이모지(🪙💡✨)를 쓰지 않는다**(사용자 지시, 2026-09-13). 앱의 보상 팝업은
+ * 이미 같은 그림(coin_icon·hint·강아지)을 쓰고 있어서, 여기만 이모지면 보낸 것과
+ * 받는 화면이 다른 물건처럼 보인다. ✨는 특히 무엇인지 알 수도 없었다 —
+ * 앱에서 그 자리는 **강아지가 저절로 앉는 것**이다.
+ *
+ * 0이거나 없는 항목은 빼고 보여 준다.
+ */
+function rewardCells(b) {
+  const parts = [
+    b.coins && `${appIcon("coin_icon", 16, "코인")} ${fmt(b.coins)}`,
+    b.hints && `${appIcon("hint", 16, "힌트")} ${fmt(b.hints)}`,
+    b.autos && `${appIcon("dog_01", 16, "저절로 놓기")} ${fmt(b.autos)}`,
+  ].filter(Boolean);
+  return parts.length
+    ? `<span style="display:inline-flex;align-items:center;gap:10px;flex-wrap:wrap">${parts.join("")}</span>`
+    : '<span class="muted">—</span>';
+}
+
 function batchesTable(shown) {
   if (!shown.length) return "";
   const when = (v) => (v ? new Date(v).toLocaleString("ko-KR", { dateStyle: "short", timeStyle: "short" }) : "—");
@@ -1805,8 +1840,7 @@ function batchesTable(shown) {
     <tbody>${shown.map(({ b, st }) => {
       const rows = `<tr>
         <td class="muted">${when(b.created_at)}</td>
-        <td>${[b.coins && `🪙${b.coins}`, b.hints && `💡${b.hints}`, b.autos && `✨${b.autos}`]
-              .filter(Boolean).join(" ")}</td>
+        <td>${rewardCells(b)}</td>
         <td class="muted">${esc(b.memo || "")}</td>
         <td class="muted">${when(b.starts_at)} ~ ${when(b.expires_at)}</td>
         <td><span class="pill ${st.cls}">${st.label}</span>${
