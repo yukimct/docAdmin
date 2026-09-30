@@ -11,7 +11,26 @@ export const sb = createClient(SUPABASE_URL, ANON_KEY);
 export const $ = (s, r = document) => r.querySelector(s);
 
 export const fmt = (n) => (n ?? 0).toLocaleString("ko-KR");
-export const fmtDate = (s) => (s ? String(s).slice(0, 10) : "—");
+/**
+ * 날짜만. **한국시간 기준으로 자른다.**
+ *
+ * ⚠️ 예전에는 ISO 문자열을 그냥 `slice(0,10)`했다. 그건 **UTC 날짜**라,
+ * 한국시간 0시~9시 사이에 생긴 것이 하루 전으로 보였다.
+ */
+export const fmtDate = (s) => (s ? kst(s).slice(0, 10) : "—");
+
+/** 날짜와 시:분. 가입 시각처럼 **언제인지가 중요한 값**에 쓴다. */
+export const fmtDateTime = (s) => (s ? kst(s).replace("T", " ").slice(0, 16) : "—");
+
+/** 시:분만. 날짜를 이미 옆에 적어 둔 자리에 쓴다. */
+export const fmtTime = (s) => (s ? kst(s).slice(11, 16) : "—");
+
+/** UTC로 저장된 시각을 한국시간 ISO 문자열로 옮긴다. */
+function kst(s) {
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return String(s);
+  return new Date(d.getTime() + 9 * 3600 * 1000).toISOString();
+}
 export const esc = (s) =>
   String(s ?? "").replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));

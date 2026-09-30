@@ -1,5 +1,5 @@
 // 관리자 화면 — 회원·점수 관리 / 이벤트 집계 / 보상 지급.
-import { sb, $, fmt, fmtDate, esc, kstToday, askReason, rpc } from "./app.js";
+import { sb, $, fmt, fmtDate, fmtDateTime, fmtTime, esc, kstToday, askReason, rpc } from "./app.js";
 
 /** 처음 열었을 때 보이는 탭. 차트다(사용자 지시) — 관리자가 가장 자주 확인하는 건
  *  개별 회원이 아니라 "어제 오늘 뭐가 달라졌나"이기 때문이다. */
@@ -1699,8 +1699,12 @@ function playersTable() {
           return t ? `${money(t.revenue, t.currency)} <span class="muted">(${t.orders})</span>`
                    : '<span class="muted">—</span>';
         })()}</td>
-        <td class="muted">${fmtDate(p.daily_date)}</td>
-        <td class="muted">${fmtDate(p.created_at)}</td>
+        <td class="muted">${fmtDate(p.daily_date)}
+          ${p.coins_at ? `<div class="muted" style="font-size:11px">접속 ${
+            // daily_date와 같은 날이면 시:분만, 다른 날이면 날짜까지 적는다.
+            fmtDate(p.coins_at) === fmtDate(p.daily_date) ? fmtTime(p.coins_at)
+                                                          : fmtDateTime(p.coins_at)}</div>` : ""}</td>
+        <td class="muted">${fmtDateTime(p.created_at)}</td>
         <td><div class="actions">
           <button class="ghost sm" data-act="name" data-id="${p.id}">닉네임</button>
           <button class="ghost sm" data-act="score" data-id="${p.id}">점수</button>
