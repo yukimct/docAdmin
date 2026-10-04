@@ -6,6 +6,8 @@ import { sb, $, fmt, fmtDate, fmtDateTime, fmtTime, esc, kstToday, askReason, rp
 let TAB = "charts";
 let PLAYERS = [], EVENTS = [], AUDIT = [], REWARDS = [], BATCHES = [], STATS = [], BUCKETS = [];
 let FUNNEL = [], RETENTION = [], NOTICES = [], PUSHES = [];
+// 푸시 집계(089). 기간과, 시간대 표를 볼 발송(null이면 전체).
+let PUSH_DAILY = [], PUSH_HOURS = [], PUSH_DAYS = 30, PUSH_HOUR_MSG = null;
 let PAY_DAILY = [], PAY_MONTHLY = [], PAY_PRODUCT = [], PAY_LEDGER = [], COIN_SINKS = [];
 /** 같이하기(대전) — 일자별/계정별/판 크기별 집계와 기능 스위치. */
 let VS_DAILY = [], VS_PLAYERS = [], VS_BOARDS = [], VS_MODES = [], VS_ON = false;
@@ -201,8 +203,73 @@ async function loadReach() {
 
 /** 067이 없는 서버에서도 페이지는 떠야 한다 — 관리자 페이지가 서버보다 먼저 배포될 수 있다. */
 async function loadPush() {
-  try { PUSHES = await rpc("admin_push_list", { p_limit: 50 }) || []; return null; }
+  try { PUSHES = await rpc("admin_push_list", { p_limit: 50 }) || []; }
   catch (e) { PUSHES = []; return e; }
+  // 집계는 없어도 목록은 떠야 한다(089 이전 서버).
+  [PUSH_DAILY, PUSH_HOURS] = await Promise.all([
+    rpc("admin_push_daily", { p_days: PUSH_DAYS }).catch(() => []),
+    rpc("admin_push_open_hours", { p_days: PUSH_DAYS, p_message_id: PUSH_HOUR_MSG }).catch(() => []),
+  ]);
+  PUSH_DAILY = PUSH_DAILY || []; PUSH_HOURS = PUSH_HOURS || [];
+  return null;
+}
+
+const pct = (a, b) => (b ? `${Math.round((a / b) * 1000) / 10}%` : "—");
+
+/** 일자별 발송·성공·실패·열림. 아무 일도 없던 날은 뺀다. */
+function pushDailyTable() {
+  const rows = PUSH_DAILY.filter((d) => d.messages || d.sent || d.failed || d.opens);
+  const sum = rows.reduce((a, d) => ({ messages: a.messages + d.messages, sent: a.sent + d.sent,
+                                       failed: a.failed + d.failed, opens: a.opens + d.opens }),
+                          { messages: 0, sent: 0, failed: 0, opens: 0 });
+  const line = (label, d, strong) => `<tr${strong ? ' style="font-weight:700"' : ""}>
+      <td>${label}</td><td class="num">${fmt(d.messages)}</td><td class="num">${fmt(d.sent)}</td>
+      <td class="num">${d.failed ? `<span class="pill heart">${fmt(d.failed)}</span>` : "0"}</td>
+      <td class="num">${pct(d.sent, d.sent + d.failed)}</td>
+      <td class="num">${fmt(d.opens)}</td><td class="num">${pct(d.opens, d.sent)}</td></tr>`;
+  return `<div class="table-scroll"><table>
+    <thead><tr><th>날짜</th><th style="text-align:right">발송 건수</th><th style="text-align:right">성공(기기)</th>
+      <th style="text-align:right">실패</th><th style="text-align:right">성공률</th>
+      <th style="text-align:right">열림</th><th style="text-align:right">열림률</th></tr></thead>
+    <tbody>${line(`최근 ${PUSH_DAYS}일 합계`, sum, true)}${rows.map((d) => line(esc(d.day), d)).join("") ||
+      '<tr><td colspan="7" class="muted">이 기간에 발송도 열림도 없습니다</td></tr>'}</tbody></table></div>
+    <div class="muted" style="font-size:12px">열림률은 그날 열린 수 ÷ 그날 성공한 기기 수입니다. 전날 보낸 알림을 오늘 열면 오늘에 셉니다.
+      발송·열림이 없는 날은 뺐습니다.</div>`;
+}
+
+/** 시간대(0~23시) 합계 막대와 날짜 × 시간 표. 칸의 진하기가 열린 수다. */
+function pushHoursView() {
+  const byHour = Array(24).fill(0);
+  const days = new Map();
+  for (const r of PUSH_HOURS) {
+    byHour[r.hour] += r.opens;
+    if (!days.has(r.day)) days.set(r.day, Array(24).fill(null));
+    days.get(r.day)[r.hour] = r;
+  }
+  const max = Math.max(1, ...byHour);
+  const cellMax = Math.max(1, ...PUSH_HOURS.map((r) => r.opens));
+  const sent = PUSHES.filter((m) => m.sent_at);
+  const pick = `<select id="pushHourMsg">
+      <option value="">모든 푸시</option>
+      ${sent.map((m) => `<option value="${m.id}" ${String(PUSH_HOUR_MSG) === String(m.id) ? "selected" : ""}>${
+        esc(fmtDateTime(m.sent_at))} · ${esc(m.title)} · 열림 ${fmt(m.opens || 0)}</option>`).join("")}
+    </select>`;
+  const bars = `<div style="display:grid;grid-template-columns:repeat(24,1fr);gap:3px;align-items:end;height:90px;margin-top:10px">
+      ${byHour.map((n, h) => `<div title="${h}시 · ${fmt(n)}회" style="height:${Math.max(2, Math.round((n / max) * 80))}px;
+        background:var(--accent);opacity:${n ? 1 : 0.15};border-radius:3px 3px 0 0"></div>`).join("")}
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(24,1fr);gap:3px;font-size:10px;text-align:center" class="muted">
+      ${byHour.map((_, h) => `<div>${h}</div>`).join("")}</div>`;
+  const heat = days.size ? `<div class="table-scroll" style="margin-top:12px"><table style="font-size:11px">
+      <thead><tr><th>날짜</th>${byHour.map((_, h) => `<th style="text-align:center;padding:4px 2px">${h}</th>`).join("")}<th style="text-align:right">합계</th></tr></thead>
+      <tbody>${[...days].map(([day, cells]) => `<tr><td style="white-space:nowrap">${esc(day)}</td>${cells.map((c, h) => c
+          ? `<td title="${h}시 · iOS ${c.ios} · Android ${c.android}" style="text-align:center;padding:4px 2px;
+              background:color-mix(in srgb, var(--accent) ${Math.round((c.opens / cellMax) * 85) + 15}%, transparent);color:#fff">${c.opens}</td>`
+          : '<td style="padding:4px 2px"></td>').join("")}<td class="num">${fmt(cells.reduce((a, c) => a + (c ? c.opens : 0), 0))}</td></tr>`).join("")}
+      </tbody></table></div>` : '<div class="muted" style="margin-top:8px">이 기간에 열린 기록이 없습니다</div>';
+  return `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${pick}
+      <span class="muted" style="font-size:12px">한국시간 기준, 막대는 시간대별 합계입니다. 칸에 마우스를 올리면 기기별 수가 보입니다.</span></div>
+    ${bars}${heat}`;
 }
 
 // ------------------------------------------------------------------ 차트
@@ -518,9 +585,16 @@ function pushTab(err) {
       <div style="flex:1"></div>
       <button class="sm" id="newPush">푸시 발송</button>
     </div>
+    <h3 style="margin:18px 0 6px">일자별 발송·열림
+      <select id="pushDays" style="margin-left:8px">${[7, 30, 90].map((d) =>
+        `<option value="${d}" ${d === PUSH_DAYS ? "selected" : ""}>최근 ${d}일</option>`).join("")}</select></h3>
+    ${pushDailyTable()}
+    <h3 id="pushHours" style="margin:22px 0 6px">시간대·일자별 열림</h3>
+    ${pushHoursView()}
+    <h3 style="margin:22px 0 6px">발송 목록</h3>
     ${!PUSHES.length ? `<div class="empty">발송한 푸시가 없습니다</div>` : `
     <div class="table-scroll"><table>
-      <thead><tr><th>등록</th><th>제목</th><th>본문</th><th>대상</th><th>나갈 시각</th><th>결과</th><th>관리</th></tr></thead>
+      <thead><tr><th>등록</th><th>제목</th><th>본문</th><th>대상</th><th>나갈 시각</th><th>결과</th><th>열림</th><th>관리</th></tr></thead>
       <tbody>${PUSHES.map((m) => `<tr>
           <td class="muted">${when(m.created_at)}</td>
           <td>${esc(m.title)}</td>
@@ -529,6 +603,8 @@ function pushTab(err) {
           <td class="muted" style="white-space:normal;max-width:260px">${target(m)}</td>
           <td class="muted">${when(m.scheduled_at)}</td>
           <td>${status(m)}</td>
+          <td class="num" style="white-space:nowrap">${m.sent_at ? `${fmt(m.opens || 0)}회<div class="muted" style="font-size:11px">${pct(m.opens || 0, m.sent_count)}</div>
+            <button class="ghost sm" data-hourpush="${m.id}" title="이 푸시가 언제 열렸는지 아래 표로 봅니다">시간대</button>` : '<span class="muted">—</span>'}</td>
           <td style="white-space:nowrap">${m.sent_at ? "" : `<button class="sm" data-editpush="${m.id}">고치기</button>
               <button class="danger sm" data-cancelpush="${m.id}">취소</button>`}
             <button class="ghost sm" data-copypush="${m.id}" title="같은 대상·문구로 새 발송 창을 엽니다">복제</button></td>
@@ -2904,6 +2980,16 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
       b.onclick = () => cancelPush(Number(b.dataset.cancelpush));
     });
     const findPush = (id) => PUSHES.find((m) => String(m.id) === String(id));
+    const reloadPush = async () => { await loadPush(); render(); };
+    if ($("#pushDays")) $("#pushDays").onchange = (e) => { PUSH_DAYS = Number(e.target.value); reloadPush(); };
+    if ($("#pushHourMsg")) $("#pushHourMsg").onchange = (e) => { PUSH_HOUR_MSG = e.target.value ? Number(e.target.value) : null; reloadPush(); };
+    document.querySelectorAll("[data-hourpush]").forEach((b) => {
+      b.onclick = async () => {
+        PUSH_HOUR_MSG = Number(b.dataset.hourpush);
+        await reloadPush();
+        $("#pushHours")?.scrollIntoView({ behavior: "smooth" });
+      };
+    });
     document.querySelectorAll("[data-editpush]").forEach((b) => {
       b.onclick = () => { const m = findPush(b.dataset.editpush); if (m) openPush(m, m.id); };
     });
