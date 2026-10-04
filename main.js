@@ -1065,6 +1065,7 @@ function updateTab(err) {
  */
 const NAV = [
   { id: "charts", label: "차트" },
+  { id: "ranking", label: "랭킹" },
   { label: "같이하기", items: [["versus", "현황"], ["versusset", "설정"]] },
   { label: "회원", items: [["players", "회원 목록"], ["rewards", "보상"]] },
   { label: "기록", items: [["events", "이벤트"], ["purchases", "구매"], ["audit", "관리 기록"]] },
@@ -1073,12 +1074,132 @@ const NAV = [
 ];
 
 let SRV = null, WINNERS = [], TRANSFERS = [], COIN_AUDIT = [];
+/** 오늘 랭킹 화면. 077이 있어야 채워진다. */
+let RANKING = [], RANK_STATS = [], RANK_TOTAL = 0;
+/** 빈 문자열이면 **한국시간 오늘**이다(서버가 정한다). */
+let RANK_DATE = "", RANK_PAGE = 0;
+const RANK_SIZE = 200;
 /** 수상자 표를 며칠치 볼지. 예전에는 14일 고정이었다. */
 let WINNER_DAYS = 14;
 /** 062 — 「장난」 전체 스위치. 키가 없는 서버에서는 켜진 것으로 본다(서버와 같은 규칙). */
 let EV_ON = true;
 /** 「장난」(061) — 14종. 기간과 on/off를 여기서 만진다. */
 let VS_EVENTS = [];
+
+/**
+ * 랭킹 화면 — **앱이 보는 것과 같은 모집단**이다(077).
+ *
+ * ⚠️ **회원 목록과 다르다.** 회원 목록은 점수가 0인 사람도 들어 있고, 정렬도
+ * profiles의 값을 그대로 쓴다. 여기는 「그 날짜 + 점수 1 이상」만 세고 등수도
+ * `get_rank`와 같은 방식으로 매긴다 — 사용자가 앱에서 보는 등수와 일치한다.
+ */
+function rankingTab(err) {
+  if (err) {
+    return `<div class="notice">랭킹 조회 실패: ${esc(err.message)}<br>
+            sql/migrations/077_admin_daily_ranking.sql을 실행했는지 확인하세요.</div>`;
+  }
+  const today = kstToday();
+  const day = RANK_DATE || today;
+  const stat = RANK_STATS.find((r) => String(r.day).slice(0, 10) === day);
+
+  const cards = `
+    <div class="cards">
+      <div class="card"><div class="label">참가자</div><div class="value">${fmt(RANK_TOTAL)}</div></div>
+      <div class="card"><div class="label">최고 점수</div><div class="value">${fmt(stat?.top_score ?? 0)}</div></div>
+      <div class="card"><div class="label">평균</div><div class="value">${fmt(stat?.avg_score ?? 0)}</div></div>
+      <div class="card"><div class="label">중앙값</div><div class="value">${fmt(stat?.median_score ?? 0)}</div></div>
+    </div>`;
+
+  const days = RANK_STATS.map((r) => String(r.day).slice(5, 10));
+  const charts = RANK_STATS.length ? `
+    <h3 class="sub">날짜별 참가자</h3>
+    ${lineChart(days, [
+      { name: "참가자", color: "#7aa2f7", values: RANK_STATS.map((r) => Number(r.players)) },
+    ])}
+    <h3 class="sub">점수 분포 (최고 · 평균 · 중앙값)</h3>
+    ${lineChart(days, [
+      { name: "최고", color: "#d9a441", values: RANK_STATS.map((r) => Number(r.top_score)) },
+      { name: "평균", color: "#17b3a8", values: RANK_STATS.map((r) => Number(r.avg_score)) },
+      { name: "중앙값", color: "#9a8cff", values: RANK_STATS.map((r) => Number(r.median_score)) },
+    ])}`
+    : `<div class="empty">집계가 없습니다</div>`;
+
+  const rows = RANKING.length ? `<div class="table-scroll"><table style="min-width:720px">
+      <thead><tr>
+        <th>등수</th><th>닉네임</th><th class="num">오늘 점수</th>
+        <th class="num">누적</th><th class="num">코인</th>
+        <th>보상</th><th>수령</th>
+      </tr></thead>
+      <tbody>${RANKING.map((r) => `<tr>
+        <td class="num">${r.rank}</td>
+        <td>${esc(r.username || "— (탈퇴)")}
+          ${r.supporter ? '<span class="pill heart">응원</span>' : ""}</td>
+        <td class="num">${fmt(r.daily_score)}</td>
+        <td class="num muted">${fmt(r.total_score)}</td>
+        <td class="num muted">${r.coins == null ? "—" : fmt(r.coins)}</td>
+        <td class="muted">${r.reward_coins == null ? "—"
+          : `코인 ${fmt(r.reward_coins)}` +
+            ((r.reward_hints || r.reward_autos)
+              ? ` · 힌트 ${r.reward_hints} · 자동 ${r.reward_autos}` : "")}</td>
+        <td>${r.reward_coins == null ? '<span class="muted">—</span>'
+            : r.claimed ? '<span class="muted">받아 감</span>'
+                        : '<span class="pill heart">소멸/대기</span>'}</td>
+      </tr>`).join("")}</tbody></table></div>`
+    : `<div class="empty">그날 점수를 낸 사람이 없습니다</div>`;
+
+  // 200명씩 끊어 받는다. 전체 수를 알고 있으므로 몇 쪽인지 바로 쓸 수 있다.
+  const pages = Math.max(1, Math.ceil(RANK_TOTAL / RANK_SIZE));
+  const paging = pages > 1 ? `
+    <div class="toolbar">
+      <button class="sm" id="rankPrev" ${RANK_PAGE === 0 ? "disabled" : ""}>이전</button>
+      <span class="muted">${RANK_PAGE + 1} / ${pages} 쪽 (${fmt(RANK_TOTAL)}명)</span>
+      <button class="sm" id="rankNext" ${RANK_PAGE + 1 >= pages ? "disabled" : ""}>다음</button>
+    </div>` : "";
+
+  return `
+    <div class="notice">
+      <b>앱이 보는 것과 같은 목록입니다.</b> 「그 날짜에 점수 1 이상」인 사람만 셉니다 —
+      회원 목록과 모집단이 다릅니다(그쪽은 점수가 0인 사람도 들어 있습니다).
+      <br>앱은 이 중 <b>100명까지</b> 보여 줍니다. 그보다 아래는 앱에서
+      「내 순위 N위」 줄로만 알 수 있습니다.
+      <br><b>어제 이전 날짜는 참고용입니다</b> — profiles의 오늘 점수는 그 사람이
+      다시 접속하면 덮이므로, 지난 날짜일수록 빠진 사람이 생깁니다.
+    </div>
+    <div class="toolbar">
+      <input type="date" id="rankDate" value="${day}" max="${today}">
+      <button class="sm" id="rankToday">오늘</button>
+      <div style="flex:1"></div>
+      <span class="muted">기준 ${day} (한국시간)</span>
+    </div>
+    ${cards}
+    ${charts}
+    <h2>참가자 (${fmt(RANK_TOTAL)}명)</h2>
+    ${paging}
+    ${rows}
+    ${paging}`;
+}
+
+/**
+ * 오늘(또는 고른 날) 랭킹 참가자.
+ *
+ * ⚠️ **회원 목록과 모집단이 다르다.** 여기는 앱과 같은 조건으로 센다 —
+ * 「그 날짜에 점수 1 이상」인 사람만. 회원 목록은 점수가 0인 사람도 들어 있다.
+ *
+ * ⚠️ **500명이 상한이 아니다.** 200명씩 끊어 받는다(`p_offset`).
+ * 한 번에 다 내려받으면 브라우저가 먼저 죽는다.
+ */
+async function loadRanking() {
+  try {
+    RANKING = await rpc("admin_daily_ranking", {
+      p_date: RANK_DATE || null,
+      p_limit: RANK_SIZE,
+      p_offset: RANK_PAGE * RANK_SIZE,
+    }) || [];
+    RANK_TOTAL = RANKING.length ? Number(RANKING[0].total_count) || 0 : 0;
+    RANK_STATS = await rpc("admin_daily_ranking_stats", { p_days: 14 }) || [];
+    return null;
+  } catch (e) { RANKING = []; RANK_STATS = []; RANK_TOTAL = 0; return e; }
+}
 
 /** 052·054가 있어야 채워진다. 없는 서버에서는 조용히 빈 값으로 두고 안내만 띄운다 —
  *  관리자 페이지는 서버보다 먼저 배포될 수 있다. */
@@ -2048,7 +2169,7 @@ function rewardsTable() {
 }
 
 // ------------------------------------------------------------------ 화면
-function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, cfgErr, serverErr, pushErr) {
+function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, cfgErr, serverErr, pushErr, rkErr) {
   const today = kstToday();
   const active = PLAYERS.filter((p) => p.daily_date === today && (p.daily_score || 0) > 0);
   const totals = PLAYERS.map((p) => p.total_score || 0);
@@ -2097,6 +2218,7 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
       </div>
       <div id="ptable">${playersTable()}</div>` : ""}
     ${TAB === "charts" ? chartsTab(statsErr) : ""}
+    ${TAB === "ranking" ? rankingTab(rkErr) : ""}
     ${TAB === "events" ? eventsTable(eventsErr) : ""}
     ${TAB === "rewards" ? rewardsTable() : ""}
     ${TAB === "purchases" ? purchasesTab(payErr) : ""}
@@ -2205,6 +2327,26 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
         await act(() => rpc("admin_close_room", { p_code: code, p_reason: reason }), refresh);
       };
     });
+  }
+
+  if (TAB === "ranking") {
+    const reload = async () => { await loadRanking(); render(warn, eventsErr); };
+    if ($("#rankDate")) {
+      $("#rankDate").onchange = async (e) => {
+        RANK_DATE = e.target.value || "";
+        RANK_PAGE = 0;                 // 날짜를 바꾸면 첫 쪽부터 본다
+        await reload();
+      };
+    }
+    if ($("#rankToday")) {
+      $("#rankToday").onclick = async () => { RANK_DATE = ""; RANK_PAGE = 0; await reload(); };
+    }
+    if ($("#rankPrev")) {
+      $("#rankPrev").onclick = async () => { RANK_PAGE = Math.max(0, RANK_PAGE - 1); await reload(); };
+    }
+    if ($("#rankNext")) {
+      $("#rankNext").onclick = async () => { RANK_PAGE += 1; await reload(); };
+    }
   }
 
   if (TAB === "server") {
@@ -2388,6 +2530,7 @@ async function boot() {
   }
   const cfgerr = TAB === "update" ? await loadConfig().then(() => null).catch((e) => e) : null;
   const sverr = TAB === "server" ? await loadServer() : null;
+  const rkerr = TAB === "ranking" ? await loadRanking() : null;
   const pusherr = TAB === "push" ? await loadPush() : null;
   // 알림은 **새로고침할 때만** 가져온다(사용자 지시) — 따로 도는 타이머는 두지 않는다.
   await loadAlerts();
@@ -2398,7 +2541,7 @@ async function boot() {
     warn = "조회 결과가 비어 있습니다. 이 계정이 admins 테이블에 등록됐는지 확인하세요 " +
            "(supabase_admin_access.sql 4번 항목).";
   }
-  render(warn, eerr, serr, nerr, perr2, aerr, vserr, cfgerr, sverr, pusherr);
+  render(warn, eerr, serr, nerr, perr2, aerr, vserr, cfgerr, sverr, pusherr, rkerr);
 }
 
 boot();
