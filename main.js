@@ -22,6 +22,12 @@ let PAY_TOTALS = {};
 /** 이벤트 이력을 펼쳐 놓은 회원. */
 let OPEN_MEMBER = null, MEMBER_EVENTS = [], MEMBER_PAYS = [];
 let SORT = "total", QUERY = "", EMAIL = "";
+/** 회원 목록도 끊어 받는다(079). **찾기는 서버가 한다** — 브라우저에서 거르면
+ *  지금 쪽 안에서만 찾게 되어, 3쪽에 있는 사람이 「없다」고 나온다. */
+let PLAYER_PAGE = 0, PLAYER_TOTAL = 0;
+/** 찾기 요청을 미루는 타이머. 타자마다 서버를 두드리지 않기 위해서다. */
+let QUERY_TIMER = null;
+const PLAYER_SIZE = 50;
 /** 내림차순인가. 기준을 바꾸면 그 기준의 기본 방향으로 돌아간다. */
 let DESC = true;
 /** 기준마다 자연스러운 방향. 이름만 가나다순(오름)이고 나머지는 큰 것부터다. */
@@ -90,20 +96,28 @@ async function loadPlayers() {
   const serverSorts = ["total", "daily", "coins", "vs_wins", "coop_wins",
                        "created", "username", "played"];
   if (serverSorts.includes(SORT)) {
-    // ⚠️ **방향도 서버가 정한다**(075). 이 함수는 위에서 500명만 잘라 오므로,
-    // 받아 온 500줄을 브라우저에서 뒤집으면 「꼴찌부터」가 아니라 「500등부터」가 된다.
-    const rows = await rpc("admin_players_ranked",
-                           { p_sort: SORT, p_limit: 500, p_desc: DESC })
-                   .catch(() => null);
-    if (rows) { PLAYERS = rows; return null; }
+    // ⚠️ **방향·찾기·끊어 받기를 모두 서버가 한다**(075·079). 한 쪽만 받아 와서
+    // 브라우저에서 뒤집거나 거르면 **그 쪽 안에서만** 맞는 답이 나온다.
+    const rows = await rpc("admin_players_ranked", {
+      p_sort: SORT, p_limit: PLAYER_SIZE, p_desc: DESC,
+      p_offset: PLAYER_PAGE * PLAYER_SIZE,
+      p_query: QUERY.trim() || null,
+    }).catch(() => null);
+    if (rows) {
+      PLAYERS = rows;
+      PLAYER_TOTAL = rows.length ? Number(rows[0].total_count) || 0 : 0;
+      return null;
+    }
   }
   // 되돌아가는 길 — 옛 정렬 이름을 profiles 칸 이름으로 옮긴다.
   const col = SORT === "daily" ? "daily_score"
             : SORT === "created" ? "created_at"
             : SORT === "username" ? "username" : "total_score";
+  const from = PLAYER_PAGE * PLAYER_SIZE;
   const { data, error } = await sb.from("profiles").select("*")
-    .order(col, { ascending: !DESC }).limit(500);
+    .order(col, { ascending: !DESC }).range(from, from + PLAYER_SIZE - 1);
   PLAYERS = data || [];
+  PLAYER_TOTAL = 0;          // 옛 서버에서는 전체 수를 모른다 — 쪽 수를 안 그린다.
   return error;
 }
 
@@ -1078,7 +1092,7 @@ let SRV = null, WINNERS = [], TRANSFERS = [], COIN_AUDIT = [];
 let RANKING = [], RANK_STATS = [], RANK_TOTAL = 0;
 /** 빈 문자열이면 **한국시간 오늘**이다(서버가 정한다). */
 let RANK_DATE = "", RANK_PAGE = 0;
-const RANK_SIZE = 200;
+const RANK_SIZE = 50;
 /** 수상자 표를 며칠치 볼지. 예전에는 14일 고정이었다. */
 let WINNER_DAYS = 14;
 /** 062 — 「장난」 전체 스위치. 키가 없는 서버에서는 켜진 것으로 본다(서버와 같은 규칙). */
@@ -1147,7 +1161,7 @@ function rankingTab(err) {
       </tr>`).join("")}</tbody></table></div>`
     : `<div class="empty">그날 점수를 낸 사람이 없습니다</div>`;
 
-  // 200명씩 끊어 받는다. 전체 수를 알고 있으므로 몇 쪽인지 바로 쓸 수 있다.
+  // 50명씩 끊어 받는다. 전체 수를 알고 있으므로 몇 쪽인지 바로 쓸 수 있다.
   const pages = Math.max(1, Math.ceil(RANK_TOTAL / RANK_SIZE));
   const paging = pages > 1 ? `
     <div class="toolbar">
@@ -1185,7 +1199,7 @@ function rankingTab(err) {
  * ⚠️ **회원 목록과 모집단이 다르다.** 여기는 앱과 같은 조건으로 센다 —
  * 「그 날짜에 점수 1 이상」인 사람만. 회원 목록은 점수가 0인 사람도 들어 있다.
  *
- * ⚠️ **500명이 상한이 아니다.** 200명씩 끊어 받는다(`p_offset`).
+ * ⚠️ **500명이 상한이 아니다.** 50명씩 끊어 받는다(`p_offset`).
  * 한 번에 다 내려받으면 브라우저가 먼저 죽는다.
  */
 async function loadRanking() {
@@ -1957,7 +1971,23 @@ function playersTable() {
           <button class="danger sm" data-act="del" data-id="${p.id}">삭제</button>
         </div></td>
       </tr>` + (OPEN_MEMBER === p.id ? memberEventsRow() : "");
-    }).join("")}</tbody></table></div>`;
+    }).join("")}</tbody></table></div>` + playersPaging();
+}
+
+/**
+ * 회원 목록 쪽 넘기기. **전체 수를 모르면 안 그린다** — 옛 서버(079 이전)는
+ * 그 값을 안 주는데, 그때 「1 / 1 쪽」이라고 적으면 거짓말이 된다.
+ */
+function playersPaging() {
+  if (!PLAYER_TOTAL) return "";
+  const pages = Math.max(1, Math.ceil(PLAYER_TOTAL / PLAYER_SIZE));
+  if (pages <= 1) return `<div class="toolbar"><span class="muted">${fmt(PLAYER_TOTAL)}명</span></div>`;
+  return `
+    <div class="toolbar">
+      <button class="sm" id="playerPrev" ${PLAYER_PAGE === 0 ? "disabled" : ""}>이전</button>
+      <span class="muted">${PLAYER_PAGE + 1} / ${pages} 쪽 (${fmt(PLAYER_TOTAL)}명)</span>
+      <button class="sm" id="playerNext" ${PLAYER_PAGE + 1 >= pages ? "disabled" : ""}>다음</button>
+    </div>`;
 }
 
 /** 회원 한 명의 최근 행동. 문의가 들어왔을 때 확인할 최소한의 창구다. */
@@ -2423,6 +2453,7 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     const applySort = async (key, desc) => {
       SORT = key;
       DESC = desc;
+      PLAYER_PAGE = 0;                 // 기준을 바꾸면 첫 쪽부터
       await loadPlayers();
       render(warn, eventsErr);
     };
@@ -2443,13 +2474,31 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
       });
     };
     bindSortHeaders();
+    // ⚠️ **찾기는 서버가 한다**(079). 예전에는 받아 둔 목록을 브라우저에서 걸렀는데,
+    // 50명씩 끊어 받는 지금은 **그 쪽 안에서만** 찾게 되어 3쪽에 있는 사람이
+    // 「없다」고 나온다.
+    //
+    // 타자마다 부르면 요청이 쏟아지므로 **350ms 쉰 뒤에** 보낸다. 그 사이 한 글자가
+    // 더 들어오면 앞의 예약은 버린다.
     $("#q").oninput = (e) => {
       QUERY = e.target.value;
-      $("#ptable").innerHTML = playersTable();
-      bindSortHeaders();
-      bindPicks();
-      bindRowActions();
+      PLAYER_PAGE = 0;                 // 찾으면 첫 쪽부터
+      clearTimeout(QUERY_TIMER);
+      QUERY_TIMER = setTimeout(async () => {
+        await loadPlayers();
+        render(warn, eventsErr);
+        const box = $("#q");
+        // 다시 그리면 입력칸이 새로 만들어진다 — 커서를 되돌려 준다.
+        if (box) { box.focus(); box.setSelectionRange(box.value.length, box.value.length); }
+      }, 350);
     };
+    const turnPage = async (d) => {
+      PLAYER_PAGE = Math.max(0, PLAYER_PAGE + d);
+      await loadPlayers();
+      render(warn, eventsErr);
+    };
+    if ($("#playerPrev")) $("#playerPrev").onclick = () => turnPage(-1);
+    if ($("#playerNext")) $("#playerNext").onclick = () => turnPage(1);
     $("#resetAll").onclick = resetAllScores;
     $("#resetAllGames").onclick = resetAllGames;
     $("#cancelResets").onclick = cancelGameResets;
