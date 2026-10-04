@@ -469,7 +469,8 @@ function pushTab(err) {
   const when = (v) => (v ? new Date(v).toLocaleString("ko-KR", { dateStyle: "short", timeStyle: "short" }) : "—");
   const TARGETS = { all: "전체", inactive_7d: "7일 미접속", top100: "상위 100", user: "지정" };
   return `<div class="toolbar">
-      <span class="muted" style="font-size:12.5px">기기 알림으로 나갑니다 — <b>보낸 뒤에는 되돌릴 수 없습니다</b></span>
+      <span class="muted" style="font-size:12.5px">기기 알림으로 나갑니다 — <b>보낸 뒤에는 되돌릴 수 없습니다</b>.
+        <b>「이벤트·소식 알림」을 켠 사람에게만</b> 갑니다(기본 꺼짐, 1.4.2부터).</span>
       <div style="flex:1"></div>
       <button class="sm" id="newPush">푸시 발송</button>
     </div>
