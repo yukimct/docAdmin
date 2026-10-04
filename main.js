@@ -22,6 +22,16 @@ let PAY_TOTALS = {};
 /** 이벤트 이력을 펼쳐 놓은 회원. */
 let OPEN_MEMBER = null, MEMBER_EVENTS = [], MEMBER_PAYS = [];
 let SORT = "total", QUERY = "", EMAIL = "";
+/** 내림차순인가. 기준을 바꾸면 그 기준의 기본 방향으로 돌아간다. */
+let DESC = true;
+/** 기준마다 자연스러운 방향. 이름만 가나다순(오름)이고 나머지는 큰 것부터다. */
+const defaultDesc = (key) => key !== "username";
+/** 표 머리글 → 정렬 기준. 여기 없는 칸(결제)은 눌러도 안 세운다 —
+ *  PAY_TOTALS는 브라우저에서 합친 값이라 서버가 그걸로 못 세운다. */
+const SORT_BY_COL = {
+  username: "username", total: "total", daily: "daily", coins: "coins",
+  vs: "vs_wins", coop: "coop_wins", played: "played", created: "created",
+};
 /** 다중 삭제용 선택 목록. 검색어를 바꿔도 선택은 유지된다 — 여러 번 걸러 가며
  *  고르는 게 자연스럽고, 안 보이는 걸 지우는 사고는 삭제 직전 명단 확인으로 막는다. */
 let SELECTED = new Set();
@@ -77,9 +87,13 @@ async function loadAnomalies() {
  * 아직 없으면 예전처럼 profiles를 읽어 최소한 목록은 보이게 한다.
  */
 async function loadPlayers() {
-  const serverSorts = ["total", "daily", "coins", "vs_wins", "coop_wins", "created", "username"];
+  const serverSorts = ["total", "daily", "coins", "vs_wins", "coop_wins",
+                       "created", "username", "played"];
   if (serverSorts.includes(SORT)) {
-    const rows = await rpc("admin_players_ranked", { p_sort: SORT, p_limit: 500 })
+    // ⚠️ **방향도 서버가 정한다**(075). 이 함수는 위에서 500명만 잘라 오므로,
+    // 받아 온 500줄을 브라우저에서 뒤집으면 「꼴찌부터」가 아니라 「500등부터」가 된다.
+    const rows = await rpc("admin_players_ranked",
+                           { p_sort: SORT, p_limit: 500, p_desc: DESC })
                    .catch(() => null);
     if (rows) { PLAYERS = rows; return null; }
   }
@@ -88,7 +102,7 @@ async function loadPlayers() {
             : SORT === "created" ? "created_at"
             : SORT === "username" ? "username" : "total_score";
   const { data, error } = await sb.from("profiles").select("*")
-    .order(col, { ascending: col === "username" }).limit(500);
+    .order(col, { ascending: !DESC }).limit(500);
   PLAYERS = data || [];
   return error;
 }
@@ -870,6 +884,82 @@ async function loadConfig() {
 }
 
 /**
+ * 랭킹 보상 표를 고친다(076).
+ *
+ * `to`는 **그 등수까지**다. 1·2·3·5·10이면 4등은 「5까지」 줄에 걸린다.
+ * **마지막 줄의 `to`가 곧 몇 등까지 줄지**다 — 범위를 따로 두지 않는다.
+ *
+ * ⚠️ **앱 안내 문구도 이 표에서 만들어진다.** 여기를 고치면 앱의
+ * 「1등 1,000 · 2등 700 …」이 따라 바뀐다. 숫자가 사는 곳은 여기 하나뿐이다.
+ *
+ * ⚠️ **랭킹 목록은 30명까지만 내려간다.** 30등 넘게 주면 지급은 되지만
+ * 앱 목록에서는 그 줄이 안 보인다.
+ */
+function rankRewardEditor() {
+  const tiers = Array.isArray(CONFIG?.rank_rewards?.tiers) ? CONFIG.rank_rewards.tiers : [];
+  const n = (v) => Number(v ?? 0) || 0;
+  const row = (t, i) => `
+    <tr data-tier="${i}">
+      <td class="num"><input type="number" min="1" class="t-to"    value="${n(t.to)}"    style="width:80px"></td>
+      <td class="num"><input type="number" min="0" class="t-coins" value="${n(t.coins)}" style="width:100px"></td>
+      <td class="num"><input type="number" min="0" class="t-hints" value="${n(t.hints)}" style="width:80px"></td>
+      <td class="num"><input type="number" min="0" class="t-autos" value="${n(t.autos)}" style="width:80px"></td>
+      <td><button class="sm" data-tier-del="${i}">삭제</button></td>
+    </tr>`;
+  const body = tiers.length
+    ? tiers.map(row).join("")
+    : `<tr><td colspan="5" class="muted">표가 비어 있습니다. 비면 서버가 기본값으로 정산합니다.</td></tr>`;
+  return `
+    <div class="notice">
+      <b>「~등까지」로 적습니다.</b> 1 · 2 · 3 · 5 · 10이면 4등은 「5까지」 줄을 받습니다.
+      <b>마지막 줄이 몇 등까지 줄지를 정합니다.</b>
+      <br>여기를 고치면 <b>앱 안내 문구도 같이 바뀝니다.</b> 앱을 다시 올릴 필요가 없습니다.
+      <br>앱 랭킹 목록은 30명까지만 보여 줍니다 — 그보다 많이 주면 지급은 되지만 목록에는 안 보입니다.
+    </div>
+    <div class="table-scroll"><table style="min-width:520px">
+      <thead><tr>
+        <th class="num">~등까지</th><th class="num">코인</th>
+        <th class="num">힌트</th><th class="num">자동배치</th><th></th>
+      </tr></thead>
+      <tbody id="tierBody">${body}</tbody>
+    </table></div>
+    <div class="toolbar">
+      <button class="sm" id="tierAdd">줄 추가</button>
+      <div style="flex:1"></div>
+      <button class="sm" id="saveTiers">저장</button>
+    </div>`;
+}
+
+/**
+ * 표를 읽어 서버에 올린다.
+ *
+ * **`to` 오름차순으로 세워서 보낸다.** 서버는 「등수를 덮는 첫 줄」을 고르는데,
+ * 순서가 뒤섞여 있으면 사람이 의도한 줄과 다른 줄이 걸린다.
+ */
+async function saveRankRewards() {
+  const rows = [...document.querySelectorAll("#tierBody tr[data-tier]")];
+  const tiers = rows.map((tr) => ({
+    to:    Math.max(1, Number(tr.querySelector(".t-to").value) || 0),
+    coins: Math.max(0, Number(tr.querySelector(".t-coins").value) || 0),
+    hints: Math.max(0, Number(tr.querySelector(".t-hints").value) || 0),
+    autos: Math.max(0, Number(tr.querySelector(".t-autos").value) || 0),
+  })).sort((a, b) => a.to - b.to);
+
+  // 같은 등수가 두 줄이면 뒤의 줄은 영영 안 걸린다 — 조용히 죽는 설정은 만들지 않는다.
+  const dup = tiers.find((t, i) => i > 0 && t.to === tiers[i - 1].to);
+  if (dup) return alert(`「${dup.to}등까지」가 두 줄입니다. 한 줄로 합쳐 주세요.`);
+
+  const last = tiers.length ? tiers[tiers.length - 1].to : 0;
+  if (!confirm(`${last}등까지 보상을 줍니다.\n\n` +
+               tiers.map((t) => `  ~${t.to}등: 코인 ${t.coins}` +
+                 (t.hints || t.autos ? ` · 힌트 ${t.hints} · 자동 ${t.autos}` : "")).join("\n") +
+               `\n\n앱 안내 문구도 이대로 바뀝니다. 저장할까요?`)) return;
+
+  await act(() => rpc("admin_set_config",
+                      { p_key: "rank_rewards", p_value: { tiers } }), refresh);
+}
+
+/**
  * 업데이트 관문. 숫자는 Android versionCode / iOS 빌드 번호다.
  *
  * 사람이 읽는 1.1.2가 아니라 정수로 비교한다 — 문자열 버전 비교는 "1.10 < 1.9"가 되는
@@ -983,6 +1073,8 @@ const NAV = [
 ];
 
 let SRV = null, WINNERS = [], TRANSFERS = [], COIN_AUDIT = [];
+/** 수상자 표를 며칠치 볼지. 예전에는 14일 고정이었다. */
+let WINNER_DAYS = 14;
 /** 062 — 「장난」 전체 스위치. 키가 없는 서버에서는 켜진 것으로 본다(서버와 같은 규칙). */
 let EV_ON = true;
 /** 「장난」(061) — 14종. 기간과 on/off를 여기서 만진다. */
@@ -993,7 +1085,7 @@ let VS_EVENTS = [];
 async function loadServer() {
   try {
     SRV = (await rpc("admin_server_status").catch(() => []))[0] || null;
-    WINNERS = await rpc("admin_daily_winners", { p_days: 14 }).catch(() => []) || [];
+    WINNERS = await rpc("admin_daily_winners", { p_days: WINNER_DAYS }).catch(() => []) || [];
     TRANSFERS = await rpc("admin_transfers", { p_limit: 50 }).catch(() => []) || [];
     COIN_AUDIT = await rpc("admin_coin_audit", { p_min_gap: 2000, p_limit: 100 })
                    .catch(() => []) || [];
@@ -1079,7 +1171,16 @@ function serverTab(err) {
     </div>
     ${audit}
 
-    <h2>어제의 랭킹 보상 (최근 14일)</h2>
+    <h2>랭킹 보상 설정</h2>
+    ${rankRewardEditor()}
+
+    <h2>어제의 랭킹 보상</h2>
+    <div class="toolbar">
+      <select id="winnerDays">
+        ${[7, 14, 30, 90].map((d) =>
+          `<option value="${d}" ${d === WINNER_DAYS ? "selected" : ""}>최근 ${d}일</option>`).join("")}
+      </select>
+    </div>
     ${winners}
 
     <h2>기기 이전 코드 (최근 50건)</h2>
@@ -1660,6 +1761,19 @@ function versusPlayersTable() {
     </tr>`).join("")}</tbody></table></div>`;
 }
 
+/**
+ * 누를 수 있는 표 머리글 한 칸.
+ *
+ * 지금 세우는 기준에는 화살표를 붙인다 — 어느 칸으로 세웠는지 머리글만 보고 알아야
+ * 선택 상자를 다시 확인하지 않는다. 결제 칸은 서버가 못 세우므로 이걸 안 쓴다.
+ */
+function th(col, label, align) {
+  const on = SORT_BY_COL[col] === SORT;
+  const arrow = on ? (DESC ? " ↓" : " ↑") : "";
+  return `<th data-sort="${col}" class="sortable${on ? " on" : ""}"`
+       + `${align ? ` style="text-align:${align}"` : ""}>${label}${arrow}</th>`;
+}
+
 function playersTable() {
   const today = kstToday();
   const q = QUERY.trim().toLowerCase();
@@ -1671,11 +1785,17 @@ function playersTable() {
   return `<div class="table-scroll"><table>
     <thead><tr>
       <th style="width:34px"><input type="checkbox" id="pickAll"></th>
-      <th>#</th><th>닉네임</th><th style="text-align:right">누적</th>
-      <th style="text-align:right">오늘</th><th style="text-align:right">코인</th>
-      <th style="text-align:right">대전 (승-패-무)</th><th style="text-align:right">협동</th>
+      <th>#</th>
+      ${th("username", "닉네임")}
+      ${th("total", "누적", "right")}
+      ${th("daily", "오늘", "right")}
+      ${th("coins", "코인", "right")}
+      ${th("vs", "대전 (승-패-무)", "right")}
+      ${th("coop", "협동", "right")}
       <th style="text-align:right">결제</th>
-      <th>마지막 플레이</th><th>가입일</th><th>관리</th>
+      ${th("played", "마지막 플레이")}
+      ${th("created", "가입일")}
+      <th>관리</th>
     </tr></thead><tbody>${list.map((p, i) => {
       const played = p.daily_date === today && (p.daily_score || 0) > 0;
       return `<tr>
@@ -1962,9 +2082,11 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
           <option value="coins">코인 많은순</option>
           <option value="vs_wins">대전 승수순</option>
           <option value="coop_wins">협동 승수순</option>
+          <option value="played">마지막 플레이순</option>
           <option value="created">가입 최신순</option>
           <option value="username">닉네임순</option>
         </select>
+        <button class="sm" id="sortDir" title="오름차순과 내림차순을 바꿉니다">${DESC ? "내림차순 ↓" : "오름차순 ↑"}</button>
         <span class="muted" style="font-size:12.5px">기준 ${today} (한국시간)</span>
         <div style="flex:1"></div>
         <button class="sm" id="grantAll">전체 보상 지급</button>
@@ -2085,6 +2207,35 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     });
   }
 
+  if (TAB === "server") {
+    if ($("#winnerDays")) {
+      $("#winnerDays").onchange = async (e) => {
+        WINNER_DAYS = Number(e.target.value) || 14;
+        await loadServer();
+        render(warn, eventsErr);
+      };
+    }
+    if ($("#saveTiers")) $("#saveTiers").onclick = saveRankRewards;
+    if ($("#tierAdd")) {
+      $("#tierAdd").onclick = () => {
+        const tiers = Array.isArray(CONFIG?.rank_rewards?.tiers)
+          ? [...CONFIG.rank_rewards.tiers] : [];
+        const last = tiers.length ? Number(tiers[tiers.length - 1].to) || 0 : 0;
+        tiers.push({ to: last + 1, coins: 0, hints: 0, autos: 0 });
+        CONFIG = { ...CONFIG, rank_rewards: { tiers } };
+        render(warn, eventsErr);
+      };
+    }
+    document.querySelectorAll("[data-tier-del]").forEach((b) => {
+      b.onclick = () => {
+        const i = Number(b.dataset.tierDel);
+        const tiers = (CONFIG?.rank_rewards?.tiers || []).filter((_, k) => k !== i);
+        CONFIG = { ...CONFIG, rank_rewards: { tiers } };
+        render(warn, eventsErr);
+      };
+    });
+  }
+
   if (TAB === "update" && $("#saveVersions")) {
     $("#saveVersions").onclick = saveVersions;
     if ($("#saveMaint")) $("#saveMaint").onclick = saveMaintenance;
@@ -2126,10 +2277,34 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
 
   if (TAB === "players") {
     $("#sort").value = SORT;
-    $("#sort").onchange = async (e) => { SORT = e.target.value; await loadPlayers(); render(warn, eventsErr); };
+    // 한 군데로 모은다 — 선택 상자·방향 단추·표 머리글이 같은 길을 쓴다.
+    const applySort = async (key, desc) => {
+      SORT = key;
+      DESC = desc;
+      await loadPlayers();
+      render(warn, eventsErr);
+    };
+    $("#sort").onchange = (e) => applySort(e.target.value, defaultDesc(e.target.value));
+    $("#sortDir").onclick = () => applySort(SORT, !DESC);
+    // **머리글을 눌러도 세운다.** 기준이 그대로면 방향만 뒤집고,
+    // 다른 칸이면 그 칸의 기본 방향으로 간다.
+    //
+    // ⚠️ **검색할 때마다 표를 통째로 다시 그리므로 그때도 다시 걸어야 한다.**
+    // 안 걸면 한 글자 치는 순간 머리글이 죽는다.
+    const bindSortHeaders = () => {
+      document.querySelectorAll("[data-sort]").forEach((el) => {
+        el.onclick = () => {
+          const key = SORT_BY_COL[el.dataset.sort];
+          if (!key) return;
+          applySort(key, key === SORT ? !DESC : defaultDesc(key));
+        };
+      });
+    };
+    bindSortHeaders();
     $("#q").oninput = (e) => {
       QUERY = e.target.value;
       $("#ptable").innerHTML = playersTable();
+      bindSortHeaders();
       bindPicks();
       bindRowActions();
     };

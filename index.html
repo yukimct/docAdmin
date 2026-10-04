@@ -237,6 +237,10 @@
   /* ---------------------------------------------------------------- 표 */
   /* min-width를 못 박지 않는다. 칸 수가 적은 표까지 억지로 720px가 되면
      넓은 화면에서 쓸데없이 가로 스크롤이 생긴다. 내용이 정하게 둔다. */
+  /* 누를 수 있는 표 머리글. 지금 세우는 칸은 글자를 진하게 해서 눈에 띄게 한다. */
+  th.sortable{cursor:pointer;user-select:none}
+  th.sortable:hover{color:var(--ink)}
+  th.sortable.on{color:var(--ink);font-weight:700}
   .table-scroll{overflow-x:auto;border:1px solid var(--line);border-radius:var(--r);
                 background:var(--surface);box-shadow:var(--shadow);
                 -webkit-overflow-scrolling:touch}
