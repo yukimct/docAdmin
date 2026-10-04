@@ -41,6 +41,8 @@ const SORT_BY_COL = {
 /** 다중 삭제용 선택 목록. 검색어를 바꿔도 선택은 유지된다 — 여러 번 걸러 가며
  *  고르는 게 자연스럽고, 안 보이는 걸 지우는 사고는 삭제 직전 명단 확인으로 막는다. */
 let SELECTED = new Set();
+// 지금 푸시를 받을 수 있는 회원 → { devices, consented_at }. 회원 탭에서만 불러온다(085).
+let REACH = {};
 /** 보상 탭에서 펼쳐 놓은 묶음 id와 그 명단. */
 let OPEN_BATCH = null, BATCH_MEMBERS = [];
 /** 보상 탭 안의 하위 탭 — "live"(진행 중) / "done"(지난 것). */
@@ -186,6 +188,14 @@ async function loadPayTotals() {
 async function loadNotices() {
   try { NOTICES = await rpc("admin_notices") || []; return null; }
   catch (e) { NOTICES = []; return e; }
+}
+
+/** 지금 푸시를 받을 수 있는 회원(085). 없는 서버에서도 회원 목록은 떠야 하니 실패는 빈 표로 둔다. */
+async function loadReach() {
+  try {
+    const rows = await rpc("admin_push_reachable") || [];
+    REACH = Object.fromEntries(rows.map((r) => [r.user_id, r]));
+  } catch { REACH = {}; }
 }
 
 /** 067이 없는 서버에서도 페이지는 떠야 한다 — 관리자 페이지가 서버보다 먼저 배포될 수 있다. */
@@ -466,33 +476,61 @@ function noticesTab(err) {
 
 function pushTab(err) {
   if (err) return `<div class="notice">푸시 조회 실패: ${esc(err.message)}<br>sql/migrations/067_push.sql을 실행했는지 확인하세요.</div>`;
-  const when = (v) => (v ? new Date(v).toLocaleString("ko-KR", { dateStyle: "short", timeStyle: "short" }) : "—");
-  const TARGETS = { all: "전체", inactive_7d: "7일 미접속", top100: "상위 100", user: "지정" };
+  const when = (v) => (v ? new Date(v).toLocaleString("ko-KR", { timeZone: "Asia/Seoul", dateStyle: "short", timeStyle: "short" }) : "—");
+  const now = new Date();
+  const target = (m) => {
+    switch (m.target) {
+      case "all": return "동의한 전체";
+      case "users": {
+        const ids = (m.target_arg || "").split(",").filter(Boolean);
+        return `지정 ${fmt(ids.length)}명<br><span style="font-size:11px" title="${esc(ids.join("\n"))}">${esc(ids[0] || "")}${ids.length > 1 ? " …" : ""}</span>`;
+      }
+      case "filter": return `조건<br><span style="font-size:11px">${describeConds(m.target_arg)}</span>`;
+      case "user": return `지정<br><span style="font-size:11px">${esc(m.target_arg || "")}</span>`;
+      case "inactive_7d": return "7일 미접속";
+      case "top100": return "오늘 상위 100";
+      default: return esc(m.target);
+    }
+  };
+  const status = (m) => {
+    if (m.sent_at) {
+      // 0대이고 실패도 0이면 받을 사람이 없었거나, 발송 함수가 대상을 고르다 실패한 것이다
+      // (send-push는 그 경우 이 줄을 「보냄」으로 둔 채 넘어간다). 둘을 가를 기록은 없다.
+      const none = !m.sent_count && !m.fail_count;
+      return `<span class="pill today">보냄</span> ${fmt(m.sent_count)}대${
+        m.fail_count ? ` <span class="pill heart">실패 ${fmt(m.fail_count)}</span>` : ""}
+        ${none ? '<div class="muted" style="font-size:11px">받을 사람이 없었거나 대상 고르기 실패</div>' : ""}
+        <div class="muted" style="font-size:11px">${when(m.sent_at)}</div>`;
+    }
+    const at = new Date(m.scheduled_at);
+    if (at > now) return '<span class="pill">예약</span>';
+    // 시각은 지났는데 안 나갔다 — 밤 시간이면 8시를 기다리는 중이다(084).
+    return inQuiet(now) ? '<span class="pill">아침 8시 대기</span>' : '<span class="pill">곧 나감</span>';
+  };
+  const pending = PUSHES.filter((m) => !m.sent_at).length;
   return `<div class="toolbar">
-      <span class="muted" style="font-size:12.5px">기기 알림으로 나갑니다 — <b>보낸 뒤에는 되돌릴 수 없습니다</b>.
-        <b>「이벤트·소식 알림」을 켠 사람에게만</b> 갑니다(기본 꺼짐, 1.4.2부터).</span>
+      <span class="muted" style="font-size:12.5px">기기 알림으로 나갑니다. <b>보낸 뒤에는 되돌릴 수 없습니다</b>.
+        <b>광고성 정보 알림에 동의한 사람에게만</b> 갑니다(기본 꺼짐, 1.4.2부터).
+        밤 9시부터 아침 8시(한국시간)에는 보내지 않고 8시에 몰아서 내보냅니다.
+        제목 앞 「(광고)」와 본문 끝 수신거부 안내는 서버가 붙입니다.${pending ? ` 대기 중 ${fmt(pending)}건.` : ""}</span>
       <div style="flex:1"></div>
       <button class="sm" id="newPush">푸시 발송</button>
     </div>
     ${!PUSHES.length ? `<div class="empty">발송한 푸시가 없습니다</div>` : `
     <div class="table-scroll"><table>
-      <thead><tr><th>등록</th><th>제목</th><th>본문</th><th>대상</th><th>예약</th><th>결과</th><th>관리</th></tr></thead>
-      <tbody>${PUSHES.map((m) => {
-        const sent = !!m.sent_at;
-        return `<tr>
+      <thead><tr><th>등록</th><th>제목</th><th>본문</th><th>대상</th><th>나갈 시각</th><th>결과</th><th>관리</th></tr></thead>
+      <tbody>${PUSHES.map((m) => `<tr>
           <td class="muted">${when(m.created_at)}</td>
           <td>${esc(m.title)}</td>
-          <td class="muted" style="white-space:normal;max-width:320px">${esc(m.body)}</td>
-          <td class="muted">${TARGETS[m.target] || esc(m.target)}${
-            m.target === "user" && m.target_arg ? `<br><span style="font-size:11px">${esc(m.target_arg)}</span>` : ""}</td>
+          <td class="muted" style="white-space:normal;max-width:320px">${esc(m.body)}${
+            m.link ? `<div style="font-size:11px">열 곳: ${esc(m.link)}</div>` : ""}</td>
+          <td class="muted" style="white-space:normal;max-width:260px">${target(m)}</td>
           <td class="muted">${when(m.scheduled_at)}</td>
-          <td>${sent
-            ? `<span class="pill today">보냄</span> ${fmt(m.sent_count)}건${
-                m.fail_count ? ` <span class="pill heart">실패 ${fmt(m.fail_count)}</span>` : ""}`
-            : '<span class="pill">대기</span>'}</td>
-          <td>${sent ? "" : `<button class="danger sm" data-cancelpush="${m.id}">취소</button>`}</td>
-        </tr>`;
-      }).join("")}</tbody></table></div>`}`;
+          <td>${status(m)}</td>
+          <td style="white-space:nowrap">${m.sent_at ? "" : `<button class="sm" data-editpush="${m.id}">고치기</button>
+              <button class="danger sm" data-cancelpush="${m.id}">취소</button>`}
+            <button class="ghost sm" data-copypush="${m.id}" title="같은 대상·문구로 새 발송 창을 엽니다">복제</button></td>
+        </tr>`).join("")}</tbody></table></div>`}`;
 }
 
 // ------------------------------------------------------------------ 동작
@@ -773,51 +811,305 @@ function openNotice() {
   };
 }
 
-/** 발송은 되돌릴 수 없다. **보내기 전에 몇 대에 가는지 숫자를 보여준다.** */
-function openPush() {
-  const dlg = $("#pushDlg");
-  ["#pTitle", "#pBody", "#pWhen", "#pArg", "#pLink"].forEach((x) => ($(x).value = ""));
-  $("#pTarget").value = "all";
-  $("#pArgRow").style.display = "none";
-  $("#pErr").textContent = "";
-  $("#pCount").textContent = "받을 기기: —";
+// ------------------------------------------------------------------ 푸시 대상 조건
+// 서버 push_condition_ok(086)와 짝이다. 종류(t)와 칸 이름을 바꾸면 거기도 바꾼다.
+const OPS_NUM = [["gte", "이상"], ["lte", "이하"]];
+const OPS_DAYS = [["within", "일 안에"], ["over", "일 넘게 지남"]];
+const COND_TYPES = {
+  rank: { label: "날짜별 랭킹", fields: [
+    { k: "date", type: "date", def: () => kstDate(-1), pre: "" },
+    { k: "from", type: "number", def: 1, pre: "" },
+    { k: "to", type: "number", def: 10, pre: "~", post: "위" }] },
+  score: { label: "점수", fields: [
+    { k: "field", type: "select", opts: [["today", "오늘 점수"], ["total", "누적 점수"]], def: "today" },
+    { k: "v", type: "number", def: 0 },
+    { k: "op", type: "select", opts: OPS_NUM, def: "lte" }] },
+  seen: { label: "마지막 접속", fields: [
+    { k: "days", type: "number", def: 7 },
+    { k: "op", type: "select", opts: OPS_DAYS, def: "over" }] },
+  joined: { label: "가입", fields: [
+    { k: "days", type: "number", def: 7 },
+    { k: "op", type: "select", opts: OPS_DAYS, def: "within" }] },
+  purchased: { label: "결제", fields: [
+    { k: "item", type: "select", def: "any", opts: [["any", "아무 상품"], ["remove_ads", "광고 제거"],
+      ["support", "응원"], ["coins", "코인팩(아무거나)"], ["coins:600", "코인 600"],
+      ["coins:3300", "코인 3,300"], ["coins:7200", "코인 7,200"]] },
+    { k: "has", type: "select", opts: [["true", "산 적 있음"], ["false", "산 적 없음"]], def: "true" }] },
+  coins: { label: "코인 잔액", fields: [
+    { k: "v", type: "number", def: 5000 },
+    { k: "op", type: "select", opts: OPS_NUM, def: "gte" }] },
+  versus: { label: "대전 (최근 90일)", fields: [
+    { k: "field", type: "select", opts: [["played", "판 수"], ["wins", "1등 수"]], def: "played" },
+    { k: "v", type: "number", def: 1 },
+    { k: "op", type: "select", opts: OPS_NUM, def: "gte" }] },
+  supporter: { label: "응원 결제 회원", fields: [] },
+  platform: { label: "기기", fields: [
+    { k: "v", type: "select", opts: [["ios", "iPhone·iPad"], ["android", "Android"]], def: "ios" }] },
+  lang: { label: "앱 언어", fields: [
+    { k: "v", type: "select", opts: [["ko", "한국어"], ["en", "English"], ["ja", "日本語"], ["zh", "中文"]], def: "ko" }] },
+};
+// 자주 쓰는 조건. 고르면 조건 줄이 그대로 들어간다(이미 있는 줄에 더해진다).
+const COND_PRESETS = [
+  ["어제 랭킹 1~10위", () => [{ t: "rank", date: kstDate(-1), from: 1, to: 10 }]],
+  ["오늘 0점 (오늘 안 깬 사람)", () => [{ t: "score", field: "today", op: "lte", v: 0 }]],
+  ["7일 넘게 안 들어온 사람", () => [{ t: "seen", op: "over", days: 7 }]],
+  ["가입 3일 안의 새 회원", () => [{ t: "joined", op: "within", days: 3 }]],
+  ["결제한 적 없는 사람", () => [{ t: "purchased", item: "any", has: "false" }]],
+  ["광고 제거 구매자", () => [{ t: "purchased", item: "remove_ads", has: "true" }]],
+  ["코인 5,000 이상 쌓인 사람", () => [{ t: "coins", op: "gte", v: 5000 }]],
+  ["대전을 한 번도 안 한 사람", () => [{ t: "versus", field: "played", op: "lte", v: 0 }]],
+];
+const LANG_NAMES = { ko: "한국어", en: "English", ja: "日本語", zh: "中文" };
+const PLATFORM_NAMES = { ios: "iOS", android: "Android" };
 
-  const countAudience = async () => {
-    const target = $("#pTarget").value;
-    const arg = $("#pArg").value.trim();
-    if (target === "user" && !arg) { $("#pCount").textContent = "받을 기기: —"; return; }
+/** 한국시간 오늘에서 d일 옮긴 날짜(YYYY-MM-DD). 관리자 브라우저의 시간대와 상관없다. */
+function kstDate(d = 0) {
+  const t = new Date(Date.now() + 9 * 3600e3 + d * 86400e3);
+  return t.toISOString().slice(0, 10);
+}
+/** datetime-local 값을 **한국시간으로** 읽는다. 브라우저 시간대가 달라도 같은 순간이 된다. */
+const kstInput = (v) => (v ? new Date(`${v}:00+09:00`) : null);
+/** 순간을 datetime-local 칸에 넣을 한국시간 문자열로. */
+const toKstInput = (iso) => new Date(new Date(iso).getTime() + 9 * 3600e3).toISOString().slice(0, 16);
+const kstHour = (d) => new Date(d.getTime() + 9 * 3600e3).getUTCHours();
+// 「주의」 send-push가 안 보내는 시간(084 push_claim_due와 같다). 화면 안내에만 쓴다.
+const PUSH_QUIET = { from: 21, to: 8 };
+const inQuiet = (d) => { const h = kstHour(d); return h >= PUSH_QUIET.from || h < PUSH_QUIET.to; };
+
+/** 저장된 조건을 사람이 읽는 말로. 발송 목록의 「대상」 칸에 쓴다. */
+function describeConds(arg) {
+  let list = [];
+  try { list = JSON.parse(arg || "{}").all || []; } catch { return esc(arg || ""); }
+  const name = (type, k, v) => (COND_TYPES[type]?.fields.find((f) => f.k === k)?.opts || [])
+    .find(([x]) => String(x) === String(v))?.[1] ?? v;
+  return list.map((c) => {
+    switch (c.t) {
+      case "rank": return `${c.date === "today" ? "나가는 날" : c.date} 랭킹 ${c.from}~${c.to}위`;
+      case "score": return `${name("score", "field", c.field)} ${fmt(c.v)} ${name("score", "op", c.op)}`;
+      case "seen": return `접속 ${c.days}${name("seen", "op", c.op)}`;
+      case "joined": return `가입 ${c.days}${name("joined", "op", c.op)}`;
+      case "purchased": return `${name("purchased", "item", c.item)} ${name("purchased", "has", String(c.has))}`;
+      case "coins": return `코인 ${fmt(c.v)} ${name("coins", "op", c.op)}`;
+      case "versus": return `대전 ${name("versus", "field", c.field)} ${fmt(c.v)} ${name("versus", "op", c.op)}`;
+      case "supporter": return "응원 결제 회원";
+      case "platform": return PLATFORM_NAMES[c.v] || c.v;
+      case "lang": return LANG_NAMES[c.v] || c.v;
+      default: return esc(c.t);
+    }
+  }).map(esc).join(" · ");
+}
+
+/** 조건 줄 → 서버로 보낼 JSON. 숫자 칸은 숫자로, 결제의 has는 참거짓으로 바꾼다. */
+function condsToArg(conds) {
+  return JSON.stringify({ all: conds.map((c) => {
+    const out = { t: c.t };
+    for (const f of COND_TYPES[c.t].fields) {
+      const v = c[f.k];
+      out[f.k] = f.type === "number" ? Number(v) : f.k === "has" ? String(v) === "true" : v;
+    }
+    return out;
+  }) });
+}
+
+/** 회원 ID 칸을 읽는다. 쉼표·줄바꿈·띄어쓰기로 나눈다. */
+function parseUserIds(text) {
+  const all = [...new Set(String(text || "").split(/[\s,]+/).map((x) => x.trim()).filter(Boolean))];
+  const ok = all.filter((x) => /^[0-9a-fA-F-]{36}$/.test(x));
+  return { ok, bad: all.filter((x) => !ok.includes(x)) };
+}
+
+/**
+ * 발송 창. 되돌릴 수 없으니 **보내기 전에 누구에게, 몇 명에게, 어느 언어로 가는지** 보여 준다.
+ *
+ * - `prefill` 대상·문구를 채워 연다. 회원 목록의 「선택 회원에게 푸시」와 발송 목록의 「복제」가 쓴다
+ * - `editId` 아직 안 나간 예약을 고친다(087 admin_update_push)
+ */
+function openPush(prefill = null, editId = null) {
+  const dlg = $("#pushDlg");
+  const pf = prefill || {};
+  $("#pTitle").value = pf.title || "";
+  $("#pBody").value = pf.body || "";
+  $("#pLink").value = pf.link || "";
+  $("#pWhen").value = editId && pf.scheduled_at ? toKstInput(pf.scheduled_at) : "";
+  // 옛 대상(user · inactive_7d · top100)은 새 화면의 같은 뜻으로 옮겨 연다.
+  let target = pf.target || "all", users = "", conds = [];
+  if (target === "user") { target = "users"; users = pf.target_arg || ""; }
+  if (target === "users") users = (pf.target_arg || "").split(",").join("\n");
+  if (target === "inactive_7d") { target = "filter"; conds = [{ t: "seen", op: "over", days: 7 }]; }
+  if (target === "top100") { target = "filter"; conds = [{ t: "rank", date: "today", from: 1, to: 100 }]; }
+  if (target === "filter" && pf.target_arg) {
     try {
-      const n = await rpc("admin_push_audience", { p_target: target, p_target_arg: arg || null });
-      $("#pCount").textContent = `받을 기기: ${fmt(n ?? 0)}대`;
-    } catch { $("#pCount").textContent = "받을 기기: 확인 실패"; }
+      conds = (JSON.parse(pf.target_arg).all || []).map((c) => ({ ...c, has: c.has === undefined ? undefined : String(c.has) }));
+    } catch { conds = []; }
+  }
+  $("#pTarget").value = target;
+  $("#pUsers").value = users;
+  $("#pErr").textContent = "";
+  dlg.querySelector("h3").textContent = editId ? "예약 고치기" : "푸시 발송";
+  $("#pOk").textContent = editId ? "고치기" : "발송";
+
+  const renderConds = () => {
+    $("#pConds").innerHTML = conds.map((c, i) => {
+      const type = COND_TYPES[c.t];
+      const fields = type.fields.map((f) => {
+        const v = c[f.k] ?? (typeof f.def === "function" ? f.def() : f.def);
+        c[f.k] = v;
+        const input = f.type === "select"
+          ? `<select data-ci="${i}" data-ck="${f.k}">${f.opts.map(([x, l]) =>
+              `<option value="${esc(x)}" ${String(x) === String(v) ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>`
+          : f.type === "date"
+            ? `<input type="date" data-ci="${i}" data-ck="${f.k}" value="${v === "today" ? kstDate() : esc(v)}">`
+            : `<input type="number" data-ci="${i}" data-ck="${f.k}" value="${esc(v)}" style="width:90px">`;
+        return `${f.pre ? `<span class="muted">${f.pre}</span>` : ""}${input}${f.post ? `<span class="muted">${f.post}</span>` : ""}`;
+      }).join(" ");
+      return `<div class="cond" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:6px 0">
+        <select data-ci="${i}" data-ck="t">${Object.entries(COND_TYPES).map(([k, t]) =>
+          `<option value="${k}" ${k === c.t ? "selected" : ""}>${esc(t.label)}</option>`).join("")}</select>
+        ${fields}
+        <button class="ghost sm" type="button" data-cdel="${i}">빼기</button>
+      </div>`;
+    }).join("") + `<div style="margin:6px 0"><select id="pPreset"><option value="">자주 쓰는 조건 넣기…</option>${
+      COND_PRESETS.map(([l], i) => `<option value="${i}">${esc(l)}</option>`).join("")}</select></div>`;
+    $("#pConds").querySelectorAll("[data-ck]").forEach((el) => {
+      el.onchange = () => {
+        const c = conds[Number(el.dataset.ci)];
+        if (el.dataset.ck === "t") {
+          // 종류가 바뀌면 칸이 다르다. 새 종류의 기본값으로 다시 채운다.
+          conds[Number(el.dataset.ci)] = { t: el.value };
+          renderConds();
+        } else c[el.dataset.ck] = el.value;
+        recount();
+      };
+    });
+    $("#pConds").querySelectorAll("[data-cdel]").forEach((b) => {
+      b.onclick = () => { conds.splice(Number(b.dataset.cdel), 1); renderConds(); recount(); };
+    });
+    $("#pPreset").onchange = (e) => {
+      if (e.target.value === "") return;
+      conds.push(...COND_PRESETS[Number(e.target.value)][1]());
+      renderConds(); recount();
+    };
   };
-  $("#pTarget").onchange = () => {
-    $("#pArgRow").style.display = $("#pTarget").value === "user" ? "" : "none";
-    countAudience();
+
+  const currentArg = () => {
+    const t = $("#pTarget").value;
+    if (t === "users") return parseUserIds($("#pUsers").value).ok.join(",") || null;
+    if (t === "filter") return conds.length ? condsToArg(conds) : null;
+    return null;
   };
-  $("#pArg").oninput = countAudience;
-  countAudience();
+
+  const whenNote = () => {
+    const v = $("#pWhen").value;
+    const at = kstInput(v);
+    const now = new Date();
+    let msg;
+    if (!at) {
+      msg = inQuiet(now) ? "지금은 밤 시간이라 아침 8시(한국시간)에 나갑니다." : "등록하면 1분 안에 나갑니다.";
+    } else if (at < new Date(now.getTime() - 10 * 60e3)) {
+      msg = "이미 지난 시각입니다.";
+    } else {
+      const s = at.toLocaleString("ko-KR", { timeZone: "Asia/Seoul", dateStyle: "medium", timeStyle: "short" });
+      msg = `한국시간 ${s}에 나갑니다.` + (inQuiet(at) ? " 밤 9시부터 아침 8시 사이라 실제로는 그다음 아침 8시에 나갑니다." : "");
+    }
+    $("#pWhenNote").textContent = msg + " 받을 사람은 나가는 순간에 다시 셉니다.";
+  };
+
+  let seq = 0, timer = null;
+  const recount = () => {
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      const my = ++seq;
+      const t = $("#pTarget").value;
+      if (t === "users") {
+        const { ok, bad } = parseUserIds($("#pUsers").value);
+        $("#pErr").textContent = bad.length ? `회원 ID 형식이 아닌 값: ${bad.slice(0, 3).join(", ")}${bad.length > 3 ? " …" : ""}` : "";
+        if (!ok.length) { $("#pCount").textContent = "받을 사람: —"; $("#pPreview").textContent = ""; return; }
+      } else $("#pErr").textContent = "";
+      if (t === "filter" && !conds.length) {
+        $("#pCount").textContent = "받을 사람: — (조건을 하나 이상 넣으세요)";
+        $("#pPreview").textContent = "";
+        return;
+      }
+      $("#pCount").textContent = "받을 사람: 세는 중…";
+      try {
+        const r = await rpc("admin_push_preview", { p_target: t, p_target_arg: currentArg(), p_limit: 30 });
+        if (my !== seq) return;   // 더 늦게 보낸 요청의 답이 먼저 와 있으면 버린다
+        const langs = Object.entries(r.by_lang || {}).map(([k, n]) => `${LANG_NAMES[k] || k} ${fmt(n)}`).join(" · ");
+        const plats = Object.entries(r.by_platform || {}).map(([k, n]) => `${PLATFORM_NAMES[k] || k} ${fmt(n)}`).join(" · ");
+        $("#pCount").innerHTML = `받을 사람: <b>${fmt(r.people)}명</b> (기기 ${fmt(r.devices)}대)` +
+          (r.devices ? `<br>${esc(langs)}<br>${esc(plats)}` : "");
+        const names = (r.names || []).map((x) => esc(x.name || "(이름 없음)")).join(", ");
+        $("#pPreview").innerHTML = names ? `${names}${r.people > r.names.length ? ` 외 ${fmt(r.people - r.names.length)}명` : ""}` : "";
+        // 한국어가 아닌 사람이 섞여 있으면 문구가 한 벌이라는 것을 한 번 더 알린다.
+        const foreign = Object.entries(r.by_lang || {}).filter(([k]) => k !== "ko").reduce((a, [, n]) => a + n, 0);
+        if (foreign) $("#pPreview").innerHTML += `<div style="margin-top:4px">「주의」 한국어가 아닌 기기 ${fmt(foreign)}대에도 이 문구 그대로 갑니다. 언어별로 보내려면 「앱 언어」 조건을 넣어 따로 보내세요.</div>`;
+      } catch (e) {
+        if (my === seq) { $("#pCount").textContent = "받을 사람: 확인 실패"; $("#pPreview").textContent = e.message; }
+      }
+    }, 300);
+  };
+
+  const showTarget = () => {
+    const t = $("#pTarget").value;
+    $("#pUsersRow").style.display = t === "users" ? "" : "none";
+    $("#pFilterRow").style.display = t === "filter" ? "" : "none";
+  };
+  $("#pTarget").onchange = () => { showTarget(); recount(); };
+  $("#pUsers").oninput = recount;
+  $("#pWhen").oninput = whenNote;
+  $("#pAddCond").onclick = () => { conds.push({ t: "score" }); renderConds(); recount(); };
+  renderConds();
+  showTarget();
+  whenNote();
+  recount();
 
   dlg.showModal();
   $("#pCancel").onclick = () => dlg.close();
   $("#pOk").onclick = async () => {
     const title = $("#pTitle").value.trim(), body = $("#pBody").value.trim();
     if (!title || !body) { $("#pErr").textContent = "제목과 본문을 모두 입력하세요"; return; }
-    const target = $("#pTarget").value, arg = $("#pArg").value.trim();
-    if (target === "user" && !arg) { $("#pErr").textContent = "사용자 ID를 입력하세요"; return; }
-    // 되돌릴 수 없으니 한 번 더 묻는다. 몇 대에 가는지도 같이 보여준다.
-    if (!confirm(`${$("#pCount").textContent}\n\n"${title}"\n\n보낸 뒤에는 취소할 수 없습니다. 발송할까요?`)) return;
-    const at = (v) => (v ? new Date(v).toISOString() : null);
+    const t = $("#pTarget").value, arg = currentArg();
+    if (t === "users") {
+      const { ok, bad } = parseUserIds($("#pUsers").value);
+      if (bad.length) { $("#pErr").textContent = "회원 ID 형식이 아닌 값이 있습니다"; return; }
+      if (!ok.length) { $("#pErr").textContent = "보낼 회원 ID를 넣으세요"; return; }
+    }
+    if (t === "filter" && !conds.length) { $("#pErr").textContent = "조건을 하나 이상 넣으세요"; return; }
+    const at = kstInput($("#pWhen").value);
+    if (at && at < new Date(Date.now() - 10 * 60e3)) { $("#pErr").textContent = "예약 시각이 이미 지났습니다"; return; }
+    // 되돌릴 수 없으니 한 번 더 묻는다. 몇 명에게, 언제 가는지 같이 보여준다.
+    const when = $("#pWhenNote").textContent.split(" 받을 사람은")[0];
+    const verb = editId ? "이 예약을 고칠까요?" : at ? "예약할까요?" : "보낸 뒤에는 취소할 수 없습니다. 발송할까요?";
+    if (!confirm(`${$("#pCount").textContent.split("\n")[0]}\n${when}\n\n"${title}"\n\n${verb}`)) return;
+    $("#pOk").disabled = true;   // 두 번 눌러 두 번 나가는 일을 막는다
     try {
-      await rpc("admin_send_push", {
-        p_title: title, p_body: body, p_target: target,
-        p_target_arg: arg || null, p_scheduled_at: at($("#pWhen").value),
+      const common = {
+        p_title: title, p_body: body, p_target: t, p_target_arg: arg,
+        p_scheduled_at: at ? at.toISOString() : null,
         p_link: $("#pLink").value.trim() || null,
-      });
+      };
+      if (editId) await rpc("admin_update_push", { p_id: editId, ...common });
+      else await rpc("admin_send_push", common);
       dlg.close();
+      // 회원 목록에서 열었어도 결과를 볼 수 있게 발송 탭으로 옮긴다.
+      TAB = "push";
       refresh();
     } catch (e) { $("#pErr").textContent = e.message; }
+    finally { $("#pOk").disabled = false; }
   };
+}
+
+/** 체크한 회원에게 보낸다. 받을 수 없는 회원이 섞여 있으면 몇 명인지 먼저 알린다. */
+function pushSelected() {
+  const ids = [...SELECTED];
+  if (!ids.length) { alert("먼저 회원을 체크하세요"); return; }
+  const off = ids.filter((id) => !REACH[id]).length;
+  if (off && off === ids.length) {
+    alert(`체크한 ${ids.length}명 모두 지금은 푸시를 받을 수 없습니다.\n「푸시」 칸이 「받음」인 회원만 받습니다.`);
+    return;
+  }
+  if (off && !confirm(`체크한 ${ids.length}명 중 ${off}명은 푸시를 받을 수 없습니다(광고성 알림을 안 켰거나 기기 토큰이 없음).\n나머지 ${ids.length - off}명에게 보내는 창을 열까요?`)) return;
+  openPush({ target: "users", target_arg: ids.join(",") });
 }
 
 async function cancelPush(id) {
@@ -1950,6 +2242,7 @@ function playersTable() {
       <th style="text-align:right">결제</th>
       ${th("played", "마지막 플레이")}
       ${th("created", "가입일")}
+      <th title="광고성 정보 알림에 동의했고(2년 안) 기기 토큰이 서버에 있는 회원">푸시</th>
       <th>관리</th>
     </tr></thead><tbody>${list.map((p, i) => {
       const played = p.daily_date === today && (p.daily_score || 0) > 0;
@@ -1980,6 +2273,8 @@ function playersTable() {
             fmtDate(p.coins_at) === fmtDate(p.daily_date) ? fmtTime(p.coins_at)
                                                           : fmtDateTime(p.coins_at)}</div>` : ""}</td>
         <td class="muted">${fmtDateTime(p.created_at)}</td>
+        <td>${REACH[p.id] ? `<span class="pill today" title="동의 ${esc(fmtDate(REACH[p.id].consented_at))} · 기기 ${REACH[p.id].devices}대">받음</span>`
+                          : '<span class="muted" title="광고성 알림을 안 켰거나, 동의한 지 2년이 지났거나, 기기 토큰이 없습니다">—</span>'}</td>
         <td><div class="actions">
           <button class="ghost sm" data-act="name" data-id="${p.id}">닉네임</button>
           <button class="ghost sm" data-act="score" data-id="${p.id}">점수</button>
@@ -2261,6 +2556,7 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
         <span class="muted" style="font-size:12.5px">기준 ${today} (한국시간)</span>
         <div style="flex:1"></div>
         <button class="sm" id="grantAll">전체 보상 지급</button>
+        <button class="sm" id="pushSelected" title="체크한 회원에게 푸시 발송 창을 엽니다">선택 회원에게 푸시${SELECTED.size ? ` (${SELECTED.size})` : ""}</button>
         <button class="danger sm" id="delSelected">선택 삭제${SELECTED.size ? ` (${SELECTED.size})` : ""}</button>
         <button class="danger sm" id="resetAll">전체 점수 초기화</button>
         <button class="danger sm" id="resetAllGames">전체 게임 초기화</button>
@@ -2448,9 +2744,17 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     });
   }
   if ($("#newPush")) {
-    $("#newPush").onclick = openPush;
+    $("#newPush").onclick = () => openPush();
     document.querySelectorAll("[data-cancelpush]").forEach((b) => {
       b.onclick = () => cancelPush(Number(b.dataset.cancelpush));
+    });
+    const findPush = (id) => PUSHES.find((m) => String(m.id) === String(id));
+    document.querySelectorAll("[data-editpush]").forEach((b) => {
+      b.onclick = () => { const m = findPush(b.dataset.editpush); if (m) openPush(m, m.id); };
+    });
+    // 복제는 예약 시각을 비운다 — 지난 시각을 그대로 들고 오면 바로 막힌다.
+    document.querySelectorAll("[data-copypush]").forEach((b) => {
+      b.onclick = () => { const m = findPush(b.dataset.copypush); if (m) openPush({ ...m, scheduled_at: null }); };
     });
   }
 
@@ -2524,6 +2828,7 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     $("#cancelResets").onclick = cancelGameResets;
     $("#grantAll").onclick = () => openGrant(null);
     $("#delSelected").onclick = deleteSelected;
+    $("#pushSelected").onclick = pushSelected;
     bindPicks();
     bindRowActions();
   }
@@ -2531,13 +2836,19 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
 
 /** 체크박스 배선. 선택은 SELECTED에 모으고, 헤더 체크는 지금 화면에 보이는 것만 다룬다 —
  *  검색으로 걸러 놓고 전체 선택을 눌렀는데 안 보이는 사람까지 잡히면 사고가 난다. */
+function updatePickButtons() {
+  const n = SELECTED.size ? ` (${SELECTED.size})` : "";
+  if ($("#delSelected")) $("#delSelected").textContent = `선택 삭제${n}`;
+  if ($("#pushSelected")) $("#pushSelected").textContent = `선택 회원에게 푸시${n}`;
+}
+
 function bindPicks() {
   const boxes = [...document.querySelectorAll("[data-pick]")];
   boxes.forEach((b) => {
     b.onchange = () => {
       if (b.checked) SELECTED.add(b.dataset.pick);
       else SELECTED.delete(b.dataset.pick);
-      $("#delSelected").textContent = `선택 삭제${SELECTED.size ? ` (${SELECTED.size})` : ""}`;
+      updatePickButtons();
       const all = $("#pickAll");
       if (all) all.checked = boxes.length > 0 && boxes.every((x) => x.checked);
     };
@@ -2551,7 +2862,7 @@ function bindPicks() {
         if (all.checked) SELECTED.add(b.dataset.pick);
         else SELECTED.delete(b.dataset.pick);
       });
-      $("#delSelected").textContent = `선택 삭제${SELECTED.size ? ` (${SELECTED.size})` : ""}`;
+      updatePickButtons();
     };
   }
 }
@@ -2584,6 +2895,7 @@ async function boot() {
   const nerr = TAB === "notices" ? await loadNotices() : null;
   const perr2 = TAB === "purchases" ? await loadPurchases() : null;
   if (TAB === "players") await loadPayTotals();
+  if (TAB === "players") await loadReach();
   if (TAB === "rewards" || TAB === "players") {
     await loadRewards().catch(() => {});
     await loadBatches().catch(() => {});
