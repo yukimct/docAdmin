@@ -1093,6 +1093,9 @@ let RANKING = [], RANK_STATS = [], RANK_TOTAL = 0;
 /** 빈 문자열이면 **한국시간 오늘**이다(서버가 정한다). */
 let RANK_DATE = "", RANK_PAGE = 0;
 const RANK_SIZE = 50;
+/** 날짜별 기록이 **언제부터** 있나(080). 빈 문자열이면 아직 모른다 —
+ *  서버가 080 전이거나 조회가 실패한 경우다. */
+let RANK_SINCE = "";
 /** 수상자 표를 며칠치 볼지. 예전에는 14일 고정이었다. */
 let WINNER_DAYS = 14;
 /** 062 — 「장난」 전체 스위치. 키가 없는 서버에서는 켜진 것으로 본다(서버와 같은 규칙). */
@@ -1159,7 +1162,10 @@ function rankingTab(err) {
             : r.claimed ? '<span class="muted">받아 감</span>'
                         : '<span class="pill heart">소멸/대기</span>'}</td>
       </tr>`).join("")}</tbody></table></div>`
-    : `<div class="empty">그날 점수를 낸 사람이 없습니다</div>`;
+    : (RANK_SINCE && day < RANK_SINCE)
+      ? `<div class="empty">${day}은 <b>기록 시작 전</b>입니다 —
+         날짜별 기록은 ${RANK_SINCE}부터 쌓입니다</div>`
+      : `<div class="empty">그날 점수를 낸 사람이 없습니다</div>`;
 
   // 50명씩 끊어 받는다. 전체 수를 알고 있으므로 몇 쪽인지 바로 쓸 수 있다.
   const pages = Math.max(1, Math.ceil(RANK_TOTAL / RANK_SIZE));
@@ -1176,11 +1182,17 @@ function rankingTab(err) {
       회원 목록과 모집단이 다릅니다(그쪽은 점수가 0인 사람도 들어 있습니다).
       <br>앱은 이 중 <b>100명까지</b> 보여 줍니다. 그보다 아래는 앱에서
       「내 순위 N위」 줄로만 알 수 있습니다.
-      <br><b>어제 이전 날짜는 참고용입니다</b> — profiles의 오늘 점수는 그 사람이
-      다시 접속하면 덮이므로, 지난 날짜일수록 빠진 사람이 생깁니다.
+      <br><b>지난 날짜도 정확합니다</b>(080부터). 점수를 올릴 때 날짜별로 한 줄씩
+      따로 남기므로, 그 사람이 다시 접속해도 지난 날짜의 줄은 그대로 있습니다.
+      ${RANK_SINCE
+        ? `기록은 <b>${RANK_SINCE}</b>부터 있습니다. 그 전 날짜는 1~10등만
+           「운영 → 서버 상태」의 수상자 표에 남아 있습니다.`
+        : `<b>서버에 080이 아직 안 올라갔습니다.</b> 지금 보이는 지난 날짜는
+           다시 접속하지 않은 사람만 남은 수라 참고용입니다.`}
     </div>
     <div class="toolbar">
-      <input type="date" id="rankDate" value="${day}" max="${today}">
+      <input type="date" id="rankDate" value="${day}" max="${today}"
+             ${RANK_SINCE ? `min="${RANK_SINCE}"` : ""}>
       <button class="sm" id="rankToday">오늘</button>
       <div style="flex:1"></div>
       <span class="muted">기준 ${day} (한국시간)</span>
@@ -1211,8 +1223,15 @@ async function loadRanking() {
     }) || [];
     RANK_TOTAL = RANKING.length ? Number(RANKING[0].total_count) || 0 : 0;
     RANK_STATS = await rpc("admin_daily_ranking_stats", { p_days: 14 }) || [];
+    // 080 전 서버에는 이 함수가 없다. 화면이 죽지 않게 조용히 빈 값으로 둔다 —
+    // 관리자 페이지는 서버보다 먼저 배포될 수 있다(loadServer와 같은 태도).
+    const since = await rpc("admin_daily_ranking_since").catch(() => null);
+    RANK_SINCE = since ? String(since).slice(0, 10) : "";
     return null;
-  } catch (e) { RANKING = []; RANK_STATS = []; RANK_TOTAL = 0; return e; }
+  } catch (e) {
+    RANKING = []; RANK_STATS = []; RANK_TOTAL = 0; RANK_SINCE = "";
+    return e;
+  }
 }
 
 /** 052·054가 있어야 채워진다. 없는 서버에서는 조용히 빈 값으로 두고 안내만 띄운다 —
@@ -1302,7 +1321,7 @@ function serverTab(err) {
       앱이 올린 잔액과 <b>events로 계산한 잔액</b>을 맞대어 봅니다. 차이가 크게 양수면
       이벤트 없이 코인이 생긴 것입니다. <b>막지는 않습니다</b> — 오프라인에서 쓰고 늦게
       올라오거나 기기 이전 직후에도 차이가 날 수 있어, 판단은 사람이 합니다.
-      events는 90일만 보관하므로 <b>가입이 오래된 계정일수록 차이가 크게 나옵니다.</b>
+      events는 30일만 보관하므로 <b>가입이 오래된 계정일수록 차이가 크게 나옵니다.</b>
     </div>
     ${audit}
 
