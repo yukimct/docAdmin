@@ -404,7 +404,7 @@
   <input type="text" id="pTitle" placeholder="예: 주말 이벤트가 열렸어요">
   <label>본문</label>
   <textarea id="pBody" rows="3" placeholder="알림에 그대로 보입니다"></textarea>
-  <div class="row">
+  <div class="row wide">
     <div><label>대상</label>
       <select id="pTarget">
         <option value="all">동의한 전체</option>
@@ -415,15 +415,22 @@
     <div><label>예약 (비우면 지금)</label><input type="datetime-local" id="pWhen"></div>
   </div>
   <div class="muted" id="pWhenNote" style="font-size:12.5px"></div>
-  <div id="pUsersRow" style="display:none"><label>회원 ID (쉼표·줄바꿈으로 여러 명)</label>
-    <textarea id="pUsers" rows="3" placeholder="profiles.id — 회원 목록에서 체크하고 「선택 회원에게 푸시」를 누르면 채워집니다"></textarea></div>
+  <div id="pUsersRow" style="display:none">
+    <label>보낼 회원 — 닉네임, ID 앞부분, 점수(누적·오늘), 누적 점수 범위(예: 10000~20000)로 찾습니다</label>
+    <input type="text" id="pFind" placeholder="찾을 말을 넣거나 회원 ID를 붙여 넣으세요" autocomplete="off">
+    <div id="pFound" style="max-height:180px;overflow:auto;margin-top:6px"></div>
+    <div id="pPicked" style="margin-top:8px"></div>
+  </div>
   <div id="pFilterRow" style="display:none">
     <label>조건 — 여러 개면 <b>전부 맞는 사람</b>에게 갑니다</label>
     <div id="pConds"></div>
     <button class="ghost sm" id="pAddCond" type="button">조건 추가</button>
   </div>
-  <label>눌렀을 때 열 곳 (선택)</label>
-  <input type="text" id="pLink" placeholder="예: /vs/123456 — 비우면 앱의 설정 화면(수신거부)이 열립니다">
+  <label>눌렀을 때 열 곳</label>
+  <div class="row wide">
+    <div><select id="pLinkSel"></select></div>
+    <div id="pLinkCodeRow" style="display:none"><input type="text" id="pLinkCode" placeholder="방 코드 6자리" inputmode="numeric"></div>
+  </div>
   <div class="muted" id="pCount" style="font-size:12.5px;margin-top:10px">받을 사람: —</div>
   <div class="muted" id="pPreview" style="font-size:12px;max-height:96px;overflow:auto"></div>
   <div class="err" id="pErr"></div>
