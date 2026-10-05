@@ -17,6 +17,8 @@ let VS_ROOMS = [];
 let MATCH = null, REPORTS = [];
 /** 경제 건강 요약 한 줄과 오늘 코인 이상 획득 계정. */
 let ECON = null, ANOMALIES = [];
+// 상단 카드 숫자. 서버가 센다(092). 회원 목록(50명 한 쪽)으로 세면 50명을 넘을 때 틀렸다.
+let SUMMARY = null;
 /** 앱 설정값 전체 (key → value). 업데이트 관문·기능 스위치가 여기 들어 있다. */
 let CONFIG = {};
 /** 회원 id → {orders, revenue, currency}. 회원 목록 옆에 붙여 쓴다. */
@@ -712,7 +714,8 @@ async function resetAllScores() {
 async function resetAllGames() {
   // 테스트 중 "모든 계정을 처음 상태로" 돌릴 때 쓴다. 되돌릴 수 없는 작업이라
   // 인원수를 먼저 보여주고, 정해진 문구를 직접 입력하게 해서 오조작을 막는다.
-  const n = PLAYERS.length;
+  // 전체 인원은 서버 집계로(회원 목록은 50명 한 쪽뿐이다).
+  const n = SUMMARY?.members ?? PLAYERS.length;
   const typed = window.prompt(
     `전체 ${n}명의 게임 진행(레벨·코인·아이템)을 초기화합니다.\n\n` +
     `표시만 남기고, 각자 앱을 켜거나 앱으로 돌아올 때 앱이 스스로 초기화합니다.\n` +
@@ -730,7 +733,8 @@ async function resetAllGames() {
 
 async function cancelGameResets() {
   // 잘못 눌렀을 때, 아직 앱을 켜지 않은 사람들만이라도 살리는 유일한 방법.
-  const waiting = PLAYERS.filter((p) => p.reset_requested_at).length;
+  // 대기 건수는 서버 집계로(회원 목록은 50명 한 쪽뿐이라 다른 쪽 사람이 안 세졌다).
+  const waiting = SUMMARY?.reset_waiting ?? PLAYERS.filter((p) => p.reset_requested_at).length;
   if (waiting === 0) { alert("걸려 있는 초기화 요청이 없습니다"); return; }
   if (!confirm(`아직 반영되지 않은 초기화 요청 ${waiting}건을 취소합니다.\n\n` +
     `이미 앱을 켜서 초기화된 사람은 되돌릴 수 없습니다.`)) return;
@@ -826,7 +830,7 @@ function openGrant(id) {
   $("#grantTitle").textContent = id ? "보상 지급" : "전체 보상 지급";
   $("#grantWho").textContent = id
     ? `${p.username} 에게 지급합니다. 앱 접속 시 자동으로 받아갑니다.`
-    : `전체 회원 ${PLAYERS.length}명에게 지급합니다. 각자 앱을 켤 때 받아갑니다.`;
+    : `전체 회원 ${SUMMARY?.members ?? PLAYERS.length}명에게 지급합니다. 각자 앱을 켤 때 받아갑니다.`;
   $("#gErr").textContent = "";
   ["#gCoins", "#gHints", "#gAutos"].forEach((s) => ($(s).value = 0));
   $("#gMemo").value = "";
@@ -2747,8 +2751,15 @@ function rewardsTable() {
 // ------------------------------------------------------------------ 화면
 function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, cfgErr, serverErr, pushErr, rkErr) {
   const today = kstToday();
+  // 카드 숫자는 서버 집계(092). 못 받았으면 지금 가진 회원 목록으로 센다(예전 방식, 50명까지만 맞다).
   const active = PLAYERS.filter((p) => p.daily_date === today && (p.daily_score || 0) > 0);
-  const totals = PLAYERS.map((p) => p.total_score || 0);
+  const S = SUMMARY || {
+    members: PLAYERS.length, today_players: active.length,
+    today_best: Math.max(0, ...active.map((p) => p.daily_score || 0)),
+    total_best: Math.max(0, ...PLAYERS.map((p) => p.total_score || 0)),
+    supporters: PLAYERS.filter((p) => p.supporter).length,
+    unclaimed_rewards: REWARDS.filter((r) => !r.claimed_at).length,
+  };
 
   $("#app").innerHTML = `
     <div class="head">
@@ -2762,12 +2773,12 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     </div>
     ${warn ? `<div class="notice">${esc(warn)}</div>` : ""}
     <div class="cards">
-      <div class="card"><div class="label">전체 회원</div><div class="value">${fmt(PLAYERS.length)}</div></div>
-      <div class="card"><div class="label">오늘 플레이</div><div class="value">${fmt(active.length)}</div></div>
-      <div class="card"><div class="label">오늘 최고점</div><div class="value">${fmt(Math.max(0, ...active.map((p) => p.daily_score || 0)))}</div></div>
-      <div class="card"><div class="label">누적 최고점</div><div class="value">${fmt(Math.max(0, ...totals))}</div></div>
-      <div class="card"><div class="label">응원해 주신 분</div><div class="value">${fmt(PLAYERS.filter((p) => p.supporter).length)}</div></div>
-      <div class="card"><div class="label">미수령 보상</div><div class="value">${fmt(REWARDS.filter((r) => !r.claimed_at).length)}</div></div>
+      <div class="card"><div class="label">전체 회원</div><div class="value">${fmt(S.members)}</div></div>
+      <div class="card"><div class="label">오늘 플레이</div><div class="value">${fmt(S.today_players)}</div></div>
+      <div class="card"><div class="label">오늘 최고점</div><div class="value">${fmt(S.today_best)}</div></div>
+      <div class="card"><div class="label">누적 최고점</div><div class="value">${fmt(S.total_best)}</div></div>
+      <div class="card"><div class="label">응원해 주신 분</div><div class="value">${fmt(S.supporters)}</div></div>
+      <div class="card"><div class="label">미수령 보상</div><div class="value">${fmt(S.unclaimed_rewards)}</div></div>
     </div>
 
     ${TAB === "players" ? `
@@ -3121,16 +3132,29 @@ function bindRowActions() {
 // **await를 빠뜨리면 안 된다.** act(fn, refresh)가 `await done?.()`로 이걸 기다리는데,
 // boot()를 안 기다리면 화면을 다시 그리기도 전에 호출한 쪽이 이어서 돈다. 토글에서
 // 그 틈에 옛 값을 되써서 "켰는데 다시 꺼지는" 것처럼 보였다.
-async function refresh() { await boot(); }
+// **겹쳐 돌지 않게 한다.** 새로고침을 두 번 누르거나 탭을 연달아 바꾸면 boot가 겹쳐 요청이 전부 두 벌 나갔다
+// (2026-10-05 조사). 도는 중에 또 부르면 끝난 뒤 한 번만 더 돈다.
+let BOOTING = null, BOOT_AGAIN = false;
+async function refresh() {
+  if (BOOTING) { BOOT_AGAIN = true; return BOOTING; }
+  BOOTING = (async () => { do { BOOT_AGAIN = false; await boot(); } while (BOOT_AGAIN); })();
+  try { await BOOTING; } finally { BOOTING = null; }
+}
 
 async function boot() {
   const { data: { session } } = await sb.auth.getSession();
   if (!session) return renderLogin();
   EMAIL = session.user.email || "";
 
-  const perr = await loadPlayers();
-  await loadConfig().catch(() => {});   // 문턱·점검 예약이 여기서 온다
-  await loadAnomalies();
+  // **탭이 쓰는 것만 부른다**(요청 줄이기, 2026-10-05). 예전에는 어느 탭이든 회원 목록·설정·코인 급증을 다 불렀다.
+  // 상단 카드는 서버 집계 하나(092)로 센다.
+  let sumErr = null;
+  SUMMARY = await rpc("admin_summary").catch((e) => { sumErr = e; return null; });
+  const needsPlayers = ["players", "rewards"].includes(TAB);
+  const perr = needsPlayers ? await loadPlayers() : null;
+  // 문턱·점검 예약이 여기서 온다. 업데이트 탭은 실패를 보여 줘야 해서 오류를 받아 둔다.
+  const cfgLoadErr = await loadConfig().then(() => null).catch((e) => e);
+  if (TAB === "anomaly") await loadAnomalies();
   const eerr = TAB === "events" ? await loadEvents() : null;
   const serr = TAB === "charts" ? await loadStats() : null;
   const nerr = TAB === "notices" ? await loadNotices() : null;
@@ -3150,7 +3174,7 @@ async function boot() {
     VS_EVENTS = (await sb.from("versus_events").select("*").order("category").order("code")
       .then((r) => r.data).catch(() => null)) || [];
   }
-  const cfgerr = TAB === "update" ? await loadConfig().then(() => null).catch((e) => e) : null;
+  const cfgerr = TAB === "update" ? cfgLoadErr : null;
   const sverr = TAB === "server" ? await loadServer() : null;
   const rkerr = TAB === "ranking" ? await loadRanking() : null;
   const pusherr = TAB === "push" ? await loadPush() : null;
@@ -3159,7 +3183,9 @@ async function boot() {
 
   let warn = "";
   if (perr) warn = "회원 조회 실패: " + perr.message;
-  else if (!PLAYERS.length) {
+  else if (sumErr) warn = "요약 조회 실패: " + sumErr.message + " (092_admin_summary.sql을 실행했는지 확인하세요)";
+  else if (!SUMMARY) {
+    // 관리자가 아니면 서버가 null을 돌려준다.
     warn = "조회 결과가 비어 있습니다. 이 계정이 admins 테이블에 등록됐는지 확인하세요 " +
            "(supabase_admin_access.sql 4번 항목).";
   }
