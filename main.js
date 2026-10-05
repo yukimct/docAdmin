@@ -1912,6 +1912,9 @@ const ALERT_ROWS = [
   ["stale_rooms", "방치된 대전 방", "versus"],
 ];
 
+/** 종 메뉴가 열려 있는지. 다시 그려도(확인을 눌러도) 열린 채로 둔다. */
+let BELL_OPEN = false;
+
 /** 아직 확인 안 한 것만. 개수가 0인 항목은 애초에 알릴 게 없다. */
 function pendingAlerts() {
   if (!ALERTS) return [];
@@ -1944,12 +1947,46 @@ function alertBell() {
   // 종은 "무엇이 몇 건"까지만 말한다. 자세히 보려면 한 페이지에 모아 둔 곳으로 보낸다.
   const more = `<div class="line" style="border-top:1px solid var(--line);margin-top:4px">
       <button class="go" data-tab="anomaly">이상 징후 모두 보기</button></div>`;
-  return `<div class="bell" tabindex="0">
+  return `<div class="bell${BELL_OPEN ? " open" : ""}">
     <button class="top" title="봐야 할 것">🔔${total
       ? `<span class="pill heart" style="margin-left:4px">${fmt(total)}</span>` : ""}</button>
     <div class="menu">${list}${more}</div>
   </div>`;
 }
+
+/**
+ * 종 묶기. 「확인」은 **종만 그 자리에서** 다시 그리고 메뉴를 연 채로 둔다. 화면 전체를 다시 그리면
+ * 메뉴가 사라지는 순간 휴대폰이 손가락 아래 새 버튼(뒤의 카드·탭)에 누름을 한 번 더 보냈다.
+ */
+function bindBell() {
+  const bell = document.querySelector(".bell");
+  if (!bell) return;
+  bell.querySelector(".top").onclick = (e) => {
+    e.stopPropagation();
+    BELL_OPEN = !BELL_OPEN;
+    bell.classList.toggle("open", BELL_OPEN);
+  };
+  bell.querySelectorAll("[data-seen]").forEach((b) => {
+    b.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      markSeen(b.dataset.seen, Number(b.dataset.seenN));
+      BELL_OPEN = true;
+      bell.outerHTML = alertBell();
+      bindBell();
+    };
+  });
+  bell.querySelectorAll("[data-tab]").forEach((b) => {
+    b.onclick = (e) => { e.stopPropagation(); BELL_OPEN = false; TAB = b.dataset.tab; refresh(); };
+  });
+}
+
+// 종 바깥을 누르면 닫는다. 한 번만 단다.
+document.addEventListener("click", (e) => {
+  if (!BELL_OPEN || e.target.closest(".bell")) return;
+  BELL_OPEN = false;
+  document.querySelector(".bell")?.classList.remove("open");
+});
 
 function navBar() {
   return `<nav class="nav">${NAV.map((g) => {
@@ -2102,6 +2139,14 @@ function versusSetupTab() {
     ${EV_ON ? "" : `<div class="notice">전체가 꺼져 있어 아래 개별 설정은 지금 효과가 없습니다.
         다시 켜면 이 상태 그대로 돌아옵니다.</div>`}
     ${versusEventsTable()}`;
+}
+
+/** 이상 징후 탭의 나머지 셋. 잔액 대조는 서버 상태 탭, 신고·방치된 방은 같이하기 탭에서만 받아 와서
+ *  그 탭을 먼저 안 열면 카드가 0이었다. 종은 서버 개수(admin_alerts)를 보니 둘이 어긋났다(2026-10-05 제보). */
+async function loadAnomalyExtras() {
+  COIN_AUDIT = await rpc("admin_coin_audit", { p_min_gap: 2000, p_limit: 100 }).catch(() => []) || [];
+  MATCH = (await rpc("admin_matching_stats").catch(() => []))[0] || null;
+  REPORTS = await rpc("admin_reports", { p_limit: 100 }).catch(() => []) || [];
 }
 
 /**
@@ -2827,14 +2872,7 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     ${TAB === "server" ? serverTab(serverErr) : ""}`;
 
   $("#refresh").onclick = refresh;
-  // 알림 "확인" — 지금 개수를 적어 두고 종만 다시 그린다. 서버는 건드리지 않는다.
-  document.querySelectorAll("[data-seen]").forEach((b) => {
-    b.onclick = (e) => {
-      e.stopPropagation();
-      markSeen(b.dataset.seen, Number(b.dataset.seenN));
-      render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, cfgErr, serverErr, pushErr);
-    };
-  });
+  bindBell();
   const orphan = $("#cleanupOrphans");
   if (orphan) orphan.onclick = async () => {
     if (!confirm("프로필 없이 24시간 넘게 남아 있는 익명 계정을 지웁니다.\n\n되돌릴 수 없습니다.")) return;
@@ -2845,7 +2883,7 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
   };
   $("#logout").onclick = async () => { await sb.auth.signOut(); renderLogin(); };
   document.querySelectorAll("[data-tab]").forEach((b) => {
-    b.onclick = () => { TAB = b.dataset.tab; refresh(); };
+    b.onclick = () => { BELL_OPEN = false; TAB = b.dataset.tab; refresh(); };
   });
 
   if (TAB === "versusset") {
@@ -3161,7 +3199,7 @@ async function boot() {
   const perr = needsPlayers ? await loadPlayers() : null;
   // 문턱·점검 예약이 여기서 온다. 업데이트 탭은 실패를 보여 줘야 해서 오류를 받아 둔다.
   const cfgLoadErr = await loadConfig().then(() => null).catch((e) => e);
-  if (TAB === "anomaly") await loadAnomalies();
+  if (TAB === "anomaly") { await loadAnomalies(); await loadAnomalyExtras(); }
   const eerr = TAB === "events" ? await loadEvents() : null;
   const serr = TAB === "charts" ? await loadStats() : null;
   const nerr = TAB === "notices" ? await loadNotices() : null;
