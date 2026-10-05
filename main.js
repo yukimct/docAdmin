@@ -1190,6 +1190,13 @@ function openPush(prefill = null, editId = null) {
       summary = `받을 사람: ${fmt(r.people)}명, 기기 ${fmt(r.devices)}대`;
       $("#pCount").innerHTML = `받을 사람: <b>${fmt(r.people)}명</b> (기기 ${fmt(r.devices)}대)` +
         (r.devices ? `<br>${esc(langs)}<br>${esc(plats)}` : "");
+      // 이름을 모르던 고른 회원(복제·고치기로 연 창)은 미리보기가 준 이름으로 채운다. 요청이 더 들지 않는다.
+      let filled = false;
+      for (const x of r.names || []) {
+        const id = String(x.id);
+        if (picked.has(id) && !picked.get(id) && x.name) { picked.set(id, x.name); filled = true; }
+      }
+      if (filled) renderPicked();
       const names = (r.names || []).map((x) => esc(x.name || "(이름 없음)")).join(", ");
       $("#pPreview").innerHTML = names ? `${names}${r.people > r.names.length ? ` 외 ${fmt(r.people - r.names.length)}명` : ""}` : "";
       // 한국어가 아닌 사람이 섞여 있으면 문구가 한 벌이라는 것을 한 번 더 알린다.
