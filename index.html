@@ -334,6 +334,9 @@
         padding:var(--pad-x);box-shadow:var(--shadow)}
   .bar-row{display:flex;align-items:center;gap:10px;margin-bottom:9px}
   .bar-row:last-child{margin-bottom:0}
+  /* 누르면 그 회원들을 회원 목록에서 본다(098). */
+  .bar-row.clickable{cursor:pointer;border-radius:6px}
+  .bar-row.clickable:hover{background:var(--surface)}
   .bar-label{flex:0 0 clamp(46px, 9vw, 78px);color:var(--dim);
              font-size:var(--fs-sm);text-align:right}
   .bar-track{flex:1;height:clamp(11px,1.4vw,15px);background:#eef1f4;

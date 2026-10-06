@@ -30,6 +30,11 @@ let SORT = "total", QUERY = "", EMAIL = "";
 /** 회원 목록도 끊어 받는다(079). **찾기는 서버가 한다** — 브라우저에서 거르면
  *  지금 쪽 안에서만 찾게 되어, 3쪽에 있는 사람이 「없다」고 나온다. */
 let PLAYER_PAGE = 0, PLAYER_TOTAL = 0;
+/** 차트 막대를 눌러 넘어온 조건(098). { label, arg } — arg는 서버가 준 값을 그대로 admin_players_ranked의 p_filter로 넘긴다.
+ *  찾기(QUERY)와 같이 걸린다. 회원 목록 위의 「조건 해제」로 푼다. */
+let PLAYER_FILTER = null;
+/** 「코인을 어디에 썼나」와 그 막대에서 넘어간 회원 목록이 같은 기간을 본다. */
+const SINK_DAYS = 30;
 /** 찾기 요청을 미루는 타이머. 타자마다 서버를 두드리지 않기 위해서다. */
 let QUERY_TIMER = null;
 const PLAYER_SIZE = 50;
@@ -40,7 +45,7 @@ const defaultDesc = (key) => key !== "username";
 /** 표 머리글 → 정렬 기준. 여기 없는 칸(결제)은 눌러도 안 세운다 —
  *  PAY_TOTALS는 브라우저에서 합친 값이라 서버가 그걸로 못 세운다. */
 const SORT_BY_COL = {
-  username: "username", total: "total", daily: "daily", coins: "coins",
+  username: "username", level: "level", total: "total", daily: "daily", coins: "coins",
   vs: "vs_wins", coop: "coop_wins", played: "played", created: "created",
 };
 /** 다중 삭제용 선택 목록. 검색어를 바꿔도 선택은 유지된다 — 여러 번 걸러 가며
@@ -101,7 +106,7 @@ async function loadAnomalies() {
  * 아직 없으면 예전처럼 profiles를 읽어 최소한 목록은 보이게 한다.
  */
 async function loadPlayers() {
-  const serverSorts = ["total", "daily", "coins", "vs_wins", "coop_wins",
+  const serverSorts = ["total", "level", "daily", "coins", "vs_wins", "coop_wins",
                        "created", "username", "played"];
   if (serverSorts.includes(SORT)) {
     // ⚠️ **방향·찾기·끊어 받기를 모두 서버가 한다**(075·079). 한 쪽만 받아 와서
@@ -110,6 +115,7 @@ async function loadPlayers() {
       p_sort: SORT, p_limit: PLAYER_SIZE, p_desc: DESC,
       p_offset: PLAYER_PAGE * PLAYER_SIZE,
       p_query: QUERY.trim() || null,
+      p_filter: PLAYER_FILTER ? PLAYER_FILTER.arg : null,
     }).catch(() => null);
     if (rows) {
       PLAYERS = rows;
@@ -167,7 +173,7 @@ async function loadStats() {
     ECON = (await rpc("admin_economy_health", { p_days: 30 }).catch(() => []))[0] || null;
     // 코인 소모처는 **구매 탭에 있었다.** 구매는 실제 결제(IAP) 이야기고 코인 소모는
     // 게임 안 경제라 주제가 다르다. 경제를 한자리에 모으려고 이쪽으로 옮겼다.
-    COIN_SINKS = await rpc("admin_coin_sinks", { p_days: 30 }).catch(() => []) || [];
+    COIN_SINKS = await rpc("admin_coin_sinks", { p_days: SINK_DAYS }).catch(() => []) || [];
     return null;
   } catch (e) { STATS = []; BUCKETS = []; FUNNEL = []; DAILY_BUCKETS = []; RETENTION = []; return e; }
 }
@@ -319,8 +325,12 @@ function lineChart(labels, series, height = 160) {
 /** 가로 막대 — 구간별 인원처럼 항목이 몇 개 안 될 때. */
 function barChart(rows) {
   const max = Math.max(1, ...rows.map((r) => r.players));
+  // filter가 있는 줄은 누르면 그 회원들을 회원 목록에서 본다(098). 조건 값은 서버가 준 것을 그대로 싣는다.
+  const pick = (r) => r.filter ? ` clickable" data-chartfilter="${esc(JSON.stringify(r.filter))}"`
+    + ` data-chartlabel="${esc(r.filterLabel || r.bucket)}" data-chartsort="${esc(r.sort || "")}"`
+    + ` title="누르면 이 회원들을 회원 목록에서 봅니다` : "";
   return `<div class="bars">${rows.map((r) => `
-    <div class="bar-row">
+    <div class="bar-row${pick(r)}">
       <span class="bar-label">${esc(r.bucket)}</span>
       <span class="bar-track"><span class="bar-fill" style="width:${(r.players / max) * 100}%"></span></span>
       <span class="bar-value">${fmt(r.players)}</span>
@@ -416,7 +426,11 @@ function chartsTab(err) {
     ])}
     <h3 class="sub">코인을 어디에 썼나</h3>
     ${COIN_SINKS.length
-      ? barChart(COIN_SINKS.map((r) => ({ bucket: r.sink, players: Number(r.spent) })))
+      ? barChart(COIN_SINKS.map((r) => ({
+          bucket: r.sink, players: Number(r.spent),
+          filter: r.sink_key ? { sink: r.sink_key, days: SINK_DAYS } : null,
+          filterLabel: `최근 ${SINK_DAYS}일 「${r.sink}」에 코인을 쓴 회원`,
+        })))
       : `<div class="empty">아직 소모 기록이 없습니다</div>`}
 
     <h2>진행</h2>
@@ -424,15 +438,32 @@ function chartsTab(err) {
     <div class="muted" style="margin-bottom:6px">그 레벨까지 온 사람 수입니다. 오늘 깬 판까지 셉니다.</div>
     ${FUNNEL.length
       // 선 그래프는 아래 눈금을 날짜로 보고 앞 다섯 글자를 잘라서, 레벨 숫자가 하나도 안 보였다. 막대로 바꿨다.
-      ? barChart(FUNNEL.map((r) => ({ bucket: `레벨 ${fmt(r.level)}`, players: Number(r.players) })))
+      ? barChart(FUNNEL.map((r) => ({
+          bucket: `레벨 ${fmt(r.level)}`, players: Number(r.players),
+          filter: { level_min: Number(r.level) }, filterLabel: `레벨 ${fmt(r.level)}까지 온 회원`, sort: "level",
+        })))
       : `<div class="empty">레벨 클리어 기록이 아직 없습니다</div>`}
     <h3 class="sub">누적 점수 분포</h3>
-    ${BUCKETS.length ? barChart(BUCKETS.map((r) => ({ bucket: r.bucket, players: Number(r.players) })))
+    ${BUCKETS.length ? barChart(scoreRows(BUCKETS, "total", "누적 점수"))
                      : `<div class="empty">데이터 없음</div>`}
     <h3 class="sub">일일 점수 분포 — 오늘(한국시간)</h3>
     <div class="muted" style="margin-bottom:6px">오늘 점수를 낸 사람만 셉니다. 0점인 날은 기록이 없습니다.</div>
-    ${DAILY_BUCKETS.length ? barChart(DAILY_BUCKETS.map((r) => ({ bucket: r.bucket, players: Number(r.players) })))
-                           : `<div class="empty">데이터 없음</div>`}`;
+    ${DAILY_BUCKETS.some((r) => Number(r.players) > 0) ? barChart(scoreRows(DAILY_BUCKETS, "daily", "오늘 점수"))
+                           : `<div class="empty">오늘 점수를 낸 회원이 아직 없습니다</div>`}`;
+}
+
+/** 점수 분포 막대. 0명인 구간은 숨기고(사용자 요청), 누르면 그 구간 회원을 본다.
+ *  구간 범위(lo·hi)는 서버가 준다(098) — 여기서 숫자를 다시 적으면 서버와 갈라진다. */
+function scoreRows(rows, kind, name) {
+  return rows.filter((r) => Number(r.players) > 0).map((r) => {
+    const lo = Number(r.lo), hi = r.hi == null ? null : Number(r.hi);
+    const range = hi == null ? `${fmt(lo)} 이상` : lo === 0 && hi === 1 ? "0점" : `${fmt(lo)} ~ ${fmt(hi - 1)}`;
+    return {
+      bucket: r.bucket, players: Number(r.players),
+      filter: kind === "total" ? { total_lo: lo, total_hi: hi } : { daily_lo: lo, daily_hi: hi },
+      filterLabel: `${name} ${range}`, sort: kind,
+    };
+  });
 }
 
 function retentionTable() {
@@ -2539,6 +2570,7 @@ function playersTable() {
       <th style="width:34px"><input type="checkbox" id="pickAll"></th>
       <th>#</th>
       ${th("username", "닉네임")}
+      ${th("level", "레벨", "right")}
       ${th("total", "누적", "right")}
       ${th("daily", "오늘", "right")}
       ${th("coins", "코인", "right")}
@@ -2558,6 +2590,7 @@ function playersTable() {
           ${p.supporter ? '<span class="pill heart">응원</span>' : ""}
           ${played ? '<span class="pill today">오늘</span>' : ""}
           ${p.reset_requested_at ? '<span class="pill heart">초기화 대기</span>' : ""}</td>
+        <td class="num">${p.max_level == null ? '<span class="muted">—</span>' : fmt(p.max_level)}</td>
         <td class="num">${fmt(p.total_score)}</td>
         <td class="num">${played ? fmt(p.daily_score) : '<span class="muted">—</span>'}</td>
         <td class="num">${p.coins == null ? '<span class="muted">—</span>' : fmt(p.coins)}</td>
@@ -2855,8 +2888,11 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     ${TAB === "players" ? `
       <div class="toolbar">
         <input type="search" id="q" placeholder="닉네임 또는 id 검색" value="${esc(QUERY)}">
+        ${PLAYER_FILTER ? `<span class="pill today" title="차트에서 누른 조건입니다">${esc(PLAYER_FILTER.label)}</span>
+          <button class="ghost sm" id="clearFilter">조건 해제</button>` : ""}
         <select id="sort">
           <option value="total">누적 점수순</option>
+          <option value="level">레벨 높은순</option>
           <option value="daily">오늘 점수순</option>
           <option value="coins">코인 많은순</option>
           <option value="vs_wins">대전 승수순</option>
@@ -2901,6 +2937,17 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     }, refresh);
   };
   $("#logout").onclick = async () => { await sb.auth.signOut(); renderLogin(); };
+  // 차트 막대를 누르면 그 회원들을 회원 목록에서 본다(098). 찾기는 비우고 첫 쪽부터, 그 차트의 기준으로 세운다.
+  document.querySelectorAll("[data-chartfilter]").forEach((el) => {
+    el.onclick = () => {
+      PLAYER_FILTER = { label: el.dataset.chartlabel, arg: JSON.parse(el.dataset.chartfilter) };
+      QUERY = "";
+      PLAYER_PAGE = 0;
+      if (el.dataset.chartsort) { SORT = el.dataset.chartsort; DESC = defaultDesc(SORT); }
+      TAB = "players";
+      refresh();
+    };
+  });
   document.querySelectorAll("[data-tab]").forEach((b) => {
     b.onclick = () => { BELL_OPEN = false; TAB = b.dataset.tab; refresh(); };
   });
@@ -3098,6 +3145,13 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
       render(warn, eventsErr);
     };
     $("#sort").onchange = (e) => applySort(e.target.value, defaultDesc(e.target.value));
+    const clear = $("#clearFilter");
+    if (clear) clear.onclick = async () => {
+      PLAYER_FILTER = null;
+      PLAYER_PAGE = 0;
+      await loadPlayers();
+      render(warn, eventsErr);
+    };
     $("#sortDir").onclick = () => applySort(SORT, !DESC);
     // **머리글을 눌러도 세운다.** 기준이 그대로면 방향만 뒤집고,
     // 다른 칸이면 그 칸의 기본 방향으로 간다.
