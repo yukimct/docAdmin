@@ -583,7 +583,7 @@ function pushTab(err) {
       <span class="muted" style="font-size:12.5px">기기 알림으로 나갑니다. <b>보낸 뒤에는 되돌릴 수 없습니다</b>.
         <b>광고성 정보 알림에 동의한 사람에게만</b> 갑니다(기본 꺼짐, 1.4.2부터).
         한국시간 ${QUIET_TEXT}에는 보내지 않고 ${QUIET_END}에 몰아서 내보냅니다.
-        제목 앞 「(광고)」와 본문 끝 수신거부 안내는 서버가 붙입니다.${pending ? ` 대기 중 ${fmt(pending)}건.` : ""}</span>
+        광고성 정보면 제목 앞 「(광고)」와 본문 끝 수신거부 안내를 서버가 붙입니다. 서비스 안내는 붙이지 않습니다.${pending ? ` 대기 중 ${fmt(pending)}건.` : ""}</span>
       <div style="flex:1"></div>
       <button class="sm" id="newPush">푸시 발송</button>
     </div>
@@ -599,9 +599,9 @@ function pushTab(err) {
       <thead><tr><th>등록</th><th>제목</th><th>본문</th><th>대상</th><th>나갈 시각</th><th>결과</th><th>열림</th><th>관리</th></tr></thead>
       <tbody>${PUSHES.map((m) => `<tr>
           <td class="muted">${when(m.created_at)}</td>
-          <td>${esc(m.title)}</td>
+          <td>${m.kind === "notice" ? '<span class="pill">서비스 안내</span> ' : ""}${esc(m.title)}</td>
           <td class="muted" style="white-space:normal;max-width:320px">${esc(m.body)}${
-            `<div style="font-size:11px">열 곳: ${esc(linkLabel(m.link))}</div>`}</td>
+            `<div style="font-size:11px">열 곳: ${esc(linkLabel(m.link, m.kind))}</div>`}</td>
           <td class="muted" style="white-space:normal;max-width:260px">${target(m)}</td>
           <td class="muted">${when(m.scheduled_at)}</td>
           <td>${status(m)}</td>
@@ -971,8 +971,10 @@ const PUSH_LINKS = [
   { link: "/missions", label: "미션" },
   { link: "/vs/", label: "대전 초대 · 방 코드로 바로 입장", code: true },
 ];
-/** 링크를 사람이 읽는 이름으로. 모르는 링크는 링크를 그대로 보인다. */
-function linkLabel(link) {
+/** 링크를 사람이 읽는 이름으로. 모르는 링크는 링크를 그대로 보인다.
+ *  서비스 안내(notice)는 링크가 비면 서버가 설정 대신 홈을 연다(095). */
+function linkLabel(link, kind = "ad") {
+  if (!link && kind === "notice") return "홈 화면 · 앱만 열기 · 기본";
   if (!link || link === "/settings") return PUSH_LINKS[0].label;
   if (/^\/vs\/\d{6}$/.test(link)) return `대전 초대 · 방 ${link.slice(4)}`;
   return PUSH_LINKS.find((x) => x.link === link)?.label ?? link;
@@ -1040,6 +1042,11 @@ function openPush(prefill = null, editId = null) {
   const pf = prefill || {};
   $("#pTitle").value = pf.title || "";
   $("#pBody").value = pf.body || "";
+  // 종류(095). 복제·고치기는 원래 종류를 따른다. 새로 열면 광고성 — 모르면 「(광고)」를 붙이는 쪽이 안전하다.
+  $("#pKind").value = pf.kind === "notice" ? "notice" : "ad";
+  const showKind = () => { $("#pKindNote").style.display = $("#pKind").value === "notice" ? "" : "none"; };
+  $("#pKind").onchange = showKind;
+  showKind();
   // 열 곳: 아는 링크면 그 이름을 고르고, 대전 초대면 방 코드를 채운다. 모르는 링크는 그대로 둔다.
   $("#pLinkSel").innerHTML = PUSH_LINKS.map((x, i) => `<option value="${i}">${esc(x.label)}</option>`).join("");
   const link0 = pf.link && pf.link !== "/settings" ? pf.link : "";
@@ -1319,13 +1326,16 @@ function openPush(prefill = null, editId = null) {
     const when = $("#pWhenNote").textContent.split(" 받을 사람은")[0];
     const verb = at ? (editId ? "이 예약을 고칠까요?" : "예약할까요?")
                     : `${editId ? "고친 내용은" : "보내면"} 곧 나가고 취소할 수 없습니다. ${editId ? "고칠까요?" : "발송할까요?"}`;
-    if (!confirm(`${counted}\n${when}\n눌렀을 때: ${linkLabel(linkNow)}\n\n"${title}"\n\n${verb}`)) return;
+    const kind = $("#pKind").value;
+    const kindLine = kind === "notice" ? "종류: 서비스 안내 · 「(광고)」 없이 나갑니다" : "종류: 광고성 정보 · 「(광고)」를 붙입니다";
+    if (!confirm(`${counted}\n${when}\n${kindLine}\n눌렀을 때: ${linkLabel(linkNow, kind)}\n\n"${title}"\n\n${verb}`)) return;
     $("#pOk").disabled = true;   // 두 번 눌러 두 번 나가는 일을 막는다
     try {
       const common = {
         p_title: title, p_body: body, p_target: t, p_target_arg: arg,
         p_scheduled_at: at ? at.toISOString() : null,
         p_link: linkNow,
+        p_kind: kind,
       };
       if (editId) await rpc("admin_update_push", { p_id: editId, ...common });
       else await rpc("admin_send_push", common);

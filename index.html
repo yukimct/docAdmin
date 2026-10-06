@@ -402,8 +402,16 @@
 <dialog id="pushDlg" style="width:min(640px,94vw)">
   <h3>푸시 발송</h3>
   <div class="muted" style="font-size:12.5px">기기 알림으로 나갑니다. <b>보낸 뒤에는 되돌릴 수 없습니다.</b>
-    <b>광고성 정보 알림에 동의한 사람에게만</b> 갑니다. 제목 앞의 「(광고)」와 본문 끝의 수신거부 안내는
-    서버가 받는 사람의 언어로 붙이니 여기 적지 마세요.</div>
+    <b>광고성 정보 알림에 동의한 사람에게만</b> 갑니다. 광고성 정보면 제목 앞의 「(광고)」와 본문 끝의 수신거부
+    안내를 서버가 받는 사람의 언어로 붙이니 여기 적지 마세요.</div>
+  <label>종류</label>
+  <select id="pKind">
+    <option value="ad">광고성 정보 · 이벤트, 혜택, 할인, 상품 안내</option>
+    <option value="notice">서비스 안내 · 점검, 서비스 변경, 약관 변경 (광고 아님)</option>
+  </select>
+  <div class="notice" id="pKindNote" style="display:none;font-size:12.5px">
+    「(광고)」와 수신거부 안내 없이 나갑니다. <b>홍보가 한 줄이라도 섞이면 광고성 정보입니다.</b>
+    예: 「점검 보상으로 코인을 드려요, 상점도 둘러보세요」는 광고성입니다. 잘못 고르면 정보통신망법 위반이 됩니다.</div>
   <label>제목</label>
   <input type="text" id="pTitle" placeholder="예: 주말 이벤트가 열렸어요">
   <label>본문</label>
