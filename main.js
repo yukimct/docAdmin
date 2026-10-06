@@ -6,6 +6,7 @@ import { sb, $, fmt, fmtDate, fmtDateTime, fmtTime, esc, kstToday, askReason, rp
 let TAB = "charts";
 let PLAYERS = [], EVENTS = [], AUDIT = [], REWARDS = [], BATCHES = [], STATS = [], BUCKETS = [];
 let FUNNEL = [], RETENTION = [], NOTICES = [], PUSHES = [];
+let DAILY_BUCKETS = [];
 // 푸시 집계(089). 기간과, 시간대 표를 볼 발송(null이면 전체).
 let PUSH_DAILY = [], PUSH_HOURS = [], PUSH_DAYS = 30, PUSH_HOUR_MSG = null;
 let PAY_DAILY = [], PAY_MONTHLY = [], PAY_PRODUCT = [], PAY_LEDGER = [], COIN_SINKS = [];
@@ -157,7 +158,9 @@ async function loadStats() {
   try {
     STATS = await rpc("admin_daily_stats", { days: 30 }) || [];
     BUCKETS = await rpc("admin_level_buckets") || [];
-    FUNNEL = await rpc("admin_level_funnel", { p_max: 30 }) || [];
+    // 레벨 1~30만 받던 admin_level_funnel 대신 끝까지 받는다(097). 밤 정리 전 오늘 깬 판도 센다.
+    FUNNEL = await rpc("admin_level_reach").catch(() => []) || [];
+    DAILY_BUCKETS = await rpc("admin_daily_score_buckets").catch(() => []) || [];
     RETENTION = await rpc("admin_retention", { p_days: 21 }) || [];
     // 기간을 30일로 맞춘다. 이 카드만 14일이라 바로 아래 30일 그래프와 숫자가 안 맞았다 —
     // 같은 화면에서 같은 주제를 다른 창으로 보여 주면 매번 어느 쪽 기간인지 되짚어야 한다.
@@ -166,7 +169,7 @@ async function loadStats() {
     // 게임 안 경제라 주제가 다르다. 경제를 한자리에 모으려고 이쪽으로 옮겼다.
     COIN_SINKS = await rpc("admin_coin_sinks", { p_days: 30 }).catch(() => []) || [];
     return null;
-  } catch (e) { STATS = []; BUCKETS = []; FUNNEL = []; RETENTION = []; return e; }
+  } catch (e) { STATS = []; BUCKETS = []; FUNNEL = []; DAILY_BUCKETS = []; RETENTION = []; return e; }
 }
 
 async function loadPurchases() {
@@ -418,12 +421,18 @@ function chartsTab(err) {
 
     <h2>진행</h2>
     <h3 class="sub">레벨별 도달 인원 — 어디서 그만두는지</h3>
+    <div class="muted" style="margin-bottom:6px">그 레벨까지 온 사람 수입니다. 오늘 깬 판까지 셉니다.</div>
     ${FUNNEL.length
-      ? lineChart(FUNNEL.map((r) => String(r.level).padStart(5, "0")),
-                  [{ name: "도달 인원", color: "#17b3a8", values: FUNNEL.map((r) => Number(r.players)) }])
+      // 선 그래프는 아래 눈금을 날짜로 보고 앞 다섯 글자를 잘라서, 레벨 숫자가 하나도 안 보였다. 막대로 바꿨다.
+      ? barChart(FUNNEL.map((r) => ({ bucket: `레벨 ${fmt(r.level)}`, players: Number(r.players) })))
       : `<div class="empty">레벨 클리어 기록이 아직 없습니다</div>`}
     <h3 class="sub">누적 점수 분포</h3>
-    ${BUCKETS.length ? barChart(BUCKETS) : `<div class="empty">데이터 없음</div>`}`;
+    ${BUCKETS.length ? barChart(BUCKETS.map((r) => ({ bucket: r.bucket, players: Number(r.players) })))
+                     : `<div class="empty">데이터 없음</div>`}
+    <h3 class="sub">일일 점수 분포 — 오늘(한국시간)</h3>
+    <div class="muted" style="margin-bottom:6px">오늘 점수를 낸 사람만 셉니다. 0점인 날은 기록이 없습니다.</div>
+    ${DAILY_BUCKETS.length ? barChart(DAILY_BUCKETS.map((r) => ({ bucket: r.bucket, players: Number(r.players) })))
+                           : `<div class="empty">데이터 없음</div>`}`;
 }
 
 function retentionTable() {
