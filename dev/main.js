@@ -1397,7 +1397,8 @@ const COND_PRESETS = [
   ["대전을 한 번도 안 한 사람", () => [{ t: "versus", field: "played", op: "lte", v: 0 }]],
 ];
 const LANG_NAMES = { ko: "한국어", en: "English", ja: "日本語", zh: "中文" };
-const PLATFORM_NAMES = { ios: "iOS", android: "Android" };
+// 기기 이름은 짧게 iOS·AOS로 쓴다(사용자 요청, 2026-10-08). 회원 목록 「앱」 칸, 푸시 조건, 기기별 집계, 기록 표가 같이 읽는다.
+const PLATFORM_NAMES = { ios: "iOS", android: "AOS" };
 
 /** 한국시간 오늘에서 d일 옮긴 날짜(YYYY-MM-DD). 관리자 브라우저의 시간대와 상관없다. */
 function kstDate(d = 0) {
