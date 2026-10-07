@@ -97,6 +97,18 @@ export function askReason(title) {
   return reason.trim() || "(사유 없음)";
 }
 
+/** 사유가 꼭 있어야 하는 작업(이벤트 지금 끝내기·취소, 103). 서버가 빈 사유를 거절하므로 빈칸이면 다시 묻는다.
+ *  취소를 누르면 null이다. askReason은 빈칸을 「(사유 없음)」으로 넘겨 여기에는 못 쓴다. */
+export function askReasonRequired(title) {
+  let hint = "";
+  for (;;) {
+    const reason = window.prompt(`${title}\n\n사유를 적어주세요 (감사 로그에 남습니다, 필수)${hint}`);
+    if (reason === null) return null;
+    if (reason.trim()) return reason.trim();
+    hint = "\n\n사유를 비울 수 없습니다.";
+  }
+}
+
 export async function rpc(name, params) {
   const { data, error } = await sb.rpc(name, params);
   if (error) throw new Error(error.message);

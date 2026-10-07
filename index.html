@@ -405,6 +405,28 @@
   .bar-value{flex:0 0 clamp(44px, 8vw, 62px);text-align:right;
              font-variant-numeric:tabular-nums;font-size:var(--fs-sm)}
 
+  /* 날짜별 쌓은 막대(1.5.0 차트 메뉴). 축·안내선·말풍선은 위 선 그래프(.lc) 것을 그대로 쓴다.
+     기둥 하나가 그날 전체이고, 안의 칸이 성공·실패 같은 갈래다. 칸을 누르면 그 갈래만, 기둥 빈 곳을 누르면 그날 전체를
+     아래 원본 기록 표에 거른다. 참여자 선(svg)은 누름을 가리지 않게 pointer-events를 끈다. */
+  .db-col{position:absolute;transform:translateX(-50%);background:var(--line);border-radius:3px 3px 0 0;
+          cursor:pointer;overflow:hidden}
+  .db-seg{position:absolute;left:0;right:0;display:block;cursor:pointer}
+  .db-col:hover,.db-seg:hover{filter:brightness(.9)}
+  .lc.db svg{pointer-events:none}
+  /* 표 안의 숫자를 누르면 그 줄만 거른다. 전역 button 크기(38px)를 쓰면 표 줄이 세 배로 높아진다. */
+  button.plink{background:none;border:0;padding:0;min-height:0;color:var(--accent);font:inherit;
+               font-weight:700;cursor:pointer;font-variant-numeric:tabular-nums}
+  button.plink:hover{text-decoration:underline;filter:none}
+  .card.click{cursor:pointer}
+  .card.click:hover{border-color:var(--accent)}
+  .pill.warn{background:var(--warn-wash);color:var(--warn)}
+  .pill.dim{background:#eff2f5;color:var(--dim)}
+  /* 이벤트 목록 줄 사이의 「다음 이벤트까지」 줄 */
+  tr.gap td{background:var(--bg);color:var(--dim);font-size:12px;padding-top:4px;padding-bottom:4px}
+  /* 시간대 24칸 막대. 칸을 누르면 그 시간에 시작한 기록만 거른다. */
+  .hour-bars{display:grid;grid-template-columns:repeat(24,1fr);gap:3px;align-items:end;height:90px}
+  .hour-bars div{background:var(--accent);border-radius:3px 3px 0 0;cursor:pointer}
+  .hour-axis{display:grid;grid-template-columns:repeat(24,1fr);gap:3px;font-size:10px;text-align:center}
   /* 지급 묶음 명단 */
   .mem{display:inline-block;padding:3px 9px;margin:2px 4px 2px 0;
        border-radius:calc(var(--r) * .55);background:#eff2f5;color:var(--dim);font-size:12px}
@@ -454,6 +476,8 @@
     <div><label>받기 시작 (비우면 즉시)</label><input type="datetime-local" id="gStart"></div>
     <div><label>받기 마감 (비우면 무제한)</label><input type="datetime-local" id="gEnd"></div>
   </div>
+  <label class="switch" style="margin-top:12px"><input type="checkbox" id="gPush"><span>푸시도 보내기</span></label>
+  <div class="muted" id="gPushHow" style="display:none;font-size:12.5px"></div>
   <div class="err" id="gErr"></div>
   <div class="actions" style="margin-top:16px;justify-content:flex-end">
     <button class="ghost" id="gCancel">취소</button>
@@ -486,6 +510,7 @@
   <div class="notice" id="pKindNote" style="display:none;font-size:12.5px">
     「(광고)」와 수신거부 안내 없이 나갑니다. <b>홍보가 한 줄이라도 섞이면 광고성 정보입니다.</b>
     예: 「점검 보상으로 코인을 드려요, 상점도 둘러보세요」는 광고성입니다. 잘못 고르면 정보통신망법 위반이 됩니다.</div>
+  <div class="muted" id="pKindLock" style="display:none;font-size:12.5px">이벤트 링크나 이벤트 조건이 붙은 발송은 광고성 정보로만 보낼 수 있습니다.</div>
   <label>제목</label>
   <input type="text" id="pTitle" placeholder="예: 주말 이벤트가 열렸어요">
   <label>본문</label>
@@ -514,8 +539,9 @@
   </div>
   <label>눌렀을 때 열 곳</label>
   <div class="row wide">
-    <div><select id="pLinkSel"></select></div>
+    <div><select id="pLinkSel" style="max-width:100%"></select></div>
     <div id="pLinkCodeRow" style="display:none"><input type="text" id="pLinkCode" placeholder="방 코드 6자리" inputmode="numeric"></div>
+    <div id="pLinkEventRow" style="display:none"><select id="pLinkEvent" style="max-width:100%"></select></div>
   </div>
   <div class="muted" id="pCount" style="font-size:12.5px;margin-top:10px">받을 사람: —</div>
   <div class="muted" id="pPreview" style="font-size:12px;max-height:96px;overflow:auto"></div>
@@ -526,9 +552,49 @@
   </div>
 </dialog>
 
+<dialog id="liveEventDlg" style="width:min(640px,94vw)">
+  <h3 id="leTitle">새 이벤트</h3>
+  <div class="muted" style="font-size:12.5px" id="leHow"></div>
+  <div class="row wide">
+    <div><label>종류</label><select id="leKind"></select></div>
+    <div><label>한국어 이름 (필수, 20자까지)</label><input type="text" id="leNameKo" maxlength="20" placeholder="예: 가을 산책길"></div>
+  </div>
+  <label>다른 언어 이름. 비우면 그 언어의 앱 기본 이름이 보입니다</label>
+  <div class="row">
+    <div><input type="text" id="leNameEn" maxlength="30" placeholder="English"></div>
+    <div><input type="text" id="leNameJa" maxlength="20" placeholder="日本語"></div>
+    <div><input type="text" id="leNameZh" maxlength="20" placeholder="中文"></div>
+  </div>
+  <div class="row wide">
+    <div><label>시작 (한국시간)</label><input type="datetime-local" id="leStart"></div>
+    <div><label>끝 (한국시간)</label><input type="datetime-local" id="leEnd"></div>
+  </div>
+  <div class="row wide">
+    <div><label>결과 공개 끝 (한국시간)</label><input type="datetime-local" id="leUntil"></div>
+    <div><label>여는 레벨</label><input type="number" id="leLevel" min="1"></div>
+  </div>
+  <div class="muted" style="font-size:12px" id="leUntilHow"></div>
+  <div class="row wide">
+    <div><label>최소 빌드 iOS</label><input type="number" id="leBuildIos" min="0"></div>
+    <div><label>최소 빌드 Android</label><input type="number" id="leBuildAnd" min="0"></div>
+  </div>
+  <label>순위 보상</label>
+  <div class="table-scroll"><table>
+    <thead><tr><th class="num">~등까지</th><th class="num">코인</th><th class="num">힌트</th><th class="num">자동배치</th><th></th></tr></thead>
+    <tbody id="leTierBody"></tbody>
+  </table></div>
+  <div style="margin-top:6px"><button class="ghost sm" type="button" id="leTierAdd">줄 추가</button></div>
+  <label class="switch" style="margin-top:12px"><input type="checkbox" id="leTest"><span>시험 전용 (시험 계정에게만 보입니다)</span></label>
+  <div class="notice" id="leWarn" style="display:none;margin-top:10px"></div>
+  <div class="err" id="leErr"></div>
+  <div class="actions" style="margin-top:16px;justify-content:flex-end">
+    <button class="ghost" id="leCancel">닫기</button>
+    <button id="leOk">저장</button>
+  </div>
+</dialog>
 <dialog id="noticeDlg">
   <h3>공지 작성</h3>
-  <div class="muted" style="font-size:12.5px">앱이 접속할 때 가장 최근 공지 하나를 한 번만 보여줍니다.</div>
+  <div class="muted" style="font-size:12.5px" id="nHow"></div>
   <label>제목</label>
   <input type="text" id="nTitle" placeholder="예: 점검 안내">
   <label>내용</label>
@@ -536,6 +602,14 @@
   <div class="row">
     <div><label>시작 (비우면 즉시)</label><input type="datetime-local" id="nStart"></div>
     <div><label>종료 (비우면 무제한)</label><input type="datetime-local" id="nEnd"></div>
+  </div>
+  <label class="switch" style="margin-top:12px"><input type="checkbox" id="nPopup" checked><span>창으로도 띄우기</span></label>
+  <label class="switch" style="margin-top:8px"><input type="checkbox" id="nPush"><span>푸시도 보내기</span></label>
+  <div id="nPushRow" style="display:none">
+    <div class="muted" id="nPushHow" style="font-size:12.5px"></div>
+    <label>푸시 종류</label>
+    <select id="nPushKind"></select>
+    <div class="notice" id="nPushKindNote" style="display:none;font-size:12.5px"></div>
   </div>
   <div class="err" id="nErr"></div>
   <div class="actions" style="margin-top:16px;justify-content:flex-end">
