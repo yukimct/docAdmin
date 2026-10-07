@@ -127,6 +127,66 @@ function renderLogin(msg) {
   $("#email").focus();
 }
 
+// ------------------------------------------------------------------ 2차 인증 (111)
+// 비밀번호 다음에 OTP 앱(Google Authenticator 등)의 6자리 코드를 받는다. Supabase Auth TOTP MFA다.
+// 서버 is_admin()이 aal2 로그인만 관리자로 보므로, 이 화면을 건너뛰어도 관리자 함수는 열리지 않는다.
+const MFA_ISSUER = "DogPuzzle 관리자";
+
+/** 로그인은 됐는데 2차 인증 전이면 코드 화면을 띄우고 true를 돌려준다. 끝났으면 false. */
+async function needsMfa() {
+  const { data, error } = await sb.auth.mfa.getAuthenticatorAssuranceLevel();
+  if (error) { renderLogin("2차 인증 상태를 읽지 못했습니다: " + error.message); return true; }
+  if (data.currentLevel === "aal2") return false;
+  const { data: f, error: fe } = await sb.auth.mfa.listFactors();
+  if (fe) { renderLogin("2차 인증 정보를 읽지 못했습니다: " + fe.message); return true; }
+  const verified = (f.totp || []).find((x) => x.status === "verified");
+  if (verified) renderMfaCode(verified.id);
+  else await renderMfaEnroll(f.all || []);
+  return true;
+}
+
+/** 코드 입력 칸과 확인 버튼. 등록 화면과 확인 화면이 같이 쓴다. */
+function mfaCodeBox(factorId, intro, extra = "") {
+  $("#app").innerHTML = `
+    <div class="login">
+      <h2>2차 인증</h2>
+      <p>${intro}</p>
+      ${extra}
+      <input type="text" id="mfaCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="6자리 코드">
+      <button id="mfaGo" style="width:100%">확인</button>
+      <button class="ghost" id="mfaOut" style="width:100%;margin-top:8px">로그아웃</button>
+      <div class="err" id="mfaErr"></div>
+    </div>`;
+  const submit = async () => {
+    const code = $("#mfaCode").value.replace(/\D/g, "");
+    if (code.length !== 6) { $("#mfaErr").textContent = "6자리 숫자를 넣어 주세요"; return; }
+    $("#mfaGo").disabled = true;
+    const { error } = await sb.auth.mfa.challengeAndVerify({ factorId, code });
+    $("#mfaGo").disabled = false;
+    if (error) { $("#mfaErr").textContent = "코드가 맞지 않습니다: " + error.message; $("#mfaCode").select(); return; }
+    boot();
+  };
+  $("#mfaGo").onclick = submit;
+  $("#mfaCode").onkeydown = (e) => { if (e.key === "Enter") submit(); };
+  $("#mfaOut").onclick = async () => { await sb.auth.signOut(); renderLogin(); };
+  $("#mfaCode").focus();
+}
+
+function renderMfaCode(factorId) {
+  mfaCodeBox(factorId, "OTP 앱에 보이는 「" + esc(MFA_ISSUER) + "」 6자리 코드를 넣어 주세요.");
+}
+
+/** 처음 한 번 등록. 끝내지 못한 옛 등록이 있으면 지우고 새로 만든다. */
+async function renderMfaEnroll(all) {
+  for (const x of all.filter((x) => x.status !== "verified")) await sb.auth.mfa.unenroll({ factorId: x.id });
+  const { data, error } = await sb.auth.mfa.enroll({ factorType: "totp", issuer: MFA_ISSUER, friendlyName: MFA_ISSUER });
+  if (error) { renderLogin("2차 인증 등록을 시작하지 못했습니다: " + error.message); return; }
+  mfaCodeBox(data.id,
+    "처음 한 번 등록합니다. 폰의 OTP 앱(Google Authenticator 등)으로 아래 QR을 찍고, 앱에 나온 6자리를 넣어 주세요.",
+    `<img src="${data.totp.qr_code}" alt="2차 인증 QR" style="display:block;width:200px;height:200px;margin:0 auto 10px;background:#fff;border-radius:8px">
+     <div class="muted" style="font-size:12px;word-break:break-all;margin-bottom:12px">QR을 못 찍으면 이 키를 직접 넣으세요: ${esc(data.totp.secret)}</div>`);
+}
+
 // ------------------------------------------------------------------ 데이터
 async function loadAnomalies() {
   // 문턱은 설정에서. 경제가 바뀌면 값도 바뀌어야 하니 하드코딩하지 않는다.
@@ -5106,6 +5166,7 @@ async function refresh() {
 async function boot() {
   const { data: { session } } = await sb.auth.getSession();
   if (!session) return renderLogin();
+  if (await needsMfa()) return;
   EMAIL = session.user.email || "";
 
   // **탭이 쓰는 것만 부른다**(요청 줄이기, 2026-10-05). 예전에는 어느 탭이든 회원 목록·설정·코인 급증을 다 불렀다.
