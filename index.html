@@ -269,13 +269,30 @@
   tbody tr:nth-child(even) td{background:var(--zebra)}
   tbody tr:hover td{background:var(--accent-wash)}
   tr:last-child td{border-bottom:0}
-  td.num{text-align:right;font-variant-numeric:tabular-nums}
+  /* 정렬 class는 머리글(th)과 값(td)에 같이 붙인다. 숫자 값만 오른쪽에 두고 머리글을
+     왼쪽에 두면 넓은 화면에서 둘이 칸 양 끝으로 갈라져 어느 머리글의 값인지 안 보였다. */
+  th.num,td.num{text-align:right;font-variant-numeric:tabular-nums}
+  /* 상태·등수처럼 짧은 칸은 가운데. 알약의 왼쪽 여백은 글 뒤에 붙을 때 쓰는 것이라 뺀다. */
+  th.c,td.c{text-align:center}
+  td.c .pill{margin-left:0}
+  /* 내용이 짧은 칸은 내용 너비만 쓴다. 남는 폭은 나머지 칸이 나눠 갖는다.
+     안 붙이면 1600px 화면에서 숫자 두 자리짜리 등수 칸이 125px까지 벌어졌다. */
+  th.fit,td.fit{width:1%}
+  /* 본문처럼 긴 글 칸은 줄을 감되 최소 폭을 둔다. 폭이 모자란 폰에서는 표가 칸마다 가장
+     좁은 폭을 쓰는데, 줄을 감는 칸은 한 글자 폭까지 줄어 「지/들/오」처럼 세로로 늘어섰다. */
+  td.long{white-space:normal;overflow-wrap:anywhere;min-width:12em}
 
   /* 오른쪽으로 밀었을 때 지금 보는 줄이 누구 것인지 알 수 있게 첫 칸을 붙잡아 둔다.
      좁은 화면에서만이 아니라 늘 그렇게 둔다 — 칸이 많은 표는 넓은 화면에서도 밀린다. */
   th:first-child,td:first-child{position:sticky;left:0;z-index:1;
     box-shadow:1px 0 0 var(--line)}
   th:first-child{z-index:3}
+  /* 첫 칸이 체크박스처럼 누구 줄인지 말해 주지 않는 표(회원 목록)는 붙잡을 칸을 옮긴다.
+     nopin은 첫 칸을 놓아 주고, pin은 그 칸이 왼쪽 끝에 닿으면 거기 붙는다.
+     폰에서 오른쪽으로 밀면 체크박스만 남아 어느 회원 줄인지 알 수 없었다. */
+  th.nopin,td.nopin{left:auto;box-shadow:none}
+  th.pin,td.pin{position:sticky;left:0;z-index:1;box-shadow:1px 0 0 var(--line)}
+  th.pin{z-index:3}
 
   /* ---------------------------------------------------------------- 조각 */
   /* 보상 안의 하위 탭 — 상단 메뉴(.nav)와 헷갈리지 않게 작고 납작하게 둔다. */
@@ -404,8 +421,19 @@
        모든 행이 세 배로 높아진다(실측). 표 안에서는 옆으로 나란히 둔다. */
     .toolbar .actions{width:100%}
     .toolbar .actions button{flex:1 1 auto}
+
+    /* 붙잡은 닉네임 칸이 알약까지 한 줄로 늘어서면 375px 화면의 60%를 덮었다(207px).
+       알약은 이름 아래로 내려 칸을 115px 남짓으로 줄인다. 알약 자체는 꺾지 않는다. */
+    td.pin{white-space:normal;min-width:7em}
+    td.pin .pill{white-space:nowrap;margin:2px 4px 2px 0}
   }
-  td .actions{flex-wrap:nowrap}
+  /* 표 안의 관리 버튼은 글자가 꺾이지 않게 한다. 여기 flex-wrap:nowrap이 있어서 위의
+     「두 줄로 감는다」를 덮어썼고, 버튼 8개가 380px 안에 눌려 「닉/네/임」처럼 한 글자씩
+     세로로 꺾였다(1600px 화면에서 버튼 폭 35px, 높이 94px). 줄을 감고 버튼은 줄이지 않는다. */
+  td .actions button{flex:0 0 auto;white-space:nowrap}
+  /* 버튼을 줄이지 않으면 칸이 가장 좁을 때 버튼 하나 폭까지 줄어 8개가 한 줄씩 쌓인다
+     (폰에서 한 줄 높이 290px 남짓). 상자 폭을 내용대로 잡게 해 380px 안에서 두 줄로 감는다. */
+  td .actions{width:max-content}
 </style>
 </head>
 <body>

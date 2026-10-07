@@ -239,9 +239,9 @@ function pushDailyTable() {
       <td class="num">${pct(d.sent, d.sent + d.failed)}</td>
       <td class="num">${fmt(d.opens)}</td><td class="num">${pct(d.opens, d.sent)}</td></tr>`;
   return `<div class="table-scroll"><table>
-    <thead><tr><th>날짜</th><th style="text-align:right">발송 건수</th><th style="text-align:right">성공(기기)</th>
-      <th style="text-align:right">실패</th><th style="text-align:right">성공률</th>
-      <th style="text-align:right">열림</th><th style="text-align:right">열림률</th></tr></thead>
+    <thead><tr><th>날짜</th><th class="num">발송 건수</th><th class="num">성공(기기)</th>
+      <th class="num">실패</th><th class="num">성공률</th>
+      <th class="num">열림</th><th class="num">열림률</th></tr></thead>
     <tbody>${line(`최근 ${PUSH_DAYS}일 합계`, sum, true)}${rows.map((d) => line(esc(d.day), d)).join("") ||
       '<tr><td colspan="7" class="muted">이 기간에 발송도 열림도 없습니다</td></tr>'}</tbody></table></div>
     <div class="muted" style="font-size:12px">열림률은 그날 열린 수 ÷ 그날 성공한 기기 수입니다. 전날 보낸 알림을 오늘 열면 오늘에 셉니다.
@@ -260,7 +260,8 @@ function pushHoursView() {
   const max = Math.max(1, ...byHour);
   const cellMax = Math.max(1, ...PUSH_HOURS.map((r) => r.opens));
   const sent = PUSHES.filter((m) => m.sent_at);
-  const pick = `<select id="pushHourMsg">
+  // 보기 글이 길어(시각 · 제목 · 열림) 폰에서는 상자가 화면 밖으로 450px까지 나갔다. 폭을 화면에 묶는다.
+  const pick = `<select id="pushHourMsg" style="max-width:100%">
       <option value="">모든 푸시</option>
       ${sent.map((m) => `<option value="${m.id}" ${String(PUSH_HOUR_MSG) === String(m.id) ? "selected" : ""}>${
         esc(fmtDateTime(m.sent_at))} · ${esc(m.title)} · 열림 ${fmt(m.opens || 0)}</option>`).join("")}
@@ -272,11 +273,11 @@ function pushHoursView() {
     <div style="display:grid;grid-template-columns:repeat(24,1fr);gap:3px;font-size:10px;text-align:center" class="muted">
       ${byHour.map((_, h) => `<div>${h}</div>`).join("")}</div>`;
   const heat = days.size ? `<div class="table-scroll" style="margin-top:12px"><table style="font-size:11px">
-      <thead><tr><th>날짜</th>${byHour.map((_, h) => `<th style="text-align:center;padding:4px 2px">${h}</th>`).join("")}<th style="text-align:right">합계</th></tr></thead>
+      <thead><tr><th>날짜</th>${byHour.map((_, h) => `<th class="c" style="padding:4px 2px">${h}</th>`).join("")}<th class="num">합계</th></tr></thead>
       <tbody>${[...days].map(([day, cells]) => `<tr><td style="white-space:nowrap">${esc(day)}</td>${cells.map((c, h) => c
-          ? `<td title="${h}시 · iOS ${c.ios} · Android ${c.android}" style="text-align:center;padding:4px 2px;
+          ? `<td title="${h}시 · iOS ${c.ios} · Android ${c.android}" class="c" style="padding:4px 2px;
               background:color-mix(in srgb, var(--accent) ${Math.round((c.opens / cellMax) * 85) + 15}%, transparent);color:#fff">${c.opens}</td>`
-          : '<td style="padding:4px 2px"></td>').join("")}<td class="num">${fmt(cells.reduce((a, c) => a + (c ? c.opens : 0), 0))}</td></tr>`).join("")}
+          : '<td class="c" style="padding:4px 2px"></td>').join("")}<td class="num">${fmt(cells.reduce((a, c) => a + (c ? c.opens : 0), 0))}</td></tr>`).join("")}
       </tbody></table></div>` : '<div class="muted" style="margin-top:8px">이 기간에 열린 기록이 없습니다</div>';
   return `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${pick}
       <span class="muted" style="font-size:12px">한국시간 기준, 막대는 시간대별 합계입니다. 칸에 마우스를 올리면 기기별 수가 보입니다.</span></div>
@@ -669,8 +670,8 @@ function retentionTable() {
         <span class="muted">(${fmt(r[k])})</span>`
     : `<span class="muted" title="${n === 1 ? "다음 날이" : `${n}일째가`} 아직 안 지났습니다">—</span>`);
   return `<div class="table-scroll"><table style="min-width:460px">
-    <thead><tr><th>가입일</th><th style="text-align:right">인원</th>
-      <th style="text-align:right">다음 날</th><th style="text-align:right">7일째</th></tr></thead>
+    <thead><tr><th>가입일</th><th class="num">인원</th>
+      <th class="num">다음 날</th><th class="num">7일째</th></tr></thead>
     <tbody>${RETENTION.map((r) => `<tr>
       <td class="muted">${fmtDate(r.cohort_date)}</td>
       <td class="num">${fmt(r.cohort)}</td>
@@ -722,8 +723,8 @@ function purchasesTab(err) {
 
     <h2>월별 매출</h2>
     <div class="table-scroll"><table style="min-width:420px">
-      <thead><tr><th>월</th><th>통화</th><th style="text-align:right">매출</th>
-        <th style="text-align:right">건수</th><th style="text-align:right">인원</th></tr></thead>
+      <thead><tr><th>월</th><th>통화</th><th class="num">매출</th>
+        <th class="num">건수</th><th class="num">인원</th></tr></thead>
       <tbody>${PAY_MONTHLY.map((r) => `<tr>
         <td>${esc(r.month)}</td><td class="muted">${esc(r.currency)}</td>
         <td class="num">${fmt(Math.round(r.revenue))}</td>
@@ -732,8 +733,8 @@ function purchasesTab(err) {
 
     <h2>상품별</h2>
     <div class="table-scroll"><table style="min-width:520px">
-      <thead><tr><th>상품</th><th>종류</th><th>통화</th><th style="text-align:right">매출</th>
-        <th style="text-align:right">건수</th><th style="text-align:right">인원</th></tr></thead>
+      <thead><tr><th>상품</th><th>종류</th><th>통화</th><th class="num">매출</th>
+        <th class="num">건수</th><th class="num">인원</th></tr></thead>
       <tbody>${PAY_PRODUCT.map((r) => `<tr>
         <td>${esc(r.product_id)}</td><td class="muted">${esc(r.kind)}</td>
         <td class="muted">${esc(r.currency)}</td>
@@ -743,8 +744,8 @@ function purchasesTab(err) {
 
     <h2>원장</h2>
     <div class="table-scroll"><table>
-      <thead><tr><th>시각</th><th>회원</th><th>상품</th><th style="text-align:right">코인</th>
-        <th style="text-align:right">금액</th><th>스토어</th></tr></thead>
+      <thead><tr><th>시각</th><th>회원</th><th>상품</th><th class="num">코인</th>
+        <th class="num">금액</th><th>스토어</th></tr></thead>
       <tbody>${PAY_LEDGER.map((r) => `<tr>
         <td class="muted">${new Date(r.created_at).toLocaleString("ko-KR")}</td>
         <td>${esc(r.username || (r.profile_id || "").slice(0, 8) || "(삭제됨)")}</td>
@@ -773,7 +774,7 @@ function noticesTab(err) {
         return `<tr>
           <td class="muted">${when(n.created_at)}</td>
           <td>${esc(n.title)}</td>
-          <td class="muted" style="white-space:normal;max-width:360px">${esc(n.body)}</td>
+          <td class="muted long" style="max-width:360px">${esc(n.body)}</td>
           <td class="muted">${when(n.starts_at)} ~ ${when(n.expires_at)}
             ${expired ? '<span class="pill heart">만료</span>' : ""}
             ${notYet ? '<span class="pill today">대기</span>' : ""}</td>
@@ -834,13 +835,13 @@ function pushTab(err) {
     <h3 style="margin:22px 0 6px">발송 목록</h3>
     ${!PUSHES.length ? `<div class="empty">발송한 푸시가 없습니다</div>` : `
     <div class="table-scroll"><table>
-      <thead><tr><th>등록</th><th>제목</th><th>본문</th><th>대상</th><th>나갈 시각</th><th>결과</th><th>열림</th><th>관리</th></tr></thead>
+      <thead><tr><th>등록</th><th>제목</th><th>본문</th><th>대상</th><th>나갈 시각</th><th>결과</th><th class="num">열림</th><th>관리</th></tr></thead>
       <tbody>${PUSHES.map((m) => `<tr>
           <td class="muted">${when(m.created_at)}</td>
           <td>${m.kind === "notice" ? '<span class="pill">서비스 안내</span> ' : ""}${esc(m.title)}</td>
-          <td class="muted" style="white-space:normal;max-width:320px">${esc(m.body)}${
+          <td class="muted long" style="max-width:320px">${esc(m.body)}${
             `<div style="font-size:11px">열 곳: ${esc(linkLabel(m.link, m.kind))}</div>`}</td>
-          <td class="muted" style="white-space:normal;max-width:260px">${target(m)}</td>
+          <td class="muted long" style="max-width:260px">${target(m)}</td>
           <td class="muted">${when(m.scheduled_at)}</td>
           <td>${status(m)}</td>
           <td class="num" style="white-space:nowrap">${m.sent_at ? `${fmt(m.opens || 0)}회<div class="muted" style="font-size:11px">${pct(m.opens || 0, m.sent_count)}</div>
@@ -1927,12 +1928,12 @@ function rankingTab(err) {
 
   const rows = RANKING.length ? `<div class="table-scroll"><table style="min-width:720px">
       <thead><tr>
-        <th>등수</th><th>닉네임</th><th class="num">오늘 점수</th>
+        <th class="num fit">등수</th><th>닉네임</th><th class="num">오늘 점수</th>
         <th class="num">누적</th><th class="num">코인</th>
-        <th>보상</th><th>수령</th>
+        <th>보상</th><th class="c fit">수령</th>
       </tr></thead>
       <tbody>${RANKING.map((r) => `<tr>
-        <td class="num">${r.rank}</td>
+        <td class="num fit">${r.rank}</td>
         <td>${esc(r.username || "— (탈퇴)")}
           ${r.supporter ? '<span class="pill heart">응원</span>' : ""}</td>
         <td class="num">${fmt(r.daily_score)}</td>
@@ -1942,7 +1943,7 @@ function rankingTab(err) {
           : `코인 ${fmt(r.reward_coins)}` +
             ((r.reward_hints || r.reward_autos)
               ? ` · 힌트 ${r.reward_hints} · 자동 ${r.reward_autos}` : "")}</td>
-        <td>${r.reward_coins == null ? '<span class="muted">—</span>'
+        <td class="c fit">${r.reward_coins == null ? '<span class="muted">—</span>'
             : r.claimed ? '<span class="muted">받아 감</span>'
                         : '<span class="pill heart">소멸/대기</span>'}</td>
       </tr>`).join("")}</tbody></table></div>`
@@ -2070,25 +2071,25 @@ function serverTab(err) {
   // 065 — 10등까지, 코인·아이템·수령 여부. 지난 것(어제 이전)의 "대기"는 소멸이다:
   // 순위 보상은 다음 날 하루만 받을 수 있다(매일 접속 유도, 사용자 확정).
   const winners = WINNERS.length ? `<div class="table-scroll"><table style="min-width:560px">
-      <thead><tr><th>날짜</th><th>등수</th><th>닉네임</th><th>코인</th><th>아이템</th><th>수령</th></tr></thead>
+      <thead><tr><th>날짜</th><th class="c fit">등수</th><th>닉네임</th><th class="num">코인</th><th>아이템</th><th class="c fit">수령</th></tr></thead>
       <tbody>${WINNERS.map((w) => `<tr>
         <td class="muted">${fmtDate(w.award_date)}</td>
-        <td>${w.rank === 1 ? "🥇" : w.rank === 2 ? "🥈" : w.rank === 3 ? "🥉" : w.rank + "등"}</td>
+        <td class="c fit">${w.rank === 1 ? "🥇" : w.rank === 2 ? "🥈" : w.rank === 3 ? "🥉" : w.rank + "등"}</td>
         <td>${esc(w.username || "— (탈퇴)")}</td>
         <td class="num">${(w.coins ?? "").toLocaleString ? (w.coins).toLocaleString() : w.coins ?? ""}</td>
         <td class="muted">${(w.hints || w.autos) ? `힌트 ${w.hints} · 자동 ${w.autos}` : "—"}</td>
-        <td>${w.claimed ? '<span class="muted">받아 감</span>'
+        <td class="c fit">${w.claimed ? '<span class="muted">받아 감</span>'
                         : '<span class="pill heart">소멸/대기</span>'}</td>
       </tr>`).join("")}</tbody></table></div>`
     : `<div class="empty">아직 없습니다</div>`;
 
   const transfers = TRANSFERS.length ? `<div class="table-scroll"><table style="min-width:560px">
-      <thead><tr><th>코드</th><th>닉네임</th><th>발급</th><th>상태</th></tr></thead>
+      <thead><tr><th>코드</th><th>닉네임</th><th>발급</th><th class="c fit">상태</th></tr></thead>
       <tbody>${TRANSFERS.map((t) => `<tr>
-        <td class="num"><b>${esc(t.code)}</b></td>
+        <td><b>${esc(t.code)}</b></td>
         <td>${esc(t.username || "—")}</td>
         <td class="muted">${fmtDate(t.created_at)}</td>
-        <td>${t.used_at ? `<span class="muted">사용됨 ${fmtDate(t.used_at)}</span>`
+        <td class="c fit">${t.used_at ? `<span class="muted">사용됨 ${fmtDate(t.used_at)}</span>`
               : t.expired ? '<span class="pill heart">만료</span>'
               : '<span class="pill today">대기</span>'}</td>
       </tr>`).join("")}</tbody></table></div>`
@@ -2543,7 +2544,7 @@ function versusEventsTable() {
     판마다 <b>이로움 2 · 해로움 2 · 중립 1</b>로 뽑습니다. 끄면 다음 판부터 빠집니다.
   </div>${warn}
   <div class="table-scroll"><table>
-    <thead><tr><th>갈래</th><th>이름</th><th>설정</th><th>기간</th><th>상태</th><th>관리</th></tr></thead>
+    <thead><tr><th class="c fit">갈래</th><th>이름</th><th>설정</th><th>기간</th><th class="c fit">상태</th><th>관리</th></tr></thead>
     <tbody>${VS_EVENTS.map((e) => {
       const started = !e.starts_at || new Date(e.starts_at).getTime() <= now;
       const ended = e.ends_at && new Date(e.ends_at).getTime() <= now;
@@ -2553,7 +2554,7 @@ function versusEventsTable() {
       // 조용히 코드만 보여 주면 왜 앱에서 아무 일도 안 일어나는지 알 수 없다.
       const info = EV_INFO[e.code] || ["ev_unknown", e.code, "앱에 이 코드가 없습니다"];
       return `<tr>
-        <td><span class="pill ${CLS[e.category] || ""}">${KIND[e.category] || e.category}</span></td>
+        <td class="c fit"><span class="pill ${CLS[e.category] || ""}">${KIND[e.category] || e.category}</span></td>
         <td>
           <div style="display:flex;align-items:center;gap:9px">
             ${appIcon(info[0], 26, info[1])}
@@ -2566,7 +2567,7 @@ function versusEventsTable() {
         </td>
         <td class="muted">${esc(JSON.stringify(e.config))}</td>
         <td class="muted">${when(e.starts_at)} ~ ${when(e.ends_at)}</td>
-        <td>${on ? '<b style="color:var(--accent)">켜짐</b>' : `<span class="muted">${state}</span>`}</td>
+        <td class="c fit">${on ? '<b style="color:var(--accent)">켜짐</b>' : `<span class="muted">${state}</span>`}</td>
         <td><div class="actions">
           <button class="ghost sm" data-evtoggle="${e.id}">${e.enabled ? "끄기" : "켜기"}</button>
           <button class="ghost sm" data-evwhen="${e.id}">기간</button>
@@ -2601,13 +2602,13 @@ function versusTab(err) {
   const reportsTable = REPORTS.length ? `
     <h2>신고 (${REPORTS.filter((r) => !r.handled_at).length}건 미처리)</h2>
     <div class="table-scroll"><table style="min-width:640px">
-      <thead><tr><th>시각</th><th>대상</th><th>신고자</th><th>방</th><th>상태</th><th>관리</th></tr></thead>
+      <thead><tr><th>시각</th><th>대상</th><th>신고자</th><th>방</th><th class="c fit">상태</th><th>관리</th></tr></thead>
       <tbody>${REPORTS.map((r) => `<tr>
         <td class="muted">${fmtDate(r.created_at)}</td>
         <td><b>${esc(r.target_name || "(삭제됨)")}</b></td>
         <td class="muted">${esc(r.reporter_name || "-")}</td>
-        <td class="num muted">${esc(r.room_code || "-")}</td>
-        <td>${r.handled_at ? '<span class="muted">처리됨</span>' : '<span class="pill heart">대기</span>'}</td>
+        <td class="muted">${esc(r.room_code || "-")}</td>
+        <td class="c fit">${r.handled_at ? '<span class="muted">처리됨</span>' : '<span class="pill heart">대기</span>'}</td>
         <td><div class="actions">
           ${r.handled_at ? "" : `
             <button class="ghost sm" data-report-ok="${r.id}">확인만</button>
@@ -2619,16 +2620,16 @@ function versusTab(err) {
   const roomsTable = VS_ROOMS.length ? `
     <h2>지금 열려 있는 방 (${VS_ROOMS.length})</h2>
     <div class="table-scroll"><table style="min-width:560px">
-      <thead><tr><th>방</th><th>상태</th><th class="num">판</th><th class="num">인원</th>
-                 <th>장난</th><th>참가자</th><th>만든 때</th><th>관리</th></tr></thead>
+      <thead><tr><th>방</th><th class="c fit">상태</th><th class="num">판</th><th class="num">인원</th>
+                 <th class="c fit">장난</th><th>참가자</th><th>만든 때</th><th>관리</th></tr></thead>
       <tbody>${VS_ROOMS.map((r) => `<tr>
-        <td class="num"><b>${esc(r.code)}</b></td>
-        <td>${r.status === "playing" ? "대전 중" : "대기"}</td>
+        <td><b>${esc(r.code)}</b></td>
+        <td class="c fit">${r.status === "playing" ? "대전 중" : "대기"}</td>
         <td class="num">${r.round_no}/${r.win_target * 2 - 1}</td>
         <td class="num">${r.players}</td>
         <!-- 070. **꺼진 방만 눈에 띄게** 적는다 — 켜진 것이 기본이라 전부 칠하면
              무엇이 예외인지 안 보인다. 070 이전 서버는 값이 없으므로 켜진 것으로 본다. -->
-        <td>${r.events_on === false
+        <td class="c fit">${r.events_on === false
               ? `<span style="color:var(--danger)">꺼짐</span>` : `<span class="muted">켜짐</span>`}</td>
         <td class="muted">${esc(r.usernames || "")}</td>
         <td class="muted">${fmtDate(r.created_at)}</td>
@@ -2756,11 +2757,12 @@ function versusPlayersTable() {
  * 지금 세우는 기준에는 화살표를 붙인다 — 어느 칸으로 세웠는지 머리글만 보고 알아야
  * 선택 상자를 다시 확인하지 않는다. 결제 칸은 서버가 못 세우므로 이걸 안 쓴다.
  */
-function th(col, label, align) {
+function th(col, label, cls) {
   const on = SORT_BY_COL[col] === SORT;
   const arrow = on ? (DESC ? " ↓" : " ↑") : "";
-  return `<th data-sort="${col}" class="sortable${on ? " on" : ""}"`
-       + `${align ? ` style="text-align:${align}"` : ""}>${label}${arrow}</th>`;
+  // cls는 칸 정렬 class다(숫자 칸은 "num"). 값 칸과 같은 class를 줘야 머리글이 값 위에 선다.
+  return `<th data-sort="${col}" class="sortable${on ? " on" : ""}${cls ? ` ${cls}` : ""}">`
+       + `${label}${arrow}</th>`;
 }
 
 function playersTable() {
@@ -2773,26 +2775,26 @@ function playersTable() {
   if (!list.length) return `<div class="empty">해당하는 회원이 없습니다</div>`;
   return `<div class="table-scroll"><table>
     <thead><tr>
-      <th style="width:34px"><input type="checkbox" id="pickAll"></th>
-      <th>#</th>
-      ${th("username", "닉네임")}
-      ${th("level", "레벨", "right")}
-      ${th("total", "누적", "right")}
-      ${th("daily", "오늘", "right")}
-      ${th("coins", "코인", "right")}
-      ${th("vs", "대전 (승-패-무)", "right")}
-      ${th("coop", "협동", "right")}
-      <th style="text-align:right">결제</th>
+      <th class="nopin" style="width:34px"><input type="checkbox" id="pickAll"></th>
+      <th class="num fit">#</th>
+      ${th("username", "닉네임", "pin")}
+      ${th("level", "레벨", "num")}
+      ${th("total", "누적", "num")}
+      ${th("daily", "오늘", "num")}
+      ${th("coins", "코인", "num")}
+      ${th("vs", "대전 (승-패-무)", "num")}
+      ${th("coop", "협동", "num")}
+      <th class="num">결제</th>
       ${th("played", "마지막 플레이")}
       ${th("created", "가입일")}
-      <th title="광고성 정보 알림에 동의했고(2년 안) 기기 토큰이 서버에 있는 회원">푸시</th>
+      <th class="c fit" title="광고성 정보 알림에 동의했고(2년 안) 기기 토큰이 서버에 있는 회원">푸시</th>
       <th>관리</th>
     </tr></thead><tbody>${list.map((p, i) => {
       const played = p.daily_date === today && (p.daily_score || 0) > 0;
       return `<tr>
-        <td><input type="checkbox" data-pick="${p.id}" ${SELECTED.has(p.id) ? "checked" : ""}></td>
-        <td class="num muted">${i + 1}</td>
-        <td>${esc(p.username || "(이름 없음)")}
+        <td class="nopin"><input type="checkbox" data-pick="${p.id}" ${SELECTED.has(p.id) ? "checked" : ""}></td>
+        <td class="num muted fit">${i + 1}</td>
+        <td class="pin">${esc(p.username || "(이름 없음)")}
           ${p.supporter ? '<span class="pill heart">응원</span>' : ""}
           ${played ? '<span class="pill today">오늘</span>' : ""}
           ${p.reset_requested_at ? '<span class="pill heart">초기화 대기</span>' : ""}</td>
@@ -2817,7 +2819,7 @@ function playersTable() {
             fmtDate(p.coins_at) === fmtDate(p.daily_date) ? fmtTime(p.coins_at)
                                                           : fmtDateTime(p.coins_at)}</div>` : ""}</td>
         <td class="muted">${fmtDateTime(p.created_at)}</td>
-        <td>${REACH === null ? '<span class="muted" title="받을 수 있는 회원 목록을 못 읽었습니다">?</span>'
+        <td class="c fit">${REACH === null ? '<span class="muted" title="받을 수 있는 회원 목록을 못 읽었습니다">?</span>'
           : REACH[p.id] ? `<span class="pill today" title="동의 ${esc(fmtDate(REACH[p.id].consented_at))} · 기기 ${REACH[p.id].devices}대">받음</span>`
                           : '<span class="muted" title="광고성 알림을 안 켰거나, 동의한 지 2년이 지났거나, 기기 토큰이 없습니다">—</span>'}</td>
         <td><div class="actions">
@@ -2883,7 +2885,7 @@ function eventsTable(err) {
   return Object.entries(byDay).map(([day, list]) => `
     <h2>${day}</h2>
     <div class="table-scroll"><table style="min-width:420px">
-      <thead><tr><th>이벤트</th><th style="text-align:right">횟수</th><th style="text-align:right">사람</th></tr></thead>
+      <thead><tr><th>이벤트</th><th class="num">횟수</th><th class="num">사람</th></tr></thead>
       <tbody>${list.map((e) => `<tr>
         <td>${esc(e.name)}</td><td class="num">${fmt(e.count)}</td><td class="num">${fmt(e.users)}</td>
       </tr>`).join("")}</tbody>
@@ -2916,7 +2918,7 @@ function auditTable(err) {
       <td class="muted">${new Date(a.created_at).toLocaleString("ko-KR")}</td>
       <td>${esc(a.action)}</td>
       <td class="muted">${esc((a.target_id || "").slice(0, 8))}</td>
-      <td class="muted" style="white-space:normal;max-width:520px">${esc(JSON.stringify(a.detail))}</td>
+      <td class="muted long" style="max-width:520px">${esc(JSON.stringify(a.detail))}</td>
     </tr>`).join("")}</tbody></table></div>`;
 }
 
@@ -2971,14 +2973,14 @@ function batchesTable(shown) {
   return `<h2>전체 지급 묶음</h2>
   <div class="table-scroll"><table>
     <thead><tr><th>등록</th><th>내용</th><th>메모</th><th>받을 수 있는 기간</th>
-      <th>상태</th><th style="text-align:right">수령</th><th>관리</th></tr></thead>
+      <th class="c fit">상태</th><th class="num">수령</th><th>관리</th></tr></thead>
     <tbody>${shown.map(({ b, st }) => {
       const rows = `<tr>
         <td class="muted">${when(b.created_at)}</td>
         <td>${rewardCells(b)}</td>
         <td class="muted">${esc(b.memo || "")}</td>
         <td class="muted">${when(b.starts_at)} ~ ${when(b.expires_at)}</td>
-        <td><span class="pill ${st.cls}">${st.label}</span>${
+        <td class="c fit"><span class="pill ${st.cls}">${st.label}</span>${
           st.key === "revoked" && b.revoked_at
             ? `<div class="muted" style="font-size:11px;margin-top:3px">${when(b.revoked_at)}${
                 b.revoked_count != null ? ` · ${fmt(b.revoked_count)}건` : ""}</div>`
@@ -3013,9 +3015,9 @@ function rewardState(r, now) {
 function rewardsRows(shown) {
   if (!shown.length) return "";
   return `<h2>개별 지급</h2><div class="table-scroll"><table>
-    <thead><tr><th>시각</th><th>대상</th><th style="text-align:right">코인</th>
-      <th style="text-align:right">힌트</th><th style="text-align:right">자동</th>
-      <th>메모</th><th>상태</th></tr></thead>
+    <thead><tr><th>시각</th><th>대상</th><th class="num">코인</th>
+      <th class="num">힌트</th><th class="num">자동</th>
+      <th>메모</th><th class="c fit">상태</th></tr></thead>
     <tbody>${shown.map(({ r, st }) => {
       const who = PLAYERS.find((p) => p.id === r.profile_id);
       return `<tr>
@@ -3023,7 +3025,7 @@ function rewardsRows(shown) {
         <td>${esc(who?.username || (r.profile_id || "").slice(0, 8))}</td>
         <td class="num">${fmt(r.coins)}</td><td class="num">${fmt(r.hints)}</td><td class="num">${fmt(r.autos)}</td>
         <td class="muted">${esc(r.memo || "")}</td>
-        <td><span class="pill ${st.cls}">${st.label}</span>${
+        <td class="c fit"><span class="pill ${st.cls}">${st.label}</span>${
           r.claimed_at ? `<div class="muted" style="font-size:11px;margin-top:3px">${
             new Date(r.claimed_at).toLocaleDateString("ko-KR")}</div>` : ""}</td>
       </tr>`;
