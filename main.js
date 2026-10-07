@@ -287,40 +287,199 @@ function pushHoursView() {
 // 라이브러리를 쓰지 않는다. 필요한 건 시계열 두어 개와 막대 하나뿐이고,
 // 외부 스크립트를 붙이면 그쪽이 죽는 날 관리자 페이지가 통째로 안 열린다.
 
-/** 여러 계열을 겹쳐 그리는 선 그래프. series = [{name, color, values:[n]}] */
+/**
+ * 여러 계열을 겹쳐 그리는 선 그래프. series = [{name, color, values:[n]}]
+ *
+ * 선만 SVG로 그리고 눈금 글자와 점은 HTML로 올린다. SVG를 preserveAspectRatio="none"으로
+ * 늘려 폭을 채우는데, 그 안에 글자를 두면 글자도 같이 늘어나 날짜가 안 읽혔다.
+ * 자리는 전부 백분율로 잡아서 SVG가 얼마나 늘어나든 HTML과 어긋나지 않는다.
+ * 포인터를 올렸을 때 쓸 값은 data-lc에 JSON으로 실어 둔다. 짚는 코드는 아래 lcShow다.
+ */
 function lineChart(labels, series, height = 160) {
-  const W = 720, H = height, PAD = { l: 44, r: 12, t: 12, b: 22 };
-  const iw = W - PAD.l - PAD.r, ih = H - PAD.t - PAD.b;
-  const max = Math.max(1, ...series.flatMap((s) => s.values));
-  const x = (i) => PAD.l + (labels.length < 2 ? iw / 2 : (i * iw) / (labels.length - 1));
+  const W = 720, H = height, PAD = { t: 10, b: 6 };
+  const ih = H - PAD.t - PAD.b;
+  const n = labels.length;
+  // 가운데 눈금이 반올림으로 틀리지 않게, 정수만 있는 계열은 꼭대기를 짝수로 올린다.
+  // 값이 다 0이면 눈금이 0, 1, 1로 적혀 있었다. 이제 0, 1, 2다.
+  const top = Math.max(0, ...series.flatMap((s) => s.values));
+  const ints = series.every((s) => s.values.every((v) => Number.isInteger(v)));
+  const max = ints ? Math.max(2, top + (top % 2)) : Math.max(1, top);
+  const x = (i) => (n < 2 ? W / 2 : (i * W) / (n - 1));
   const y = (v) => PAD.t + ih - (v / max) * ih;
+  // HTML로 올리는 것들의 자리. SVG 좌표를 백분율로 옮긴 값이다.
+  const px = (i) => +((x(i) / W) * 100).toFixed(2);
+  const py = (v) => +((y(v) / H) * 100).toFixed(2);
 
-  const grid = [0, 0.5, 1].map((f) => {
-    const gy = PAD.t + ih - f * ih;
-    return `<line x1="${PAD.l}" y1="${gy}" x2="${W - PAD.r}" y2="${gy}" class="gl"/>
-            <text x="${PAD.l - 6}" y="${gy + 4}" class="ax" text-anchor="end">${fmt(Math.round(max * f))}</text>`;
-  }).join("");
+  const yTicks = [0, 0.5, 1].map((f) => ({ top: py(max * f), text: fmt(Math.round(max * f * 100) / 100) }));
+  const grid = yTicks.map((t) => `<i class="lc-gl" style="top:${t.top}%"></i>`).join("");
+  // 눈금 글자는 절대 위치라 칸 폭을 못 정한다. 가장 긴 글자를 안 보이게 깔아 폭을 잡는다.
+  const widest = yTicks.reduce((a, t) => (t.text.length > a.length ? t.text : a), "");
+  const yAxis = `<b>${esc(widest)}</b>` + yTicks.map((t) =>
+    `<span style="top:${t.top}%">${esc(t.text)}</span>`).join("");
 
+  // 늘어난 비율대로 선이 굵어지거나 가늘어지지 않게 non-scaling-stroke를 건다.
   const paths = series.map((s) => {
     const d = s.values.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
-    const last = s.values.length - 1;
     return `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2"
-                  stroke-linejoin="round" stroke-linecap="round"/>
-            <circle cx="${x(last).toFixed(1)}" cy="${y(s.values[last] || 0).toFixed(1)}" r="3" fill="${s.color}"/>`;
+                  vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/>`;
+  }).join("");
+  // 마지막 날의 점. SVG circle은 같이 늘어나 타원이 되므로 HTML로 올린다.
+  const ends = series.map((s) => {
+    const last = s.values.length - 1;
+    return last < 0 ? "" : `<i class="lc-end" style="left:${px(last)}%;top:${py(s.values[last] || 0)}%;background:${s.color}"></i>`;
   }).join("");
 
-  const ticks = labels.map((d, i) =>
-    (i === 0 || i === labels.length - 1 || i === Math.floor(labels.length / 2))
-      ? `<text x="${x(i)}" y="${H - 6}" class="ax" text-anchor="middle">${esc(d.slice(5))}</text>` : "").join("");
+  // 좁은 화면에서는 lc-minor를 숨겨 하나 걸러 적는다. 처음과 끝은 남기고, 끝과 붙는 바로 앞 눈금도 숨긴다.
+  const tickAt = lcTicks(n), lastJ = tickAt.length - 1;
+  const ticks = tickAt.map((i, j) => {
+    const minor = (j % 2 === 1 && j !== lastJ) || (lastJ % 2 === 1 && j === lastJ - 1);
+    return `<span class="lc-tick${minor ? " lc-minor" : ""}" style="left:${px(i)}%">${esc(lcShortDate(labels[i]))}</span>`;
+  }).join("");
 
   const legend = series.map((s) =>
     `<span class="lg"><i style="background:${s.color}"></i>${esc(s.name)}</span>`).join("");
 
-  return `<div class="chart">
-    <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img">${grid}${paths}${ticks}</svg>
+  // 포인터를 올렸을 때 짚는 점과 말풍선 줄. 자리와 값은 lcShow가 채운다.
+  const marks = series.map((s) => `<i class="lc-pt" style="background:${s.color}"></i>`).join("");
+  const rows = series.map((s) =>
+    `<div class="lc-row"><i style="background:${s.color}"></i><span>${esc(s.name)}</span><b></b></div>`).join("");
+  const data = {
+    labels: labels.map(String),
+    xs: labels.map((_, i) => px(i)),
+    series: series.map((s) => ({ values: s.values, ys: s.values.map((v) => py(v || 0)) })),
+  };
+
+  return `<div class="chart lc" data-lc="${esc(JSON.stringify(data))}">
+    <div class="lc-body">
+      <div class="lc-y">${yAxis}</div>
+      <div class="lc-plot">${grid}
+        <div class="lc-area">
+          <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img">${paths}</svg>
+          ${ends}<i class="lc-guide"></i>${marks}
+        </div>
+      </div>
+      <div class="lc-x"><div class="lc-xin">${ticks}<span class="lc-chip"></span></div></div>
+    </div>
     <div class="legend">${legend}</div>
+    <div class="lc-tip"><div class="lc-date"></div>${rows}</div>
   </div>`;
 }
+
+/** 아래 축에 날짜를 적을 자리. 처음과 끝은 늘 넣고, 그 사이는 같은 간격으로 7개를 넘지 않게 고른다.
+ *  점이 7개 이하면 다 적는다. 30일이면 5일 간격으로 7개, 14일이면 3일 간격으로 5개다.
+ *  간격이 딱 안 떨어지면 끝 칸만 짧아지고, 끝 날짜와 붙을 만큼 짧으면 그 앞 눈금을 뺀다.
+ *  반올림으로 고르게 나누면 14일에서 3, 2, 3, 2칸으로 들쭉날쭉해 보여서 이렇게 했다. */
+function lcTicks(n) {
+  if (n <= 7) return [...Array(n).keys()];
+  const step = Math.ceil((n - 1) / 6);
+  const out = [];
+  for (let i = 0; i < n - 1; i += step) out.push(i);
+  if (n - 1 - out[out.length - 1] < step * 0.6) out.pop();
+  out.push(n - 1);
+  return out;
+}
+
+const LC_WEEK = "일월화수목금토";
+
+/** 축과 칩에 적는 짧은 날짜. 2026-10-07과 10-07은 10/07로 적고, 날짜가 아니면 그대로 둔다. */
+function lcShortDate(s) {
+  const m = /^(?:\d{4}-)?(\d{2})-(\d{2})$/.exec(String(s));
+  return m ? `${m[1]}/${m[2]}` : String(s);
+}
+
+/** 말풍선에 적는 날짜. 2026-10-07이면 「10월 7일 (수)」.
+ *  요일은 문자열의 연월일만으로 센다. 브라우저 시간대로 Date를 만들면 해외에서 하루 밀린다.
+ *  순위 차트처럼 연도 없이 월-일만 오면 요일을 셀 수 없어 날짜만 적는다. */
+function lcLongDate(s) {
+  const full = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s));
+  if (full) {
+    const w = new Date(Date.UTC(+full[1], +full[2] - 1, +full[3])).getUTCDay();
+    return `${+full[2]}월 ${+full[3]}일 (${LC_WEEK[w]})`;
+  }
+  const md = /^(\d{2})-(\d{2})$/.exec(String(s));
+  return md ? `${+md[1]}월 ${+md[2]}일` : String(s);
+}
+
+// 선 그래프 위에서 포인터가 움직이면 가장 가까운 날을 짚는다.
+// 화면을 innerHTML로 통째로 다시 그리므로 그래프마다 달면 그릴 때마다 다시 달아야 한다.
+// 그래서 문서에 한 번만 달고, 값은 그래프 요소의 data-lc에서 읽는다.
+const LC_DATA = new WeakMap();
+/** 지금 짚고 있는 그래프. 없으면 null. */
+let LC_ON = null;
+
+function lcShow(chart, clientX) {
+  let d = LC_DATA.get(chart);
+  if (!d) {
+    try { d = JSON.parse(chart.dataset.lc); } catch { return; }
+    LC_DATA.set(chart, d);
+  }
+  const n = d.labels.length;
+  if (!n) return;
+  if (LC_ON !== chart) lcHide();
+  const ar = chart.querySelector(".lc-area").getBoundingClientRect();
+  const i = n < 2 ? 0
+    : Math.min(n - 1, Math.max(0, Math.round(((clientX - ar.left) / ar.width) * (n - 1))));
+  LC_ON = chart;
+  chart.classList.add("on");
+
+  const left = d.xs[i] + "%";
+  chart.querySelector(".lc-guide").style.left = left;
+  chart.querySelectorAll(".lc-pt").forEach((p, k) => {
+    const top = d.series[k].ys[i];
+    p.style.left = left;
+    p.style.top = top + "%";
+    p.style.visibility = top == null ? "hidden" : "";
+  });
+  chart.querySelector(".lc-date").textContent = lcLongDate(d.labels[i]);
+  chart.querySelectorAll(".lc-row b").forEach((b, k) => { b.textContent = fmt(d.series[k].values[i]); });
+
+  // 아래 축의 날짜 칩. 안내선과 같은 left를 써서 바로 밑에 온다. 칩에 가리는 눈금 글자는 잠깐 숨긴다.
+  const chip = chart.querySelector(".lc-chip");
+  chip.textContent = lcShortDate(d.labels[i]);
+  chip.style.left = left;
+  const cr = chip.getBoundingClientRect();
+  chart.querySelectorAll(".lc-tick").forEach((t) => {
+    const tr = t.getBoundingClientRect();
+    t.classList.toggle("lc-hide", tr.right + 4 > cr.left && tr.left - 4 < cr.right);
+  });
+
+  // 말풍선은 안내선 오른쪽에 둔다. 오른쪽 끝에서 넘치면 왼쪽으로 넘기고, 어느 쪽이든 그래프 칸 안에 가둔다.
+  const tip = chart.querySelector(".lc-tip");
+  const cb = chart.getBoundingClientRect();
+  const gx = ar.left - cb.left - chart.clientLeft + (d.xs[i] / 100) * ar.width;
+  const tw = tip.offsetWidth, room = chart.clientWidth, GAP = 12, EDGE = 6;
+  let tl = gx + GAP;
+  if (tl + tw > room - EDGE) tl = gx - GAP - tw;
+  tip.style.left = Math.max(EDGE, Math.min(tl, room - tw - EDGE)) + "px";
+  tip.style.top = (ar.top - cb.top - chart.clientTop + 4) + "px";
+}
+
+function lcHide() {
+  if (!LC_ON) return;
+  LC_ON.classList.remove("on");
+  LC_ON.querySelectorAll(".lc-hide").forEach((t) => t.classList.remove("lc-hide"));
+  LC_ON = null;
+}
+
+const lcPlotOf = (e) => e.target.closest?.(".lc-plot");
+document.addEventListener("pointermove", (e) => {
+  const plot = lcPlotOf(e);
+  if (plot) lcShow(plot.closest(".lc"), e.clientX);
+  else if (e.pointerType !== "touch") lcHide();
+});
+// 손가락은 누르는 순간 짚는다. 떼어도 그대로 두고, 그래프 밖을 누르면 닫는다.
+document.addEventListener("pointerdown", (e) => {
+  const plot = lcPlotOf(e);
+  if (plot) lcShow(plot.closest(".lc"), e.clientX);
+  else lcHide();
+});
+// 마우스가 그림 밖으로 나가면 닫는다. pointerleave는 위로 전달되지 않아서 pointerout으로 받는다.
+document.addEventListener("pointerout", (e) => {
+  if (!LC_ON || e.pointerType === "touch") return;
+  if (!LC_ON.querySelector(".lc-plot").contains(e.relatedTarget)) lcHide();
+});
+// 그래프 위에서 시작한 손가락이 스크롤로 바뀌면 짚기를 그만둔다.
+document.addEventListener("pointercancel", lcHide);
 
 /** 가로 막대 — 구간별 인원처럼 항목이 몇 개 안 될 때. */
 function barChart(rows) {
@@ -352,40 +511,66 @@ function kpiRow() {
   const last = STATS[STATS.length - 1];
   const prev = STATS[STATS.length - 2];
   // 최근 7일 평균과 그 이전 7일 평균. 하루치는 요일을 타서 혼자서는 못 믿는다.
+  // 그 이전 7일이 없으면(서버를 연 지 7일이 안 됨) null로 두어 화살표를 안 붙인다.
   const avg = (arr, k) => (arr.length
-    ? Math.round(arr.reduce((a, r) => a + num(r, k), 0) / arr.length) : 0);
+    ? Math.round(arr.reduce((a, r) => a + num(r, k), 0) / arr.length) : null);
   const w1 = STATS.slice(-7), w0 = STATS.slice(-14, -7);
+  // 어제 줄이 없으면 견줄 것이 없다. 0으로 채우면 첫날 숫자가 통째로 「+」로 붙었다.
+  const was = (k) => (prev ? num(prev, k) : null);
+  const net = (r) => num(r, "coin_earned") - num(r, "coin_spent");
 
-  // D1 리텐션은 **어제 가입한 사람은 아직 하루가 안 지났다.** 그래서 마지막 줄이 아니라
-  // 하루 건너뛴 줄을 본다 — 안 그러면 늘 0%에 가깝게 나온다.
-  const rt = RETENTION.filter((r) => Number(r.cohort) > 0);
-  const rtRow = rt.length > 1 ? rt[rt.length - 2] : rt[rt.length - 1];
-  const d1 = rtRow && Number(rtRow.cohort)
-    ? Math.round((Number(rtRow.d1) / Number(rtRow.cohort)) * 100) : null;
+  // D1 리텐션은 **어제 가입한 사람은 아직 하루가 안 지났다.** 그래서 다음 날이 한국시간으로
+  // 다 지난 가입일 중 가장 최근 것을 본다. 안 그러면 늘 0%에 가깝게 나온다.
+  // admin_retention은 최신 날짜부터 주므로(006) 줄 순서가 아니라 날짜로 고른다.
+  const rtRow = RETENTION
+    .filter((r) => Number(r.cohort) > 0 && retentionDayDone(r.cohort_date, 1))
+    .reduce((a, r) => (!a || String(r.cohort_date) > String(a.cohort_date) ? r : a), null);
+  const d1 = rtRow ? Math.round((Number(rtRow.d1) / Number(rtRow.cohort)) * 100) : null;
+  const ratio = sinkRatio();
 
   const cards = [
-    ["오늘 접속자", fmt(num(last, "active")), delta(num(last, "active"), num(prev, "active"))],
-    ["오늘 신규", fmt(num(last, "signups")), delta(num(last, "signups"), num(prev, "signups"))],
+    ["오늘 접속자", fmt(num(last, "active")), delta(num(last, "active"), was("active"))],
+    ["오늘 신규", fmt(num(last, "signups")), delta(num(last, "signups"), was("signups"))],
     ["7일 평균 접속", fmt(avg(w1, "active")), delta(avg(w1, "active"), avg(w0, "active"))],
     ["D1 리텐션", d1 == null ? "—" : d1 + "%", ""],
-    ["코인 순증 (오늘)", fmt(num(last, "coin_earned") - num(last, "coin_spent")),
-     delta(num(last, "coin_earned") - num(last, "coin_spent"),
-           num(prev, "coin_earned") - num(prev, "coin_spent"))],
-    ["소모/발행", ECON ? String(ECON.sink_ratio) : "—", ""],
+    ["코인 순증 (오늘)", fmt(net(last)), delta(net(last), prev ? net(prev) : null)],
+    ["소모/발행", ratio == null ? "—" : String(ratio), ""],
   ];
   return `<div class="cards">${cards.map(([label, value, d]) => `
     <div class="card"><div class="label">${label}</div>
       <div class="value">${value} ${d}</div></div>`).join("")}</div>`;
 }
 
-/** 어제(또는 지난주) 대비. 0에서 늘어난 건 비율로 말할 수 없어 숫자만 적는다. */
+/** 어제(또는 지난주) 대비. 0에서 늘어난 건 비율로 말할 수 없어 숫자만 적는다.
+ *  before가 null이면 견줄 날이 없는 것이라 아무것도 안 붙인다. */
 function delta(now, before) {
+  if (before == null) return "";
   if (before === 0) return now === 0 ? "" : `<span class="dl">+${fmt(now)}</span>`;
   const diff = now - before;
   if (diff === 0) return "";
   const pct = Math.round((diff / Math.abs(before)) * 100);
   // 방향은 화살표가 말한다. 색까지 쓰지 않는 이유는 CSS 주석에 적어 뒀다.
   return `<span class="dl">${diff > 0 ? "▲" : "▼"}${Math.abs(pct)}%</span>`;
+}
+
+/** 소모/발행이 이 값 아래면 경고한다. 문구도 이 값을 읽는다. */
+const SINK_WARN = 0.35;
+
+/**
+ * 소모/발행 비율. 발행이 0이면 null이다.
+ * 서버는 0으로 나누지 않으려고 분모를 1로 바꿔 계산한다(029). 그래서 발행이 0인 서버에서는
+ * 비율 자리에 소모 합이 그대로 들어와 뜻이 없다.
+ */
+function sinkRatio() {
+  if (!ECON || !(Number(ECON.earned) > 0)) return null;
+  return Number(ECON.sink_ratio);
+}
+
+/** 소모/발행 경고를 띄울지. 비율이 0이면 띄우지 않는다(사용자 지시).
+ *  소모가 하나도 없으면 상점을 안 쓴 게 아니라 소모 기록이 아직 안 쌓인 경우였다(개발 서버·새 서버). */
+function sinkLow() {
+  const r = sinkRatio();
+  return r != null && r > 0 && r < SINK_WARN;
 }
 
 function chartsTab(err) {
@@ -415,9 +600,9 @@ function chartsTab(err) {
       <div class="card"><div class="label">발행 (30일)</div><div class="value">${fmt(ECON.earned)}</div></div>
       <div class="card"><div class="label">소모 (30일)</div><div class="value">${fmt(ECON.spent)}</div></div>
       <div class="card"><div class="label">소모/발행</div>
-        <div class="value" style="${Number(ECON.sink_ratio) < 0.35 ? "color:var(--danger)" : ""}">${ECON.sink_ratio}</div></div>
+        <div class="value" style="${sinkLow() ? "color:var(--danger)" : ""}">${sinkRatio() ?? "—"}</div></div>
     </div>
-    ${Number(ECON.sink_ratio) < 0.35 ? `<div class="notice">소모/발행이 0.35 아래입니다 —
+    ${sinkLow() ? `<div class="notice">소모/발행이 ${SINK_WARN} 아래입니다.
       코인이 쌓이기만 하고 있습니다. 상점 가격이나 판당 지급을 볼 때입니다.</div>` : ""}` : ""}
     <h3 class="sub">코인 획득 · 소모</h3>
     ${lineChart(days, [
@@ -466,21 +651,34 @@ function scoreRows(rows, kind, name) {
   });
 }
 
+/** 가입일에서 n일째 되는 날이 한국시간으로 다 지났는가.
+ *  안 지난 날은 재방문이 아직 다 안 세어져 0%에 가깝게 나온다. 날짜를 못 읽으면 지난 것으로 본다. */
+function retentionDayDone(cohortDate, n) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(cohortDate));
+  if (!m) return true;
+  const day = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3] + n)).toISOString().slice(0, 10);
+  return day < kstToday();
+}
+
 function retentionTable() {
   if (!RETENTION.length) return `<div class="empty">아직 계산할 가입 기록이 없습니다</div>`;
   const pct = (n, d) => (d ? Math.round((n / d) * 100) + "%" : "—");
+  // 그날이 아직 안 지났으면 0%로 적지 않고 비워 둔다.
+  const cell = (r, k, n) => (retentionDayDone(r.cohort_date, n)
+    ? `${pct(Number(r[k]), Number(r.cohort))}
+        <span class="muted">(${fmt(r[k])})</span>`
+    : `<span class="muted" title="${n === 1 ? "다음 날이" : `${n}일째가`} 아직 안 지났습니다">—</span>`);
   return `<div class="table-scroll"><table style="min-width:460px">
     <thead><tr><th>가입일</th><th style="text-align:right">인원</th>
       <th style="text-align:right">다음 날</th><th style="text-align:right">7일째</th></tr></thead>
     <tbody>${RETENTION.map((r) => `<tr>
       <td class="muted">${fmtDate(r.cohort_date)}</td>
       <td class="num">${fmt(r.cohort)}</td>
-      <td class="num">${pct(Number(r.d1), Number(r.cohort))}
-        <span class="muted">(${fmt(r.d1)})</span></td>
-      <td class="num">${pct(Number(r.d7), Number(r.cohort))}
-        <span class="muted">(${fmt(r.d7)})</span></td>
+      <td class="num">${cell(r, "d1", 1)}</td>
+      <td class="num">${cell(r, "d7", 7)}</td>
     </tr>`).join("")}</tbody></table></div>
-    <p class="muted" style="font-size:12px">표본이 적은 날은 비율이 크게 튑니다 — 인원수를 같이 보세요.</p>`;
+    <p class="muted" style="font-size:12px">표본이 적은 날은 비율이 크게 튑니다 — 인원수를 같이 보세요.
+      그날이 아직 안 지난 칸은 「—」로 비워 둡니다.</p>`;
 }
 
 /** 통화를 섞어 더하면 안 된다 — 통화별로 나눠서 보여준다. */
@@ -1702,13 +1900,15 @@ function rankingTab(err) {
   const today = kstToday();
   const day = RANK_DATE || today;
   const stat = RANK_STATS.find((r) => String(r.day).slice(0, 10) === day);
+  // 집계 줄은 점수를 낸 사람이 있는 날에만 있다(080). 없는 날의 최고·평균을 0으로 적으면 0점을 낸 것처럼 읽힌다.
+  const score = (k) => (stat && Number(stat.players) > 0 && stat[k] != null ? fmt(stat[k]) : "—");
 
   const cards = `
     <div class="cards">
       <div class="card"><div class="label">참가자</div><div class="value">${fmt(RANK_TOTAL)}</div></div>
-      <div class="card"><div class="label">최고 점수</div><div class="value">${fmt(stat?.top_score ?? 0)}</div></div>
-      <div class="card"><div class="label">평균</div><div class="value">${fmt(stat?.avg_score ?? 0)}</div></div>
-      <div class="card"><div class="label">중앙값</div><div class="value">${fmt(stat?.median_score ?? 0)}</div></div>
+      <div class="card"><div class="label">최고 점수</div><div class="value">${score("top_score")}</div></div>
+      <div class="card"><div class="label">평균</div><div class="value">${score("avg_score")}</div></div>
+      <div class="card"><div class="label">중앙값</div><div class="value">${score("median_score")}</div></div>
     </div>`;
 
   const days = RANK_STATS.map((r) => String(r.day).slice(5, 10));
@@ -2030,6 +2230,12 @@ function bindBell() {
     b.onclick = (e) => { e.stopPropagation(); BELL_OPEN = false; TAB = b.dataset.tab; refresh(); };
   });
 }
+
+// 메뉴 묶음 바깥을 누르면 닫는다. 한 번만 단다.
+document.addEventListener("click", (e) => {
+  if (e.target.closest(".nav > .item > .top:not([data-tab])")) return;
+  document.querySelectorAll(".nav > .item.open").forEach((x) => x.classList.remove("open"));
+});
 
 // 종 바깥을 누르면 닫는다. 한 번만 단다.
 document.addEventListener("click", (e) => {
@@ -2864,6 +3070,7 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     supporters: PLAYERS.filter((p) => p.supporter).length,
     unclaimed_rewards: REWARDS.filter((r) => !r.claimed_at).length,
   };
+  // 최고점은 사람이 없으면 「—」로 적는다. 아무도 안 한 날의 최고점 0은 0점을 낸 사람이 있는 것처럼 읽힌다.
 
   $("#app").innerHTML = `
     <div class="head">
@@ -2879,8 +3086,8 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     <div class="cards">
       <div class="card"><div class="label">전체 회원</div><div class="value">${fmt(S.members)}</div></div>
       <div class="card"><div class="label">오늘 플레이</div><div class="value">${fmt(S.today_players)}</div></div>
-      <div class="card"><div class="label">오늘 최고점</div><div class="value">${fmt(S.today_best)}</div></div>
-      <div class="card"><div class="label">누적 최고점</div><div class="value">${fmt(S.total_best)}</div></div>
+      <div class="card"><div class="label">오늘 최고점</div><div class="value">${Number(S.today_players) > 0 ? fmt(S.today_best) : "—"}</div></div>
+      <div class="card"><div class="label">누적 최고점</div><div class="value">${Number(S.members) > 0 ? fmt(S.total_best) : "—"}</div></div>
       <div class="card"><div class="label">응원해 주신 분</div><div class="value">${fmt(S.supporters)}</div></div>
       <div class="card"><div class="label">미수령 보상</div><div class="value">${fmt(S.unclaimed_rewards)}</div></div>
     </div>
@@ -2950,6 +3157,16 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
   });
   document.querySelectorAll("[data-tab]").forEach((b) => {
     b.onclick = () => { BELL_OPEN = false; TAB = b.dataset.tab; refresh(); };
+  });
+  // 위쪽 메뉴 묶음: 누르면 그 메뉴만 열고 나머지는 닫는다(index.html .nav .item.open 주석).
+  document.querySelectorAll(".nav > .item > .top:not([data-tab])").forEach((b) => {
+    b.onclick = (e) => {
+      e.stopPropagation();
+      const item = b.parentElement;
+      const willOpen = !item.classList.contains("open");
+      document.querySelectorAll(".nav > .item.open").forEach((x) => x.classList.remove("open"));
+      if (willOpen) item.classList.add("open");
+    };
   });
 
   if (TAB === "versusset") {

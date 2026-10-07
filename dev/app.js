@@ -15,18 +15,47 @@ const SUPABASE_URL = IS_DEV ? "https://xejwxuugyurnihnvbkcl.supabase.co"
 const ANON_KEY = IS_DEV
   ? "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inhland4dXVneXVybmlobnZia2NsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTEzMDY1MDIsImV4cCI6MjEwNjg4MjUwMn0.fJ8x_dbkeztdgs6bnu1zqtluPGFWf7lZsUDOScjZsyU"
   : "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhscmVzYnR6a2JkeXJ5aGh0bXV2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODYzMDM2ODcsImV4cCI6MjEwMTg3OTY4N30.FVhGFd2FjDyZeJXz8yVDwk5FOSBmXO_wlYBe6KpA09o";
-if (IS_DEV) {
-  const markDev = () => {
+// 배포본(dogadm.koinoroom.com)은 dev/ 경로로, 이 Mac에서 띄운 것은 ?env=dev로 서버를 가른다.
+const DEPLOYED = location.hostname === "dogadm.koinoroom.com";
+
+/** 지금 화면을 반대쪽 서버로 연 주소. 로그인은 서버마다 따로라 넘어가면 그쪽에서 한 번 로그인한다. */
+function otherEnvURL() {
+  const u = new URL(location.href);
+  if (DEPLOYED) {
+    u.pathname = IS_DEV ? (u.pathname.replace(/^\/dev(\/|$)/, "/")) : "/dev" + u.pathname;
+    u.searchParams.delete("env");
+  } else if (IS_DEV) {
+    u.searchParams.delete("env");
+  } else {
+    u.searchParams.set("env", "dev");
+  }
+  return u.toString();
+}
+
+// 개발 서버에서는 맨 위에 보라색 띠를, 운영에서는 오른쪽 아래에 작은 버튼을 둔다(사용자 요청, 2026-10-07).
+// 띠는 운영과 헷갈려 운영 데이터를 고치는 일을 막으려는 것이고, 버튼은 두 서버를 오가는 길이다.
+const markEnv = () => {
+  const go = document.createElement("button");
+  go.type = "button";
+  go.textContent = IS_DEV ? "운영으로 전환" : "개발 서버로 전환";
+  go.onclick = () => { location.href = otherEnvURL(); };
+  if (IS_DEV) {
     const bar = document.createElement("div");
-    bar.textContent = "개발 서버 dogpuzzle-dev. 운영 데이터가 아닙니다.";
-    bar.style.cssText = "position:sticky;top:0;z-index:9999;background:#7c3aed;color:#fff;font-weight:700;text-align:center;padding:6px 8px;font-size:13px";
+    bar.style.cssText = "position:sticky;top:0;z-index:9999;background:#7c3aed;color:#fff;font-weight:700;text-align:center;padding:6px 8px;font-size:13px;display:flex;gap:10px;justify-content:center;align-items:center;flex-wrap:wrap";
+    const label = document.createElement("span");
+    label.textContent = "개발 서버 dogpuzzle-dev. 운영 데이터가 아닙니다.";
+    go.style.cssText = "background:#fff;color:#5b21b6;border:0;border-radius:999px;padding:3px 10px;font-weight:700;font-size:12px;cursor:pointer";
+    bar.append(label, go);
     document.body.prepend(bar);
     document.title = "[개발] " + document.title;
-  };
-  // 모듈은 문서를 다 읽은 뒤에 돌 수도 있어서 두 경우를 다 받는다.
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", markDev);
-  else markDev();
-}
+  } else {
+    go.style.cssText = "position:fixed;right:12px;bottom:12px;z-index:9999;background:#ede9fe;color:#5b21b6;border:1px solid #c4b5fd;border-radius:999px;padding:6px 12px;font-weight:700;font-size:12px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.12)";
+    document.body.append(go);
+  }
+};
+// 모듈은 문서를 다 읽은 뒤에 돌 수도 있어서 두 경우를 다 받는다.
+if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", markEnv);
+else markEnv();
 
 export const sb = createClient(SUPABASE_URL, ANON_KEY);
 export const $ = (s, r = document) => r.querySelector(s);
