@@ -1,0 +1,477 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>DogPuzzle 관리자</title>
+<style>
+  /* 라이트 모드. 관리자 페이지는 밝은 곳에서 보는 일이 많고 표와 숫자가 대부분이라
+     밝은 바탕이 훨씬 잘 읽힌다. 한 가지 모드로 확실히 만든다 —
+     어중간하게 둘 다 지원하면 어느 쪽도 안 예쁘다.
+
+     크기는 거의 전부 clamp()로 잡았다. 특정 폭에서만 툭 바뀌는 게 아니라
+     화면이 넓어지고 좁아지는 만큼 연속적으로 따라간다. 중간 크기 화면
+     (태블릿 가로, 분할 화면, 작은 노트북)에서 어색해지지 않는 게 목적이다. */
+  :root {
+    --bg:#f4f6f8;          /* 살짝 푸른 회색. 순백이면 카드가 안 떠 보인다 */
+    --surface:#ffffff;
+    --zebra:#fafbfc;
+    --line:#e3e7ec;
+    --line-strong:#cfd6de;
+    --ink:#1a2430;
+    --dim:#63707e;
+    --accent:#0e8f87;
+    --accent-soft:#17b3a8;
+    --accent-wash:#e6f5f4;
+    --warn:#a3701a;
+    --warn-wash:#fdf4e3;
+    --danger:#cf4040;
+    --danger-wash:#fdeeee;
+    --shadow:0 1px 2px rgba(20,32,45,.05), 0 1px 3px rgba(20,32,45,.04);
+    --shadow-lift:0 4px 16px rgba(20,32,45,.10);
+
+    /* 화면 폭을 따라 같이 자라는 값들 */
+    --r:clamp(10px, 1.4vw, 14px);          /* 모서리 */
+    --gap:clamp(7px, 1.1vw, 12px);         /* 요소 사이 */
+    --pad-x:clamp(11px, 1.6vw, 16px);      /* 안쪽 좌우 */
+    --pad-y:clamp(9px, 1.2vw, 13px);       /* 안쪽 위아래 */
+    --fs:clamp(13px, 0.55vw + 12px, 14.5px);
+    --fs-sm:clamp(11.5px, 0.35vw + 11px, 13px);
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:var(--fs)/1.6 -apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo",
+            "Malgun Gothic","Segoe UI",sans-serif;
+       -webkit-font-smoothing:antialiased}
+  /* 24인치(1920) 모니터에서 좌우가 절반 가까이 놀았다. 1720이면 여백을 조금 남기고
+     화면을 거의 다 쓴다 — 표가 넓어져 관리 버튼 줄바꿈도 줄어든다. */
+  .wrap{width:min(1720px, 100%);margin:0 auto;
+        padding:0 clamp(10px, 2.2vw, 22px) clamp(48px, 8vw, 72px)}
+
+  /* ---------------------------------------------------------------- 머리 */
+  h1{font-size:clamp(16px, 1.1vw + 13px, 20px);margin:0;letter-spacing:-.3px;font-weight:800}
+  h2{font-size:clamp(13px, 0.5vw + 11.5px, 15px);margin:clamp(20px,3vw,30px) 0 10px;
+     color:var(--dim);font-weight:700;letter-spacing:.2px}
+  /* 차트 탭을 "사람 / 경제 / 진행" 덩어리로 갈랐다. h2가 덩어리 이름이고 h3가 그 안의
+     그래프 이름이다 — 둘이 같은 크기면 갈라 놓은 의미가 없어서 h3를 한 단 낮춘다.
+     덩어리 머리에는 윗선을 그어 어디서 새 덩어리가 시작하는지 눈으로 보이게 한다. */
+  h2{border-top:1px solid var(--line);padding-top:clamp(14px,2vw,20px)}
+  h2:first-of-type{border-top:0;padding-top:0}
+  h3.sub{font-size:clamp(12px,.4vw+11px,13.5px);margin:18px 0 8px;
+         color:var(--dim);font-weight:600;opacity:.85}
+  /* KPI 카드의 증감 표시. 숫자보다 작고 흐리게 — 주인공은 값이고 화살표는 곁들이다.
+     좋고 나쁨을 색으로 말하지 않는다(초록/빨강): 코인 순증은 늘어난 게 좋은 건지
+     나쁜 건지 상황에 따라 다르다. 방향만 알려 주고 판단은 사람이 한다. */
+  .dl{font-size:.62em;font-weight:700;margin-left:4px;color:var(--dim);
+      vertical-align:middle;white-space:nowrap}
+  .head{display:flex;align-items:center;gap:var(--gap);margin-bottom:var(--gap);
+        flex-wrap:wrap;position:sticky;top:0;z-index:20;background:var(--bg);
+        padding:clamp(10px,1.8vw,16px) 0 clamp(9px,1.4vw,13px);
+        border-bottom:1px solid var(--line)}
+  .head .spacer{flex:1}
+
+  /* ---------------------------------------------------------------- 상단 메뉴
+     탭을 제목 옆으로 올리고, 결이 비슷한 것끼리 묶어 마우스를 올리면 펼친다.
+     예전에는 탭 9개가 한 줄에 늘어서서 좁은 화면에서 가로로 밀려 났고,
+     "지금 어디를 보고 있는지"보다 "무엇이 있는지"를 찾는 데 시간이 더 들었다.
+
+     :focus-within을 같이 두는 이유 — 마우스가 없는 환경(태블릿, 키보드 이동)에서도
+     열려야 한다. hover만 걸면 그쪽에서는 메뉴가 아예 안 열린다. */
+  .nav{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+  .nav > .item{position:relative}
+  .nav .top{background:transparent;color:var(--dim);border:1px solid transparent;
+            border-radius:calc(var(--r) * .75);padding:8px 12px;
+            font-size:var(--fs-sm);font-weight:700;cursor:pointer;min-height:0}
+  .nav .top:hover{color:var(--ink);background:var(--surface)}
+  /* 선택된 메뉴는 **초록 덩어리로 칠하지 않는다**(사용자 지적). 머리말은 이미
+     제목·코인·종·버튼이 붙어 있는 자리라, 진한 색 블록이 하나 더 생기면 그쪽으로
+     눈이 끌려가 정작 내용이 밀린다. 옅은 바탕 + 글자색 + 아래 선으로 "여기"만 알린다. */
+  .nav .top.on{background:var(--accent-wash);color:var(--accent);
+               box-shadow:inset 0 -2px 0 var(--accent)}
+  .nav .top .caret{opacity:.5;font-size:10px;margin-left:3px}
+  /* 메뉴를 버튼에 **딱 붙인다**(top:100%, 여백 없음).
+     사이에 빈틈이 있으면 마우스가 그 위를 지나는 순간 :hover가 끊겨 메뉴가 닫힌다 —
+     "다른 메뉴를 고르려고 움직이면 자꾸 꺼진다"의 원인이 이것이었다.
+     보이지 않는 다리를 덧대는 방법도 있지만, 다리는 버튼 너비만 덮어서 대각선으로
+     움직이면 또 샌다. 틈을 아예 없애는 쪽이 경우를 안 남긴다.
+     떨어져 보이게 하는 건 위쪽 안여백이 대신한다. */
+  .nav .menu{position:absolute;top:100%;left:0;z-index:40;
+             min-width:170px;padding:10px 6px 6px;display:none;
+             background:var(--surface);border:1px solid var(--line);
+             border-radius:var(--r);box-shadow:0 10px 28px rgba(0,0,0,.18)}
+  .nav .item:hover .menu, .nav .item:focus-within .menu{display:block}
+  .nav .menu button{display:block;width:100%;text-align:left;
+                    background:transparent;color:var(--ink);border:0;
+                    border-radius:calc(var(--r) * .6);padding:9px 10px;
+                    font-size:var(--fs-sm);font-weight:600;min-height:0}
+  .nav .menu button:hover{background:var(--bg)}
+  .nav .menu button.on{color:var(--accent);font-weight:800}
+
+  /* 알림 종. **.nav 바깥에 있어서** 위 선택자가 안 먹는다 — 처음에 .item만 주고
+     끝냈다가 팝업이 영영 안 열렸다. 자기 선택자를 따로 준다. */
+  .bell{position:relative}
+  .bell > .top{background:transparent;color:var(--dim);border:0;
+               border-radius:calc(var(--r) * .75);padding:8px 10px;
+               font-size:var(--fs-sm);font-weight:700;cursor:pointer;min-height:0}
+  .bell > .top:hover{background:var(--surface)}
+  .bell .menu{position:absolute;top:100%;right:0;z-index:50;
+              min-width:250px;padding:10px 6px 6px;display:none;
+              background:var(--surface);border:1px solid var(--line);
+              border-radius:var(--r);box-shadow:0 10px 28px rgba(0,0,0,.18)}
+  /* 열고 닫기는 종을 눌러서 한다(.open). 휴대폰에서 :focus-within으로 열면 종을 다시 눌러도
+     포커스가 남아 안 닫혔고, 「확인」으로 화면을 다시 그리는 순간 뒤의 버튼이 같이 눌렸다(2026-10-05).
+     마우스가 있는 화면만 올려서도 열린다. */
+  .bell.open .menu{display:block}
+  @media (hover:hover){ .bell:hover .menu{display:block} }
+  .bell .menu .line{display:flex;align-items:center;gap:8px;padding:8px 8px}
+  .bell .menu .line:hover{background:var(--bg);border-radius:calc(var(--r) * .6)}
+  .bell .menu .line .go{flex:1;text-align:left;background:transparent;border:0;
+                        color:var(--ink);font-size:var(--fs-sm);font-weight:600;
+                        min-height:0;padding:0;cursor:pointer}
+  .bell .menu .line .seen{background:transparent;border:1px solid var(--line);
+                          color:var(--dim);font-size:11px;font-weight:700;
+                          padding:3px 8px;min-height:0;border-radius:99px;cursor:pointer}
+  .bell .menu .empty{padding:10px;font-size:var(--fs-sm)}
+  /* 좁은 화면에서는 제목 아래로 내려가 한 줄을 통째로 쓴다. */
+  @media (max-width: 700px){
+    /* 메뉴를 **항목이 아니라 줄 전체**를 기준으로 편다.
+       항목 기준으로 두면 왼쪽 항목의 메뉴는 왼쪽으로, 오른쪽 항목의 메뉴는 오른쪽으로
+       화면을 벗어난다. 예전에는 `left:auto;right:0`으로 오른쪽에 맞춰 뒤집었는데,
+       그건 오른쪽 끝 항목만 구하고 **왼쪽 항목을 대신 잘라 먹었다** — 폰에서
+       "같이하기 ▾"를 열면 현황·설정이 "황·정"으로만 보였다(2026-08-17 제보).
+       한쪽으로 미는 한 반대쪽이 넘치므로, 아예 줄 폭을 다 쓰게 해서 경우를 없앤다.
+
+       .item의 position:relative를 static으로 되돌려야 기준이 .nav로 올라간다.
+       그러면 top:100%가 항목 아래가 아니라 **줄 아래**를 뜻하게 되는데, 폰에서는
+       nav가 한 줄을 통째로 쓰므로 결과가 같다. */
+    .nav{width:100%;order:3;position:relative}
+    .nav > .item{position:static}
+    .nav .menu{left:0;right:0;min-width:0}
+  }
+
+  /* ---------------------------------------------------------------- 버튼 */
+  /* 손가락으로 누르는 화면에서는 38px 밑으로 내려가면 안 눌린다.
+     그래서 최소값만 고정하고 위로만 자라게 둔다. */
+  button{background:var(--accent);color:#fff;border:0;border-radius:calc(var(--r) * .75);
+         padding:calc(var(--pad-y) * .75) var(--pad-x);
+         font-size:var(--fs-sm);font-weight:700;cursor:pointer;
+         min-height:max(38px, 2.6em);transition:filter .12s,background .12s;
+         font-family:inherit;touch-action:manipulation}
+  button:hover{filter:brightness(1.06)}
+  button:active{filter:brightness(.95)}
+  button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  button.ghost{background:var(--surface);color:var(--dim);border:1px solid var(--line-strong)}
+  button.ghost:hover{background:#f0f3f6;color:var(--ink)}
+  button.danger{background:var(--danger)}
+  button.sm{padding:calc(var(--pad-y) * .45) calc(var(--pad-x) * .7);
+            font-size:clamp(11px,.3vw + 10.5px,12.5px);min-height:max(32px, 2.2em)}
+  button:disabled{opacity:.45;cursor:default;filter:none}
+
+  /* ---------------------------------------------------------------- 로그인 */
+  .login{width:min(380px, 100%);margin:clamp(40px, 12vh, 110px) auto;background:var(--surface);
+         border:1px solid var(--line);border-radius:calc(var(--r) * 1.3);
+         padding:clamp(20px, 4vw, 30px);box-shadow:var(--shadow-lift)}
+  .login h2{margin:0 0 6px;font-size:clamp(16px,1vw+14px,19px);color:var(--ink)}
+  .login p{margin:0 0 18px;color:var(--dim);font-size:var(--fs-sm)}
+  .err{color:var(--danger);font-size:var(--fs-sm);margin-top:10px;min-height:1.3em}
+
+  /* ---------------------------------------------------------------- 입력 */
+  /* 여기만 고정값을 쓴다. 모바일 사파리는 글자가 16px보다 작은 입력칸을 누르면
+     화면을 통째로 확대해 버려서, 표가 화면 밖으로 밀려 나가 아무것도 못 하게 된다.
+     넓은 화면에서만 살짝 줄인다. */
+  input,select,textarea{font-family:inherit;font-size:16px}
+  @media (min-width:721px){ input,select,textarea{font-size:13.5px} }
+  input,textarea,select{width:100%;padding:calc(var(--pad-y) * .8) var(--pad-x);
+    border-radius:calc(var(--r) * .75);border:1px solid var(--line-strong);
+    background:var(--surface);color:var(--ink);margin-bottom:10px;min-height:max(40px, 2.8em)}
+  textarea{resize:vertical;line-height:1.6}
+  input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent);
+    box-shadow:0 0 0 3px var(--accent-wash)}
+  select,input[type=search],input[type=number],input[type=text],input[type=datetime-local]{
+    width:auto;margin:0}
+  input[type=checkbox]{width:auto;min-height:0;margin:0;accent-color:var(--accent);
+    transform:scale(1.15);cursor:pointer}
+
+  /* ---------------------------------------------------------------- 요약 카드 */
+  /* 칸 최소폭도 화면을 따라간다. 좁으면 2열, 넓어질수록 자연스럽게 늘어난다. */
+  .cards{display:grid;gap:var(--gap);margin-bottom:clamp(14px,2.2vw,22px);
+         grid-template-columns:repeat(auto-fit, minmax(clamp(128px, 17vw, 168px), 1fr))}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+        padding:var(--pad-y) var(--pad-x);box-shadow:var(--shadow)}
+  .card .label{color:var(--dim);font-size:clamp(11px,.25vw+10.5px,12px);
+               letter-spacing:.2px;font-weight:600}
+  .card .value{font-size:clamp(18px, 1.6vw + 14px, 24px);font-weight:800;margin-top:2px;
+               font-variant-numeric:tabular-nums;letter-spacing:-.5px}
+
+  /* ---------------------------------------------------------------- 탭 */
+  /* 줄바꿈 대신 옆으로 미는 띠. 두 줄 세 줄로 늘어나면 화면 절반이 탭이 되고
+     정작 내용이 안 보인다. */
+
+  /* ---------------------------------------------------------------- 도구줄 */
+  .toolbar{display:flex;gap:8px;align-items:center;margin-bottom:var(--gap);flex-wrap:wrap;
+           background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+           padding:calc(var(--pad-y) * .85) var(--pad-x);box-shadow:var(--shadow)}
+  .toolbar input[type=search]{flex:1 1 min(220px, 100%)}
+  .actions{display:flex;gap:6px;flex-wrap:wrap}
+
+  /* 점검 모드 등 켬/끔 스위치 — 체크박스에 라벨을 붙인 단순한 형태 */
+  .switch{display:inline-flex;align-items:center;gap:7px;font-weight:700;
+          padding:8px 12px;background:var(--surface);border:1px solid var(--line);
+          border-radius:var(--r);cursor:pointer;user-select:none}
+  .switch input{accent-color:var(--danger);width:16px;height:16px}
+
+  /* 미끄러지는 토글.
+     예전에는 상태 글자("꺼짐")와 동작 버튼("켜기")을 나란히 뒀는데, 둘 중 어느 것이
+     지금 상태인지 매번 다시 읽어야 했다(사용자 지적: "어떻게 되고 있는건지 알 수가
+     없네"). 토글은 손잡이 위치가 곧 상태라 읽을 것이 없다. */
+  .tgl{display:inline-flex;align-items:center;gap:9px;cursor:pointer;user-select:none}
+  .tgl input{position:absolute;opacity:0;width:0;height:0}
+  .tgl-track{position:relative;width:46px;height:26px;flex:0 0 auto;border-radius:999px;
+             background:var(--line-strong);transition:background .18s ease}
+  .tgl-thumb{position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;
+             background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.3);transition:left .18s ease}
+  .tgl input:checked + .tgl-track{background:var(--accent)}
+  .tgl input:checked + .tgl-track .tgl-thumb{left:23px}
+  /* 키보드로 옮겨 다닐 때 어디에 있는지 보여야 한다. */
+  .tgl input:focus-visible + .tgl-track{outline:2px solid var(--accent);outline-offset:2px}
+  .tgl-state{min-width:34px;font-weight:800}
+
+  /* ---------------------------------------------------------------- 표 */
+  /* min-width를 못 박지 않는다. 칸 수가 적은 표까지 억지로 720px가 되면
+     넓은 화면에서 쓸데없이 가로 스크롤이 생긴다. 내용이 정하게 둔다. */
+  /* 누를 수 있는 표 머리글. 지금 세우는 칸은 글자를 진하게 해서 눈에 띄게 한다. */
+  th.sortable{cursor:pointer;user-select:none}
+  th.sortable:hover{color:var(--ink)}
+  th.sortable.on{color:var(--ink);font-weight:700}
+  .table-scroll{overflow-x:auto;border:1px solid var(--line);border-radius:var(--r);
+                background:var(--surface);box-shadow:var(--shadow);
+                -webkit-overflow-scrolling:touch}
+  table{width:100%;border-collapse:separate;border-spacing:0}
+  th,td{padding:calc(var(--pad-y) * .85) var(--pad-x);text-align:left;white-space:nowrap;
+        border-bottom:1px solid var(--line);background:var(--surface)}
+  /* 관리 버튼 칸은 줄바꿈을 허락한다. 버튼 8개를 한 줄로 강제하면 표가 화면보다
+     넓어져 마지막 버튼(삭제)이 잘린 채로 보였다 — 가로 스크롤은 되지만 데스크톱
+     마우스로는 스크롤할 생각을 못 한다. 두 줄이 되는 쪽이 훨씬 잘 보인다. */
+  td .actions{white-space:normal;flex-wrap:wrap;max-width:380px;row-gap:4px}
+  th{position:sticky;top:0;z-index:2;background:#f7f9fb;color:var(--dim);
+     font-size:clamp(11px,.25vw+10.5px,12px);font-weight:700;letter-spacing:.3px;
+     border-bottom:1px solid var(--line-strong)}
+  tbody tr:nth-child(even) td{background:var(--zebra)}
+  tbody tr:hover td{background:var(--accent-wash)}
+  tr:last-child td{border-bottom:0}
+  td.num{text-align:right;font-variant-numeric:tabular-nums}
+
+  /* 오른쪽으로 밀었을 때 지금 보는 줄이 누구 것인지 알 수 있게 첫 칸을 붙잡아 둔다.
+     좁은 화면에서만이 아니라 늘 그렇게 둔다 — 칸이 많은 표는 넓은 화면에서도 밀린다. */
+  th:first-child,td:first-child{position:sticky;left:0;z-index:1;
+    box-shadow:1px 0 0 var(--line)}
+  th:first-child{z-index:3}
+
+  /* ---------------------------------------------------------------- 조각 */
+  /* 보상 안의 하위 탭 — 상단 메뉴(.nav)와 헷갈리지 않게 작고 납작하게 둔다. */
+  .subtabs{display:flex;gap:6px;margin:0 0 10px}
+  .subtabs button{background:var(--surface);color:var(--dim);
+    border:1px solid var(--line-strong);border-radius:999px;padding:5px 12px;font-size:13px}
+  .subtabs button:hover{color:var(--ink)}
+  .subtabs button.on{background:var(--accent-wash);color:var(--accent);border-color:var(--accent)}
+  .subtabs button b{margin-left:4px}
+  .pill{display:inline-block;padding:2px 8px;border-radius:999px;
+        font-size:clamp(10.5px,.2vw+10px,11.5px);font-weight:700;margin-left:6px}
+  .pill.today{background:var(--accent-wash);color:var(--accent)}
+  .pill.heart{background:var(--danger-wash);color:var(--danger)}
+  .muted{color:var(--dim)}
+  .notice{background:var(--warn-wash);border:1px solid #f0dcb4;color:var(--warn);
+    border-radius:var(--r);padding:var(--pad-y) var(--pad-x);margin-bottom:var(--gap);
+    font-size:var(--fs-sm);line-height:1.65}
+  .empty{padding:clamp(24px,5vw,38px) 20px;text-align:center;color:var(--dim);
+    background:var(--surface);border:1px dashed var(--line-strong);border-radius:var(--r)}
+  .row{display:flex;gap:8px;flex-wrap:wrap}
+  .row > *{flex:1 1 clamp(120px, 30%, 180px);min-width:0}
+
+  /* ---------------------------------------------------------------- 대화상자 */
+  dialog{background:var(--surface);color:var(--ink);border:1px solid var(--line);
+    border-radius:calc(var(--r) * 1.3);padding:clamp(16px,3vw,24px);
+    /* 430px에서는 datetime-local이 안 들어갔다 — 브라우저가 주는 고유 최소 너비가
+       200px 남짓이라, 두 개를 나란히 두면 오른쪽이 잘려 나갔다(실측). */
+    width:min(520px, 94vw);box-shadow:var(--shadow-lift)}
+  dialog::backdrop{background:rgba(18,26,36,.45)}
+  dialog h3{margin:0 0 10px;font-size:clamp(15px,.8vw+13px,17px);font-weight:800}
+  dialog label{display:block;font-size:12px;color:var(--dim);margin:12px 0 5px;font-weight:600}
+  /* box-sizing이 없으면 width:100%에 테두리·안여백이 더해져 칸이 넘친다.
+     min-width:0은 입력칸의 고유 최소 너비가 칸을 밀어내는 걸 막는다. */
+  /* **max-width가 없으면 넘친다.** 입력의 고유 너비(숫자칸은 200px 남짓)가 width:100%를
+     이기고 부모 밖으로 삐져나갔다 — 390px 화면에서 "힌트" 칸이 창 밖으로 30px 잘려
+     나갔다(사용자 제보: 모바일에서 지급 화면이 깨진다). */
+  dialog input,dialog textarea{width:100%;max-width:100%;margin:0;min-width:0;
+    box-sizing:border-box}
+  /* 숫자 세 칸(코인·힌트·자동배치)은 **언제나 3열**이다. auto-fit이면 좁은 화면에서
+     2+1로 갈라져 마지막 칸만 아래에 혼자 남는다 — 같은 묶음인데 줄이 갈리면 어긋나 보인다.
+     minmax(0,1fr)이라 폭이 모자라면 칸이 같이 좁아진다. */
+  dialog .row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+  /* 날짜 두 칸은 좁으면 세로로. datetime-local은 고유 너비가 커서 나란히 두면 잘린다. */
+  dialog .row.wide{grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}
+  dialog .row > *{min-width:0}
+  /* 좁은 화면에서는 숫자 칸의 안여백을 줄여 세 개가 편히 들어가게 한다. */
+  @media (max-width:430px){
+    dialog .row{gap:7px}
+    dialog .row input{padding-left:8px;padding-right:8px}
+    dialog label{margin-top:10px}
+  }
+
+  /* ---------------------------------------------------------------- 차트 */
+  .chart{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+         padding:var(--pad-y) var(--pad-x) calc(var(--pad-y) * .7);box-shadow:var(--shadow)}
+  .chart svg{width:100%;height:clamp(130px, 18vw, 190px);display:block}
+  .chart .gl{stroke:var(--line);stroke-width:1}
+  .chart .ax{fill:var(--dim);font-size:11px}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:8px}
+  .lg{display:inline-flex;align-items:center;gap:6px;color:var(--dim);font-size:12px}
+  .lg i{width:10px;height:10px;border-radius:3px;display:inline-block}
+
+  .bars{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+        padding:var(--pad-x);box-shadow:var(--shadow)}
+  .bar-row{display:flex;align-items:center;gap:10px;margin-bottom:9px}
+  .bar-row:last-child{margin-bottom:0}
+  /* 누르면 그 회원들을 회원 목록에서 본다(098). */
+  .bar-row.clickable{cursor:pointer;border-radius:6px}
+  .bar-row.clickable:hover{background:var(--surface)}
+  .bar-label{flex:0 0 clamp(46px, 9vw, 78px);color:var(--dim);
+             font-size:var(--fs-sm);text-align:right}
+  .bar-track{flex:1;height:clamp(11px,1.4vw,15px);background:#eef1f4;
+             border-radius:999px;overflow:hidden;min-width:0}
+  .bar-fill{display:block;height:100%;background:var(--accent-soft);border-radius:999px}
+  .bar-value{flex:0 0 clamp(44px, 8vw, 62px);text-align:right;
+             font-variant-numeric:tabular-nums;font-size:var(--fs-sm)}
+
+  /* 지급 묶음 명단 */
+  .mem{display:inline-block;padding:3px 9px;margin:2px 4px 2px 0;
+       border-radius:calc(var(--r) * .55);background:#eff2f5;color:var(--dim);font-size:12px}
+  .mem.got{background:var(--accent-wash);color:var(--accent);font-weight:700}
+
+  /* ================================================================ 좁은 화면
+     여기서는 크기가 아니라 **배치와 표시 여부**만 바꾼다.
+     크기는 위에서 clamp()가 이미 연속적으로 처리한다. */
+  @media (max-width:720px){
+    .head .muted{display:none}      /* 이메일까지 넣으면 줄이 넘쳐 버튼이 밀린다 */
+
+    /* 도구줄의 버튼 묶음만 한 줄을 다 쓰게 한다.
+       .actions 전체에 걸면 표 안의 관리 버튼까지 세로로 쌓여서
+       모든 행이 세 배로 높아진다(실측). 표 안에서는 옆으로 나란히 둔다. */
+    .toolbar .actions{width:100%}
+    .toolbar .actions button{flex:1 1 auto}
+  }
+  td .actions{flex-wrap:nowrap}
+</style>
+</head>
+<body>
+<div class="wrap" id="app"><div class="empty">불러오는 중…</div></div>
+
+
+<dialog id="grantDlg">
+  <h3 id="grantTitle">보상 지급</h3>
+  <div class="muted" style="font-size:12.5px" id="grantWho"></div>
+  <div class="row">
+    <div><label>코인</label><input type="number" id="gCoins" value="0" min="0"></div>
+    <div><label>힌트</label><input type="number" id="gHints" value="0" min="0"></div>
+    <div><label>자동배치</label><input type="number" id="gAutos" value="0" min="0"></div>
+  </div>
+  <label>메모 (앱에서 사용자에게 보입니다)</label>
+  <input type="text" id="gMemo" placeholder="예: 점검 보상">
+  <div class="row wide">
+    <div><label>받기 시작 (비우면 즉시)</label><input type="datetime-local" id="gStart"></div>
+    <div><label>받기 마감 (비우면 무제한)</label><input type="datetime-local" id="gEnd"></div>
+  </div>
+  <div class="err" id="gErr"></div>
+  <div class="actions" style="margin-top:16px;justify-content:flex-end">
+    <button class="ghost" id="gCancel">취소</button>
+    <button id="gOk">지급</button>
+  </div>
+</dialog>
+<dialog id="evDlg">
+  <h3 id="evTitle">이벤트 기간</h3>
+  <div class="muted" style="font-size:12.5px">비워 두면 상시로 켜져 있습니다. 끄고 싶으면 목록에서 "끄기"를 누르세요.</div>
+  <div class="row wide">
+    <div><label>시작 (비우면 즉시)</label><input type="datetime-local" id="evStart"></div>
+    <div><label>종료 (비우면 무제한)</label><input type="datetime-local" id="evEnd"></div>
+  </div>
+  <div class="err" id="evErr"></div>
+  <div class="actions" style="margin-top:16px;justify-content:flex-end">
+    <button class="ghost" id="evCancel">취소</button>
+    <button id="evOk">저장</button>
+  </div>
+</dialog>
+<dialog id="pushDlg" style="width:min(640px,94vw)">
+  <h3>푸시 발송</h3>
+  <div class="muted" style="font-size:12.5px">기기 알림으로 나갑니다. <b>보낸 뒤에는 되돌릴 수 없습니다.</b>
+    <b>광고성 정보 알림에 동의한 사람에게만</b> 갑니다. 광고성 정보면 제목 앞의 「(광고)」와 본문 끝의 수신거부
+    안내를 서버가 받는 사람의 언어로 붙이니 여기 적지 마세요.</div>
+  <label>종류</label>
+  <select id="pKind">
+    <option value="ad">광고성 정보 · 이벤트, 혜택, 할인, 상품 안내</option>
+    <option value="notice">서비스 안내 · 점검, 서비스 변경, 약관 변경 (광고 아님)</option>
+  </select>
+  <div class="notice" id="pKindNote" style="display:none;font-size:12.5px">
+    「(광고)」와 수신거부 안내 없이 나갑니다. <b>홍보가 한 줄이라도 섞이면 광고성 정보입니다.</b>
+    예: 「점검 보상으로 코인을 드려요, 상점도 둘러보세요」는 광고성입니다. 잘못 고르면 정보통신망법 위반이 됩니다.</div>
+  <label>제목</label>
+  <input type="text" id="pTitle" placeholder="예: 주말 이벤트가 열렸어요">
+  <label>본문</label>
+  <textarea id="pBody" rows="3" placeholder="알림에 그대로 보입니다"></textarea>
+  <div class="row wide">
+    <div><label>대상</label>
+      <select id="pTarget">
+        <option value="all">동의한 전체</option>
+        <option value="filter">조건으로 고르기</option>
+        <option value="users">지정한 회원</option>
+      </select>
+    </div>
+    <div><label>예약 (비우면 지금)</label><input type="datetime-local" id="pWhen"></div>
+  </div>
+  <div class="muted" id="pWhenNote" style="font-size:12.5px"></div>
+  <div id="pUsersRow" style="display:none">
+    <label>보낼 회원 — 닉네임, ID 앞부분, 점수(누적·오늘), 누적 점수 범위(예: 10000~20000)로 찾습니다</label>
+    <input type="text" id="pFind" placeholder="찾을 말을 넣거나 회원 ID를 붙여 넣으세요" autocomplete="off">
+    <div id="pFound" style="max-height:180px;overflow:auto;margin-top:6px"></div>
+    <div id="pPicked" style="margin-top:8px"></div>
+  </div>
+  <div id="pFilterRow" style="display:none">
+    <label>조건 — 여러 개면 <b>전부 맞는 사람</b>에게 갑니다</label>
+    <div id="pConds"></div>
+    <button class="ghost sm" id="pAddCond" type="button">조건 추가</button>
+  </div>
+  <label>눌렀을 때 열 곳</label>
+  <div class="row wide">
+    <div><select id="pLinkSel"></select></div>
+    <div id="pLinkCodeRow" style="display:none"><input type="text" id="pLinkCode" placeholder="방 코드 6자리" inputmode="numeric"></div>
+  </div>
+  <div class="muted" id="pCount" style="font-size:12.5px;margin-top:10px">받을 사람: —</div>
+  <div class="muted" id="pPreview" style="font-size:12px;max-height:96px;overflow:auto"></div>
+  <div class="err" id="pErr"></div>
+  <div class="actions" style="margin-top:16px;justify-content:flex-end">
+    <button class="ghost" id="pCancel">취소</button>
+    <button id="pOk">발송</button>
+  </div>
+</dialog>
+
+<dialog id="noticeDlg">
+  <h3>공지 작성</h3>
+  <div class="muted" style="font-size:12.5px">앱이 접속할 때 가장 최근 공지 하나를 한 번만 보여줍니다.</div>
+  <label>제목</label>
+  <input type="text" id="nTitle" placeholder="예: 점검 안내">
+  <label>내용</label>
+  <textarea id="nBody" rows="4" placeholder="앱에서 그대로 보입니다"></textarea>
+  <div class="row">
+    <div><label>시작 (비우면 즉시)</label><input type="datetime-local" id="nStart"></div>
+    <div><label>종료 (비우면 무제한)</label><input type="datetime-local" id="nEnd"></div>
+  </div>
+  <div class="err" id="nErr"></div>
+  <div class="actions" style="margin-top:16px;justify-content:flex-end">
+    <button class="ghost" id="nCancel">취소</button>
+    <button id="nOk">등록</button>
+  </div>
+</dialog>
+<script type="module" src="./main.js"></script>
+</body>
+</html>
