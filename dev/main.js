@@ -181,9 +181,12 @@ async function renderMfaEnroll(all) {
   for (const x of all.filter((x) => x.status !== "verified")) await sb.auth.mfa.unenroll({ factorId: x.id });
   const { data, error } = await sb.auth.mfa.enroll({ factorType: "totp", issuer: MFA_ISSUER, friendlyName: MFA_ISSUER });
   if (error) { renderLogin("2차 인증 등록을 시작하지 못했습니다: " + error.message); return; }
+  // qr_code는 판에 따라 SVG 코드 자체이거나 data: 주소다. 코드면 data: 주소로 바꿔 img에 넣는다.
+  const qr = String(data.totp.qr_code || "");
+  const qrSrc = qr.trim().startsWith("<") ? "data:image/svg+xml;charset=utf-8," + encodeURIComponent(qr) : qr;
   mfaCodeBox(data.id,
     "처음 한 번 등록합니다. 폰의 OTP 앱(Google Authenticator 등)으로 아래 QR을 찍고, 앱에 나온 6자리를 넣어 주세요.",
-    `<img src="${data.totp.qr_code}" alt="2차 인증 QR" style="display:block;width:200px;height:200px;margin:0 auto 10px;background:#fff;border-radius:8px">
+    `<img src="${esc(qrSrc)}" alt="2차 인증 QR" style="display:block;width:200px;height:200px;margin:0 auto 10px;background:#fff;border-radius:8px">
      <div class="muted" style="font-size:12px;word-break:break-all;margin-bottom:12px">QR을 못 찍으면 이 키를 직접 넣으세요: ${esc(data.totp.secret)}</div>`);
 }
 
