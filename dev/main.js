@@ -2090,6 +2090,7 @@ function updateTab(err) {
       이벤트 번호가 여섯 자리가 되기 전에도 올립니다.</div>
 
     ${cfgEditor("daily_record")}
+    ${cfgEditor("level_mode")}
     ${cfgEditor("number_mode")}
     ${cfgEditor("mailbox_rank_push")}
 
@@ -4552,7 +4553,7 @@ function rankingView(err) {
 }
 
 // ------------------------------------------------------------------ 설정: 오늘의 퍼즐 기록전 · 숫자 퍼즐 (101·102)
-// app_config의 daily_record, number_mode를 고친다. 서버 daily_record_cfg·number_mode_cfg는 기본값 위에 이 값을 덮으므로
+// app_config의 daily_record, level_mode, number_mode를 고친다. 서버 daily_record_cfg·number_mode_cfg는 기본값 위에 이 값을 덮으므로
 // 칸을 비우면 그 키를 빼서 서버 기본값으로 돌아간다. 화면에 없는 키는 그대로 둔다.
 
 const CFG_EDITORS = {
@@ -4573,6 +4574,14 @@ const CFG_EDITORS = {
       { k: "stamp_fresh_ms", type: "int", label: "stamp_fresh_ms" },
       { k: "late_stamp_max_ms", type: "int", label: "late_stamp_max_ms" },
       { k: "online_grace_ms", type: "int", label: "online_grace_ms" },
+    ],
+  },
+  // 1.5.0. 앱이 coin_pct만 읽는다. 서버 함수는 이 키를 보지 않는다. 비율 위쪽 한도는 두지 않는다(100 넘게도 된다).
+  level_mode: {
+    title: "레벨 판",
+    note: "레벨 판 코인은 점수/100(최소 4)에 이 비율을 곱합니다. 1.5.0 이상 앱에 적용, 1.4.4 이하는 그대로",
+    fields: [
+      { k: "coin_pct", type: "int", label: "판 코인 비율 (%)" },
     ],
   },
   number_mode: {
