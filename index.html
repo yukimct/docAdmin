@@ -432,6 +432,27 @@
        border-radius:calc(var(--r) * .55);background:#eff2f5;color:var(--dim);font-size:12px}
   .mem.got{background:var(--accent-wash);color:var(--accent);font-weight:700}
 
+  /* ---------------------------------------------------------------- 설명 배지
+     긴 설명은 이름 옆 동그란 「?」에 넣는다(사용자 요청, 2026-10-08). 마우스를 올리면 보이고,
+     휴대폰은 올릴 수가 없어서 눌러서 열고 닫는다(.open). 만드는 곳은 main.js infoTip() 한 곳이다. */
+  .tip{position:relative;display:inline-flex;vertical-align:middle;margin-left:5px;cursor:pointer;
+       font-weight:400;white-space:normal;text-align:left;outline:none}
+  .tip-i{display:inline-flex;align-items:center;justify-content:center;width:17px;height:17px;border-radius:50%;
+         background:var(--accent-wash, #e6f4f3);color:var(--accent);border:1px solid var(--accent);
+         font-size:11px;font-weight:800;line-height:1;flex:0 0 auto}
+  .tip:focus-visible .tip-i{box-shadow:0 0 0 3px var(--accent-wash, #e6f4f3)}
+  /* 설명 글은 배지 안에 숨겨 두고(.tip-b), 보일 때는 body 끝의 말풍선 하나(#tipBubble)에 옮겨 띄운다.
+     표는 가로 스크롤 상자 안에 있고 머리글은 sticky라서, 배지 안에서 띄우면 상자에 잘리거나 옆 칸에 덮였다. */
+  .tip-b{display:none}
+  #tipBubble{display:none;position:fixed;z-index:9000;top:0;left:0;width:max-content;
+         max-width:min(340px, 80vw);padding:9px 11px;border-radius:10px;background:#1f2933;color:#fff;
+         font-size:12.5px;line-height:1.5;box-shadow:0 6px 18px rgba(0,0,0,.18);pointer-events:none}
+  #tipBubble.show{display:block}
+  /* 휴대폰은 배지 자리에 띄우면 화면 밖으로 잘린다. 화면 아래쪽에 띠로 띄운다. */
+  @media (max-width:720px){
+    #tipBubble{left:12px !important;right:12px;bottom:12px;top:auto !important;width:auto;max-width:none;font-size:14px}
+  }
+
   /* ================================================================ 좁은 화면
      여기서는 크기가 아니라 **배치와 표시 여부**만 바꾼다.
      크기는 위에서 clamp()가 이미 연속적으로 처리한다. */
@@ -463,33 +484,33 @@
 
 
 <dialog id="grantDlg">
-  <h3 id="grantTitle">보상 지급</h3>
+  <h3 id="grantTitle">보상 주기</h3>
   <div class="muted" style="font-size:12.5px" id="grantWho"></div>
   <div class="row">
     <div><label>코인</label><input type="number" id="gCoins" value="0" min="0"></div>
     <div><label>힌트</label><input type="number" id="gHints" value="0" min="0"></div>
     <div><label>자동배치</label><input type="number" id="gAutos" value="0" min="0"></div>
   </div>
-  <label>메모 (앱에서 사용자에게 보입니다)</label>
+  <label>메모 · 받는 사람 앱에 그대로 보입니다<span data-infotip="우편함에서 보상과 함께 보이는 짧은 설명입니다. 예: 점검 보상, 이벤트 1등 축하"></span></label>
   <input type="text" id="gMemo" placeholder="예: 점검 보상">
   <div class="row wide">
-    <div><label>받기 시작 (비우면 즉시)</label><input type="datetime-local" id="gStart"></div>
-    <div><label>받기 마감 (비우면 무제한)</label><input type="datetime-local" id="gEnd"></div>
+    <div><label>받기 시작 · 비우면 바로</label><input type="datetime-local" id="gStart"></div>
+    <div><label>받기 마감 · 비우면 기한 없음</label><input type="datetime-local" id="gEnd"></div>
   </div>
-  <label class="switch" style="margin-top:12px"><input type="checkbox" id="gPush"><span>푸시도 보내기</span></label>
+  <label class="switch" style="margin-top:12px"><input type="checkbox" id="gPush"><span>「선물이 도착했어요」 푸시도 보내기</span><span data-infotip="보상을 받은 사람 휴대폰에 우편함을 확인하라는 알림을 보냅니다. 광고가 아닌 서비스 안내로 나갑니다."></span></label>
   <div class="muted" id="gPushHow" style="display:none;font-size:12.5px"></div>
   <div class="err" id="gErr"></div>
   <div class="actions" style="margin-top:16px;justify-content:flex-end">
     <button class="ghost" id="gCancel">취소</button>
-    <button id="gOk">지급</button>
+    <button id="gOk">주기</button>
   </div>
 </dialog>
 <dialog id="evDlg">
-  <h3 id="evTitle">이벤트 기간</h3>
-  <div class="muted" style="font-size:12.5px">비워 두면 상시로 켜져 있습니다. 끄고 싶으면 목록에서 "끄기"를 누르세요.</div>
+  <h3 id="evTitle">장난 기간</h3>
+  <div class="muted" style="font-size:12.5px">두 칸을 다 비우면 기간 없이 늘 켜져 있습니다. 끄려면 목록에서 「끄기」를 누르세요.</div>
   <div class="row wide">
-    <div><label>시작 (비우면 즉시)</label><input type="datetime-local" id="evStart"></div>
-    <div><label>종료 (비우면 무제한)</label><input type="datetime-local" id="evEnd"></div>
+    <div><label>시작 · 비우면 지금부터</label><input type="datetime-local" id="evStart"></div>
+    <div><label>끝 · 비우면 끝 없음</label><input type="datetime-local" id="evEnd"></div>
   </div>
   <div class="err" id="evErr"></div>
   <div class="actions" style="margin-top:16px;justify-content:flex-end">
@@ -498,46 +519,46 @@
   </div>
 </dialog>
 <dialog id="pushDlg" style="width:min(640px,94vw)">
-  <h3>푸시 발송</h3>
-  <div class="muted" style="font-size:12.5px">기기 알림으로 나갑니다. <b>보낸 뒤에는 되돌릴 수 없습니다.</b>
-    <b>광고성 정보 알림에 동의한 사람에게만</b> 갑니다. 광고성 정보면 제목 앞의 「(광고)」와 본문 끝의 수신거부
-    안내를 서버가 받는 사람의 언어로 붙이니 여기 적지 마세요.</div>
-  <label>종류</label>
+  <h3>푸시 보내기</h3>
+  <div class="muted" style="font-size:12.5px">휴대폰 알림으로 나갑니다. <b>보낸 뒤에는 되돌릴 수 없습니다.</b>
+    <b>앱에서 광고성 정보 알림을 켠 사람에게만</b> 갑니다. 광고성 정보라면 제목 앞의 「(광고)」와 본문 끝의 수신거부
+    안내를 서버가 받는 사람의 언어로 알아서 붙입니다. 여기에는 적지 마세요.</div>
+  <label>알림 종류<span data-infotip="광고성 정보는 이벤트, 혜택, 할인, 상품 안내처럼 홍보가 들어간 알림입니다. 서비스 안내는 점검, 서비스 변경, 약관 변경처럼 홍보가 전혀 없는 소식입니다. 헷갈리면 광고성 정보로 보내는 쪽이 안전합니다."></span></label>
   <select id="pKind">
     <option value="ad">광고성 정보 · 이벤트, 혜택, 할인, 상품 안내</option>
-    <option value="notice">서비스 안내 · 점검, 서비스 변경, 약관 변경 (광고 아님)</option>
+    <option value="notice">서비스 안내 · 점검, 서비스 변경, 약관 변경처럼 광고가 아닌 소식</option>
   </select>
   <div class="notice" id="pKindNote" style="display:none;font-size:12.5px">
     「(광고)」와 수신거부 안내 없이 나갑니다. <b>홍보가 한 줄이라도 섞이면 광고성 정보입니다.</b>
     예: 「점검 보상으로 코인을 드려요, 상점도 둘러보세요」는 광고성입니다. 잘못 고르면 정보통신망법 위반이 됩니다.</div>
-  <div class="muted" id="pKindLock" style="display:none;font-size:12.5px">이벤트 링크나 이벤트 조건이 붙은 발송은 광고성 정보로만 보낼 수 있습니다.</div>
+  <div class="muted" id="pKindLock" style="display:none;font-size:12.5px">누르면 이벤트가 열리거나 이벤트 참여로 받을 사람을 고른 알림은 광고성 정보로만 보낼 수 있습니다.</div>
   <label>제목</label>
   <input type="text" id="pTitle" placeholder="예: 주말 이벤트가 열렸어요">
   <label>본문</label>
   <textarea id="pBody" rows="3" placeholder="알림에 그대로 보입니다"></textarea>
   <div class="row wide">
-    <div><label>대상</label>
+    <div><label>받을 사람<span data-infotip="알림을 켠 회원 전체: 앱에서 광고성 정보 알림을 켠 모든 회원. 조건에 맞는 회원만: 아래에 넣은 조건에 모두 맞는 사람. 직접 고른 회원만: 닉네임이나 회원 ID로 찾아 넣은 사람. 어느 쪽이든 알림을 켠 사람에게만 갑니다."></span></label>
       <select id="pTarget">
-        <option value="all">동의한 전체</option>
-        <option value="filter">조건으로 고르기</option>
-        <option value="users">지정한 회원</option>
+        <option value="all">알림을 켠 회원 전체</option>
+        <option value="filter">조건에 맞는 회원만</option>
+        <option value="users">직접 고른 회원만</option>
       </select>
     </div>
-    <div><label>예약 (비우면 지금)</label><input type="datetime-local" id="pWhen"></div>
+    <div><label>보낼 시각 · 비우면 지금<span data-infotip="시각은 한국시간입니다. 밤에는 보내지 않는 시간이 있어서, 그때 보내거나 예약하면 다음 날 아침에 나갑니다. 실제로 나갈 시각은 칸 아래에 적힙니다. 받을 사람 수는 실제로 나가는 순간에 다시 셉니다."></span></label><input type="datetime-local" id="pWhen"></div>
   </div>
   <div class="muted" id="pWhenNote" style="font-size:12.5px"></div>
   <div id="pUsersRow" style="display:none">
-    <label>보낼 회원 — 닉네임, ID 앞부분, 점수(누적·오늘), 누적 점수 범위(예: 10000~20000)로 찾습니다</label>
+    <label>보낼 회원 찾기<span data-infotip="닉네임, 회원 ID 앞부분, 누적 점수나 오늘 점수, 누적 점수 범위로 찾습니다. 범위는 10000~20000처럼 씁니다. 회원 ID를 여러 개 붙여 넣어도 됩니다."></span></label>
     <input type="text" id="pFind" placeholder="찾을 말을 넣거나 회원 ID를 붙여 넣으세요" autocomplete="off">
     <div id="pFound" style="max-height:180px;overflow:auto;margin-top:6px"></div>
     <div id="pPicked" style="margin-top:8px"></div>
   </div>
   <div id="pFilterRow" style="display:none">
-    <label>조건 — 여러 개면 <b>전부 맞는 사람</b>에게 갑니다</label>
+    <label>조건 · 여러 개를 넣으면 <b>모두에 맞는 사람</b>에게만 갑니다</label>
     <div id="pConds"></div>
     <button class="ghost sm" id="pAddCond" type="button">조건 추가</button>
   </div>
-  <label>눌렀을 때 열 곳</label>
+  <label>알림을 누르면 열리는 화면<span data-infotip="기본은 광고성 알림을 끌 수 있는 설정 화면입니다. 우편함과 이벤트는 1.5.0 이상 앱만 알아듣고, 그 전 앱은 앱만 열립니다. 이벤트를 고르면 광고성 정보로만 보낼 수 있습니다."></span></label>
   <div class="row wide">
     <div><select id="pLinkSel" style="max-width:100%"></select></div>
     <div id="pLinkCodeRow" style="display:none"><input type="text" id="pLinkCode" placeholder="방 코드 6자리" inputmode="numeric"></div>
@@ -548,7 +569,7 @@
   <div class="err" id="pErr"></div>
   <div class="actions" style="margin-top:16px;justify-content:flex-end">
     <button class="ghost" id="pCancel">취소</button>
-    <button id="pOk">발송</button>
+    <button id="pOk">보내기</button>
   </div>
 </dialog>
 
@@ -556,8 +577,8 @@
   <h3 id="leTitle">새 이벤트</h3>
   <div class="muted" style="font-size:12.5px" id="leHow"></div>
   <div class="row wide">
-    <div><label>종류</label><select id="leKind"></select></div>
-    <div><label>한국어 이름 (필수, 20자까지)</label><input type="text" id="leNameKo" maxlength="20" placeholder="예: 가을 산책길"></div>
+    <div><label>이벤트 종류</label><select id="leKind"></select></div>
+    <div><label>한국어 이름 · 꼭 적어야 합니다, 20자까지</label><input type="text" id="leNameKo" maxlength="20" placeholder="예: 가을 산책길"></div>
   </div>
   <label>다른 언어 이름. 비우면 그 언어의 앱 기본 이름이 보입니다</label>
   <div class="row">
@@ -566,25 +587,26 @@
     <div><input type="text" id="leNameZh" maxlength="20" placeholder="中文"></div>
   </div>
   <div class="row wide">
-    <div><label>시작 (한국시간)</label><input type="datetime-local" id="leStart"></div>
-    <div><label>끝 (한국시간)</label><input type="datetime-local" id="leEnd"></div>
+    <div><label>시작 · 한국시간</label><input type="datetime-local" id="leStart"></div>
+    <div><label>끝 · 한국시간</label><input type="datetime-local" id="leEnd"></div>
   </div>
   <div class="row wide">
-    <div><label>결과 공개 끝 (한국시간)</label><input type="datetime-local" id="leUntil"></div>
-    <div><label>여는 레벨</label><input type="number" id="leLevel" min="1"></div>
+    <div><label>결과 공개 끝 · 한국시간<span data-infotip="이벤트가 끝난 뒤에도 이때까지는 앱에서 순위 결과를 보여 줍니다. 시작부터 결과 공개 끝까지는 다른 이벤트를 열 수 없습니다."></span></label><input type="datetime-local" id="leUntil"></div>
+    <div><label>참여할 수 있는 레벨<span data-infotip="이 레벨에 이른 사람부터 참여할 수 있습니다. 산책길은 정해진 최저 레벨보다 낮게 정할 수 없습니다."></span></label><input type="number" id="leLevel" min="1"></div>
   </div>
   <div class="muted" style="font-size:12px" id="leUntilHow"></div>
   <div class="row wide">
-    <div><label>최소 빌드 iOS</label><input type="number" id="leBuildIos" min="0"></div>
-    <div><label>최소 빌드 Android</label><input type="number" id="leBuildAnd" min="0"></div>
+    <div><label>iOS 앱 최소 빌드 번호<span data-infotip="빌드 번호는 앱을 스토어에 올릴 때마다 하나씩 붙는 숫자입니다. 예: 1.5.1은 52. 이 번호보다 낮은 앱으로는 이벤트에 참여하지 못합니다."></span></label><input type="number" id="leBuildIos" min="0"></div>
+    <div><label>AOS 앱 최소 빌드 번호</label><input type="number" id="leBuildAnd" min="0"></div>
   </div>
-  <label>순위 보상</label>
+  <div class="muted" style="font-size:12px">이 번호보다 낮은 앱으로는 참여하지 못합니다.</div>
+  <label>순위 보상 · 1등부터 위에서 아래로 적습니다<span data-infotip="「몇 등까지」로 적습니다. 줄이 1, 2, 3, 10이면 4등부터 10등까지는 「10등까지」 줄의 보상을 받습니다. 마지막 줄 등수까지만 보상이 있습니다. 앱 순위 목록이 100명까지라 100등까지만 적을 수 있습니다."></span></label>
   <div class="table-scroll"><table>
-    <thead><tr><th class="num">~등까지</th><th class="num">코인</th><th class="num">힌트</th><th class="num">자동배치</th><th></th></tr></thead>
+    <thead><tr><th class="num">몇 등까지</th><th class="num">코인</th><th class="num">힌트</th><th class="num">자동배치</th><th></th></tr></thead>
     <tbody id="leTierBody"></tbody>
   </table></div>
   <div style="margin-top:6px"><button class="ghost sm" type="button" id="leTierAdd">줄 추가</button></div>
-  <label class="switch" style="margin-top:12px"><input type="checkbox" id="leTest"><span>시험 전용 (시험 계정에게만 보입니다)</span></label>
+  <label class="switch" style="margin-top:12px"><input type="checkbox" id="leTest"><span>시험 전용 · 시험 계정에게만 보입니다</span></label>
   <div class="notice" id="leWarn" style="display:none;margin-top:10px"></div>
   <div class="err" id="leErr"></div>
   <div class="actions" style="margin-top:16px;justify-content:flex-end">
@@ -593,28 +615,28 @@
   </div>
 </dialog>
 <dialog id="noticeDlg">
-  <h3>공지 작성</h3>
+  <h3>공지 쓰기</h3>
   <div class="muted" style="font-size:12.5px" id="nHow"></div>
   <label>제목</label>
   <input type="text" id="nTitle" placeholder="예: 점검 안내">
   <label>내용</label>
   <textarea id="nBody" rows="4" placeholder="앱에서 그대로 보입니다"></textarea>
   <div class="row">
-    <div><label>시작 (비우면 즉시)</label><input type="datetime-local" id="nStart"></div>
-    <div><label>종료 (비우면 무제한)</label><input type="datetime-local" id="nEnd"></div>
+    <div><label>보이기 시작 · 비우면 바로</label><input type="datetime-local" id="nStart"></div>
+    <div><label>보이기 끝 · 비우면 계속</label><input type="datetime-local" id="nEnd"></div>
   </div>
-  <label class="switch" style="margin-top:12px"><input type="checkbox" id="nPopup" checked><span>창으로도 띄우기</span></label>
-  <label class="switch" style="margin-top:8px"><input type="checkbox" id="nPush"><span>푸시도 보내기</span></label>
+  <label class="switch" style="margin-top:12px"><input type="checkbox" id="nPopup" checked><span>앱을 켤 때 창으로도 띄우기</span><span data-infotip="모든 공지는 1.5.0 이상 앱의 우편함에 들어갑니다. 이것을 켠 공지 중 가장 최근 것 하나만 앱을 켤 때 창으로 한 번 뜹니다."></span></label>
+  <label class="switch" style="margin-top:8px"><input type="checkbox" id="nPush"><span>같은 내용으로 푸시도 보내기</span></label>
   <div id="nPushRow" style="display:none">
     <div class="muted" id="nPushHow" style="font-size:12.5px"></div>
-    <label>푸시 종류</label>
+    <label>푸시 알림 종류</label>
     <select id="nPushKind"></select>
     <div class="notice" id="nPushKindNote" style="display:none;font-size:12.5px"></div>
   </div>
   <div class="err" id="nErr"></div>
   <div class="actions" style="margin-top:16px;justify-content:flex-end">
     <button class="ghost" id="nCancel">취소</button>
-    <button id="nOk">등록</button>
+    <button id="nOk">올리기</button>
   </div>
 </dialog>
 <script type="module" src="./main.js"></script>

@@ -37,13 +37,13 @@ function otherEnvURL() {
 const markEnv = () => {
   const go = document.createElement("button");
   go.type = "button";
-  go.textContent = IS_DEV ? "운영으로 전환" : "개발 서버로 전환";
+  go.textContent = IS_DEV ? "실제 서버로 가기" : "개발 서버로 가기";
   go.onclick = () => { location.href = otherEnvURL(); };
   if (IS_DEV) {
     const bar = document.createElement("div");
     bar.style.cssText = "position:sticky;top:0;z-index:9999;background:#7c3aed;color:#fff;font-weight:700;text-align:center;padding:6px 8px;font-size:13px;display:flex;gap:10px;justify-content:center;align-items:center;flex-wrap:wrap";
     const label = document.createElement("span");
-    label.textContent = "개발 서버 dogpuzzle-dev. 운영 데이터가 아닙니다.";
+    label.textContent = "개발 서버 dogpuzzle-dev입니다. 실제 회원 데이터가 아닙니다.";
     go.style.cssText = "background:#fff;color:#5b21b6;border:0;border-radius:999px;padding:3px 10px;font-weight:700;font-size:12px;cursor:pointer";
     bar.append(label, go);
     document.body.prepend(bar);
@@ -92,7 +92,7 @@ export function kstToday() {
 
 /** 되돌릴 수 없는 작업은 이유를 남기게 한다 — 감사 로그에 그대로 들어간다. */
 export function askReason(title) {
-  const reason = window.prompt(`${title}\n\n사유를 적어주세요 (감사 로그에 남습니다)`);
+  const reason = window.prompt(`${title}\n\n왜 하는지 적어 주세요. 「기록 → 관리 기록」에 남습니다. 비워도 됩니다.`);
   if (reason === null) return null;
   return reason.trim() || "(사유 없음)";
 }
@@ -102,10 +102,10 @@ export function askReason(title) {
 export function askReasonRequired(title) {
   let hint = "";
   for (;;) {
-    const reason = window.prompt(`${title}\n\n사유를 적어주세요 (감사 로그에 남습니다, 필수)${hint}`);
+    const reason = window.prompt(`${title}\n\n왜 하는지 적어 주세요. 「기록 → 관리 기록」에 남습니다. 꼭 적어야 합니다.${hint}`);
     if (reason === null) return null;
     if (reason.trim()) return reason.trim();
-    hint = "\n\n사유를 비울 수 없습니다.";
+    hint = "\n\n비워 두면 진행할 수 없습니다.";
   }
 }
 

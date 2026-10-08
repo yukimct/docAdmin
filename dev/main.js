@@ -100,12 +100,84 @@ const KIND_DEFAULTS = {
   },
 };
 
+// ------------------------------------------------------------------ 설명 배지
+// 긴 설명과 예는 이름 옆 동그란 「?」 배지에 넣는다(사용자 요청, 2026-10-08). 모든 화면이 이 함수 하나로 만든다.
+// 마우스를 올리면 보이고, 누르면 열고 닫는다(휴대폰). 정적 HTML(index.html 대화상자)은 data-infotip="설명"으로 적어 두면
+// 아래 upgradeTips가 같은 모양으로 바꾼다.
+function infoTip(text) {
+  if (!text) return "";
+  return `<span class="tip" tabindex="0" role="button" aria-label="설명 보기"><span class="tip-i" aria-hidden="true">?</span>`
+    + `<span class="tip-b" role="tooltip">${esc(text)}</span></span>`;
+}
+function upgradeTips(root = document) {
+  root.querySelectorAll("[data-infotip]").forEach((el) => { el.outerHTML = infoTip(el.dataset.infotip); });
+}
+/** 말풍선 하나. 대화상자(dialog)가 열려 있으면 그 안에 둬야 맨 위에 보이므로 띄울 때마다 자리를 옮긴다. */
+function tipBubble() {
+  let el = document.getElementById("tipBubble");
+  if (!el) { el = document.createElement("div"); el.id = "tipBubble"; el.setAttribute("role", "tooltip"); }
+  const host = [...document.querySelectorAll("dialog[open]")].pop() || document.body;
+  if (el.parentElement !== host) host.append(el);
+  return el;
+}
+/** 배지 tip의 설명을 배지 바로 아래에 띄운다. 화면 오른쪽·아래 밖으로 나가면 안쪽으로 당긴다. 좁은 화면은 CSS가 아래 띠로 띄운다. */
+function showTip(tip) {
+  const el = tipBubble();
+  el.textContent = tip.querySelector(".tip-b")?.textContent || "";
+  const r = tip.getBoundingClientRect();
+  el.style.left = `${Math.max(8, r.left - 8)}px`;
+  el.style.top = `${r.bottom + 6}px`;
+  el.classList.add("show");
+  const w = el.getBoundingClientRect();
+  if (w.right > window.innerWidth - 8) el.style.left = `${Math.max(8, window.innerWidth - 8 - w.width)}px`;
+  if (w.bottom > window.innerHeight - 8 && r.top - 6 - w.height > 8) el.style.top = `${r.top - 6 - w.height}px`;
+}
+function hideTip() {
+  document.getElementById("tipBubble")?.classList.remove("show");
+  document.querySelectorAll(".tip.open").forEach((t) => t.classList.remove("open"));
+}
+// 화면을 통째로 다시 그려도 배지가 동작하게 문서에 한 번만 건다.
+// 누름은 잡아 먹는다. 배지가 label·정렬 머리글 안에 있어도 체크박스가 바뀌거나 정렬이 돌지 않게 한다.
+document.addEventListener("click", (e) => {
+  const tip = e.target.closest?.(".tip");
+  if (!tip) { hideTip(); return; }
+  e.preventDefault();
+  e.stopPropagation();
+  const wasOpen = tip.classList.contains("open");
+  hideTip();
+  if (!wasOpen) { tip.classList.add("open"); showTip(tip); }
+}, true);
+document.addEventListener("keydown", (e) => {
+  const tip = e.target.closest?.(".tip");
+  if (tip && (e.key === "Enter" || e.key === " ")) {
+    e.preventDefault();
+    const wasOpen = tip.classList.contains("open");
+    hideTip();
+    if (!wasOpen) { tip.classList.add("open"); showTip(tip); }
+  }
+  if (e.key === "Escape") hideTip();
+});
+// 마우스가 있는 화면은 올리기만 해도 보인다. 눌러서 열어 둔 것은 마우스가 떠나도 남긴다.
+document.addEventListener("pointerover", (e) => {
+  if (e.pointerType !== "mouse") return;
+  const tip = e.target.closest?.(".tip");
+  if (tip && !document.querySelector(".tip.open")) showTip(tip);
+});
+document.addEventListener("pointerout", (e) => {
+  if (e.pointerType !== "mouse") return;
+  const tip = e.target.closest?.(".tip");
+  if (tip && !tip.contains(e.relatedTarget) && !tip.classList.contains("open")) document.getElementById("tipBubble")?.classList.remove("show");
+});
+// fixed 말풍선은 화면을 굴리면 배지와 떨어진다. 굴리면 닫는다.
+document.addEventListener("scroll", hideTip, true);
+upgradeTips();
+
 // ------------------------------------------------------------------ 로그인
 function renderLogin(msg) {
   $("#app").innerHTML = `
     <div class="login">
       <h2>DogPuzzle 관리자</h2>
-      <p>회원 정보를 다루는 화면입니다. 관리자 계정으로 로그인하세요.</p>
+      <p>회원 정보를 다루는 화면입니다. 관리자로 등록된 이메일로 로그인하세요.</p>
       <input type="email" id="email" placeholder="이메일" autocomplete="username">
       <input type="password" id="pw" placeholder="비밀번호" autocomplete="current-password">
       <button id="go" style="width:100%">로그인</button>
@@ -119,7 +191,7 @@ function renderLogin(msg) {
       password: $("#pw").value,
     });
     $("#go").disabled = false;
-    if (error) $("#err").textContent = "로그인 실패: " + error.message;
+    if (error) $("#err").textContent = "로그인하지 못했습니다. " + plainError(error.message);
     else boot();
   };
   $("#go").onclick = submit;
@@ -135,10 +207,10 @@ const MFA_ISSUER = "DogPuzzle 관리자";
 /** 로그인은 됐는데 2차 인증 전이면 코드 화면을 띄우고 true를 돌려준다. 끝났으면 false. */
 async function needsMfa() {
   const { data, error } = await sb.auth.mfa.getAuthenticatorAssuranceLevel();
-  if (error) { renderLogin("2차 인증 상태를 읽지 못했습니다: " + error.message); return true; }
+  if (error) { renderLogin("2차 인증 상태를 읽지 못했습니다. " + plainError(error.message)); return true; }
   if (data.currentLevel === "aal2") return false;
   const { data: f, error: fe } = await sb.auth.mfa.listFactors();
-  if (fe) { renderLogin("2차 인증 정보를 읽지 못했습니다: " + fe.message); return true; }
+  if (fe) { renderLogin("2차 인증 정보를 읽지 못했습니다. " + plainError(fe.message)); return true; }
   const verified = (f.totp || []).find((x) => x.status === "verified");
   if (verified) renderMfaCode(verified.id);
   else await renderMfaEnroll(f.all || []);
@@ -152,7 +224,7 @@ function mfaCodeBox(factorId, intro, extra = "") {
       <h2>2차 인증</h2>
       <p>${intro}</p>
       ${extra}
-      <input type="text" id="mfaCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="6자리 코드">
+      <input type="text" id="mfaCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="6자리 숫자">
       <button id="mfaGo" style="width:100%">확인</button>
       <button class="ghost" id="mfaOut" style="width:100%;margin-top:8px">로그아웃</button>
       <div class="err" id="mfaErr"></div>
@@ -163,7 +235,7 @@ function mfaCodeBox(factorId, intro, extra = "") {
     $("#mfaGo").disabled = true;
     const { error } = await sb.auth.mfa.challengeAndVerify({ factorId, code });
     $("#mfaGo").disabled = false;
-    if (error) { $("#mfaErr").textContent = "코드가 맞지 않습니다: " + error.message; $("#mfaCode").select(); return; }
+    if (error) { $("#mfaErr").textContent = "코드가 맞지 않습니다. " + plainError(error.message); $("#mfaCode").select(); return; }
     boot();
   };
   $("#mfaGo").onclick = submit;
@@ -173,21 +245,21 @@ function mfaCodeBox(factorId, intro, extra = "") {
 }
 
 function renderMfaCode(factorId) {
-  mfaCodeBox(factorId, "OTP 앱에 보이는 「" + esc(MFA_ISSUER) + "」 6자리 코드를 넣어 주세요.");
+  mfaCodeBox(factorId, "휴대폰 인증 앱에 뜬 「" + esc(MFA_ISSUER) + "」의 6자리 숫자를 넣어 주세요. 숫자는 30초마다 바뀝니다.");
 }
 
 /** 처음 한 번 등록. 끝내지 못한 옛 등록이 있으면 지우고 새로 만든다. */
 async function renderMfaEnroll(all) {
   for (const x of all.filter((x) => x.status !== "verified")) await sb.auth.mfa.unenroll({ factorId: x.id });
   const { data, error } = await sb.auth.mfa.enroll({ factorType: "totp", issuer: MFA_ISSUER, friendlyName: MFA_ISSUER });
-  if (error) { renderLogin("2차 인증 등록을 시작하지 못했습니다: " + error.message); return; }
+  if (error) { renderLogin("2차 인증 등록을 시작하지 못했습니다. " + plainError(error.message)); return; }
   // qr_code는 판에 따라 SVG 코드 자체이거나 data: 주소다. 코드면 data: 주소로 바꿔 img에 넣는다.
   const qr = String(data.totp.qr_code || "");
   const qrSrc = qr.trim().startsWith("<") ? "data:image/svg+xml;charset=utf-8," + encodeURIComponent(qr) : qr;
   mfaCodeBox(data.id,
-    "처음 한 번 등록합니다. 폰의 OTP 앱(Google Authenticator 등)으로 아래 QR을 찍고, 앱에 나온 6자리를 넣어 주세요.",
+    "처음 한 번만 등록합니다. 휴대폰의 인증 앱, 예를 들어 Google Authenticator로 아래 QR을 찍은 뒤 앱에 나온 6자리 숫자를 넣어 주세요.",
     `<img src="${esc(qrSrc)}" alt="2차 인증 QR" style="display:block;width:200px;height:200px;margin:0 auto 10px;background:#fff;border-radius:8px">
-     <div class="muted" style="font-size:12px;word-break:break-all;margin-bottom:12px">QR을 못 찍으면 이 키를 직접 넣으세요: ${esc(data.totp.secret)}</div>`);
+     <div class="muted" style="font-size:12px;word-break:break-all;margin-bottom:12px">QR을 못 찍으면 인증 앱에 이 글자를 직접 넣으세요: ${esc(data.totp.secret)}</div>`);
 }
 
 // ------------------------------------------------------------------ 데이터
@@ -309,7 +381,7 @@ function versionName(code) {
 
 /** 회원 목록 「앱」 칸. 버전을 담기 시작한 것이 1.5.0이라 빈 값은 그 전 앱이다. */
 function appVersionCell(id) {
-  if (APP_VERSIONS === null) return '<span class="muted" title="admin_app_versions(109)를 못 읽었습니다">?</span>';
+  if (APP_VERSIONS === null) return '<span class="muted" title="앱 버전 기록을 못 읽었습니다">?</span>';
   const a = APP_VERSIONS[id];
   if (!a) return '<span class="muted" title="최근 90일 안에 앱을 켠 기록이 없습니다">—</span>';
   const os = PLATFORM_NAMES[a.platform] || a.platform || "";
@@ -367,13 +439,13 @@ function pushDailyTable() {
       <td class="num">${pct(d.sent, d.sent + d.failed)}</td>
       <td class="num">${fmt(d.opens)}</td><td class="num">${pct(d.opens, d.sent)}</td></tr>`;
   return `<div class="table-scroll"><table>
-    <thead><tr><th>날짜</th><th class="num">발송 건수</th><th class="num">성공(기기)</th>
-      <th class="num">실패</th><th class="num">성공률</th>
-      <th class="num">열림</th><th class="num">열림률</th></tr></thead>
+    <thead><tr><th>날짜</th><th class="num">보낸 푸시</th><th class="num">닿은 기기</th>
+      <th class="num">못 닿은 기기</th><th class="num">닿은 비율</th>
+      <th class="num">눌러서 연 수</th><th class="num">연 비율</th></tr></thead>
     <tbody>${line(`최근 ${PUSH_DAYS}일 합계`, sum, true)}${rows.map((d) => line(esc(d.day), d)).join("") ||
-      '<tr><td colspan="7" class="muted">이 기간에 발송도 열림도 없습니다</td></tr>'}</tbody></table></div>
-    <div class="muted" style="font-size:12px">열림률은 그날 열린 수 ÷ 그날 성공한 기기 수입니다. 전날 보낸 알림을 오늘 열면 오늘에 셉니다.
-      발송·열림이 없는 날은 뺐습니다.</div>`;
+      '<tr><td colspan="7" class="muted">이 기간에 보낸 푸시도, 눌러서 연 기록도 없습니다</td></tr>'}</tbody></table></div>
+    <div class="muted" style="font-size:12px">연 비율은 그날 알림을 눌러서 연 수 ÷ 그날 알림이 닿은 기기 수입니다. 전날 보낸 알림을 오늘 열면 오늘에 셉니다.
+      보낸 것도 연 것도 없는 날은 뺐습니다.</div>`;
 }
 
 /** 시간대(0~23시) 합계 막대와 날짜 × 시간 표. 칸의 진하기가 열린 수다. */
@@ -390,9 +462,9 @@ function pushHoursView() {
   const sent = PUSHES.filter((m) => m.sent_at);
   // 보기 글이 길어(시각 · 제목 · 열림) 폰에서는 상자가 화면 밖으로 450px까지 나갔다. 폭을 화면에 묶는다.
   const pick = `<select id="pushHourMsg" style="max-width:100%">
-      <option value="">모든 푸시</option>
+      <option value="">모든 푸시 합계</option>
       ${sent.map((m) => `<option value="${m.id}" ${String(PUSH_HOUR_MSG) === String(m.id) ? "selected" : ""}>${
-        esc(fmtDateTime(m.sent_at))} · ${esc(m.title)} · 열림 ${fmt(m.opens || 0)}</option>`).join("")}
+        esc(fmtDateTime(m.sent_at))} · ${esc(m.title)} · 연 수 ${fmt(m.opens || 0)}</option>`).join("")}
     </select>`;
   const bars = `<div style="display:grid;grid-template-columns:repeat(24,1fr);gap:3px;align-items:end;height:90px;margin-top:10px">
       ${byHour.map((n, h) => `<div title="${h}시 · ${fmt(n)}회" style="height:${Math.max(2, Math.round((n / max) * 80))}px;
@@ -403,12 +475,12 @@ function pushHoursView() {
   const heat = days.size ? `<div class="table-scroll" style="margin-top:12px"><table style="font-size:11px">
       <thead><tr><th>날짜</th>${byHour.map((_, h) => `<th class="c" style="padding:4px 2px">${h}</th>`).join("")}<th class="num">합계</th></tr></thead>
       <tbody>${[...days].map(([day, cells]) => `<tr><td style="white-space:nowrap">${esc(day)}</td>${cells.map((c, h) => c
-          ? `<td title="${h}시 · iOS ${c.ios} · Android ${c.android}" class="c" style="padding:4px 2px;
+          ? `<td title="${h}시 · iOS ${c.ios} · AOS ${c.android}" class="c" style="padding:4px 2px;
               background:color-mix(in srgb, var(--accent) ${Math.round((c.opens / cellMax) * 85) + 15}%, transparent);color:#fff">${c.opens}</td>`
           : '<td class="c" style="padding:4px 2px"></td>').join("")}<td class="num">${fmt(cells.reduce((a, c) => a + (c ? c.opens : 0), 0))}</td></tr>`).join("")}
-      </tbody></table></div>` : '<div class="muted" style="margin-top:8px">이 기간에 열린 기록이 없습니다</div>';
+      </tbody></table></div>` : '<div class="muted" style="margin-top:8px">이 기간에 알림을 눌러서 연 기록이 없습니다</div>';
   return `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">${pick}
-      <span class="muted" style="font-size:12px">한국시간 기준, 막대는 시간대별 합계입니다. 칸에 마우스를 올리면 기기별 수가 보입니다.</span></div>
+      <span class="muted" style="font-size:12px">알림을 눌러서 연 때를 한국시간 기준으로 셉니다. 막대는 몇 시에 많이 열었는지 합계이고, 표의 칸에 마우스를 올리면 iOS와 AOS 수가 보입니다.</span></div>
     ${bars}${heat}`;
 }
 
@@ -658,15 +730,15 @@ function kpiRow() {
   const ratio = sinkRatio();
 
   const cards = [
-    ["오늘 접속자", fmt(num(last, "active")), delta(num(last, "active"), was("active"))],
-    ["오늘 신규", fmt(num(last, "signups")), delta(num(last, "signups"), was("signups"))],
-    ["7일 평균 접속", fmt(avg(w1, "active")), delta(avg(w1, "active"), avg(w0, "active"))],
-    ["D1 리텐션", d1 == null ? "—" : d1 + "%", ""],
-    ["코인 순증 (오늘)", fmt(net(last)), delta(net(last), prev ? net(prev) : null)],
-    ["소모/발행", ratio == null ? "—" : String(ratio), ""],
+    ["오늘 앱을 켠 사람", fmt(num(last, "active")), delta(num(last, "active"), was("active"))],
+    ["오늘 새로 가입", fmt(num(last, "signups")), delta(num(last, "signups"), was("signups"))],
+    ["최근 7일 하루 평균 앱을 켠 사람", fmt(avg(w1, "active")), delta(avg(w1, "active"), avg(w0, "active"))],
+    ["다음 날 다시 온 비율", d1 == null ? "—" : d1 + "%", ""],
+    ["오늘 늘어난 코인 · 번 것 − 쓴 것", fmt(net(last)), delta(net(last), prev ? net(prev) : null)],
+    ["쓴 코인 ÷ 번 코인 · 30일", ratio == null ? "—" : String(ratio), ""],
   ];
   return `<div class="cards">${cards.map(([label, value, d]) => `
-    <div class="card"><div class="label">${label}</div>
+    <div class="card"><div class="label">${label}${infoTip(KPI_TIPS[label])}</div>
       <div class="value">${value} ${d}</div></div>`).join("")}</div>`;
 }
 
@@ -681,6 +753,14 @@ function delta(now, before) {
   // 방향은 화살표가 말한다. 색까지 쓰지 않는 이유는 CSS 주석에 적어 뒀다.
   return `<span class="dl">${diff > 0 ? "▲" : "▼"}${Math.abs(pct)}%</span>`;
 }
+
+// 차트 맨 위 카드의 설명 배지. 카드 이름으로 찾는다.
+const KPI_TIPS = {
+  "다음 날 다시 온 비율": "가입한 다음 날에도 앱을 켠 사람의 비율입니다. 다음 날이 다 지난 가입일 중 가장 최근 날로 셉니다.",
+  "오늘 늘어난 코인 · 번 것 − 쓴 것": "오늘 회원들이 번 코인에서 쓴 코인을 뺀 값입니다. 플러스면 코인이 쌓이고, 마이너스면 줄고 있습니다.",
+  "쓴 코인 ÷ 번 코인 · 30일": "1에 가까울수록 번 만큼 씁니다. 0.5면 번 코인의 절반만 쓰고 나머지는 쌓인다는 뜻입니다.",
+  "최근 7일 하루 평균 앱을 켠 사람": "최근 7일 동안 하루에 앱을 켠 사람 수의 평균입니다. 화살표는 그 전 7일과 견준 것입니다.",
+};
 
 /** 소모/발행이 이 값 아래면 경고한다. 문구도 이 값을 읽는다. */
 const SINK_WARN = 0.35;
@@ -703,8 +783,8 @@ function sinkLow() {
 }
 
 function chartsTab(err) {
-  if (err) return `<div class="notice">집계 조회 실패: ${esc(err.message)}<br>supabase_admin_v2.sql을 실행했는지 확인하세요.</div>`;
-  if (!STATS.length) return `<div class="empty">집계할 데이터가 아직 없습니다</div>`;
+  if (err) return loadFail("차트 숫자를 불러오지 못했습니다.", err, "supabase_admin_v2.sql");
+  if (!STATS.length) return `<div class="empty">아직 모은 숫자가 없습니다</div>`;
   const days = STATS.map((r) => r.day);
   // 여섯 덩어리가 평평하게 나열돼 있었다. **묻는 질문이 다른 것끼리** 갈라 놓으면
   // 무엇을 보러 왔는지에 따라 눈이 바로 그 자리로 간다.
@@ -715,28 +795,29 @@ function chartsTab(err) {
   return `
     ${kpiRow()}
     <h2>사람</h2>
-    <h3 class="sub">신규 가입 · 접속자 (최근 30일)</h3>
+    <h3 class="sub">새로 가입한 사람 · 앱을 켠 사람 · 최근 30일</h3>
     ${lineChart(days, [
-      { name: "신규 가입", color: "#17b3a8", values: STATS.map((r) => Number(r.signups)) },
-      { name: "접속자", color: "#7aa2f7", values: STATS.map((r) => Number(r.active)) },
+      { name: "새로 가입", color: "#17b3a8", values: STATS.map((r) => Number(r.signups)) },
+      { name: "앱을 켠 사람", color: "#7aa2f7", values: STATS.map((r) => Number(r.active)) },
     ])}
-    <h3 class="sub">리텐션 — 가입일 기준 재방문</h3>
+    <h3 class="sub">다시 온 사람 · 가입한 날 기준</h3>
     ${retentionTable()}
 
     <h2>경제</h2>
     ${ECON ? `
     <div class="cards">
-      <div class="card"><div class="label">발행 (30일)</div><div class="value">${fmt(ECON.earned)}</div></div>
-      <div class="card"><div class="label">소모 (30일)</div><div class="value">${fmt(ECON.spent)}</div></div>
-      <div class="card"><div class="label">소모/발행</div>
+      <div class="card"><div class="label">번 코인 · 30일</div><div class="value">${fmt(ECON.earned)}</div></div>
+      <div class="card"><div class="label">쓴 코인 · 30일</div><div class="value">${fmt(ECON.spent)}</div></div>
+      <div class="card"><div class="label">쓴 코인 ÷ 번 코인${infoTip(KPI_TIPS["쓴 코인 ÷ 번 코인 · 30일"])}</div>
         <div class="value" style="${sinkLow() ? "color:var(--danger)" : ""}">${sinkRatio() ?? "—"}</div></div>
     </div>
-    ${sinkLow() ? `<div class="notice">소모/발행이 ${SINK_WARN} 아래입니다.
-      코인이 쌓이기만 하고 있습니다. 상점 가격이나 판당 지급을 볼 때입니다.</div>` : ""}` : ""}
-    <h3 class="sub">코인 획득 · 소모</h3>
+    ${sinkLow() ? `<div class="notice">쓴 코인이 번 코인의 ${SINK_WARN}배보다 적습니다. 예를 들어 100코인을 벌면 ${Math.round(SINK_WARN * 100)}코인도 안 쓰고 있다는 뜻입니다.
+      코인이 쌓이기만 하고 있으니 상점 가격이나 판마다 주는 코인을 살펴볼 때입니다.</div>` : ""}
+` : ""}
+    <h3 class="sub">날마다 번 코인 · 쓴 코인</h3>
     ${lineChart(days, [
-      { name: "획득", color: "#d9a441", values: STATS.map((r) => Number(r.coin_earned)) },
-      { name: "소모", color: "#d95757", values: STATS.map((r) => Number(r.coin_spent)) },
+      { name: "번 코인", color: "#d9a441", values: STATS.map((r) => Number(r.coin_earned)) },
+      { name: "쓴 코인", color: "#d95757", values: STATS.map((r) => Number(r.coin_spent)) },
     ])}
     <h3 class="sub">코인을 어디에 썼나</h3>
     ${COIN_SINKS.length
@@ -745,10 +826,10 @@ function chartsTab(err) {
           filter: r.sink_key ? { sink: r.sink_key, days: SINK_DAYS } : null,
           filterLabel: `최근 ${SINK_DAYS}일 「${r.sink}」에 코인을 쓴 회원`,
         })))
-      : `<div class="empty">아직 소모 기록이 없습니다</div>`}
+      : `<div class="empty">아직 코인을 쓴 기록이 없습니다</div>`}
 
     <h2>진행</h2>
-    <h3 class="sub">레벨별 도달 인원 — 어디서 그만두는지</h3>
+    <h3 class="sub">레벨마다 도착한 사람 · 어디서 그만두는지</h3>
     <div class="muted" style="margin-bottom:6px">그 레벨까지 온 사람 수입니다. 오늘 깬 판까지 셉니다.</div>
     ${FUNNEL.length
       // 선 그래프는 아래 눈금을 날짜로 보고 앞 다섯 글자를 잘라서, 레벨 숫자가 하나도 안 보였다. 막대로 바꿨다.
@@ -757,10 +838,10 @@ function chartsTab(err) {
           filter: { level_min: Number(r.level) }, filterLabel: `레벨 ${fmt(r.level)}까지 온 회원`, sort: "level",
         })))
       : `<div class="empty">레벨 클리어 기록이 아직 없습니다</div>`}
-    <h3 class="sub">누적 점수 분포</h3>
+    <h3 class="sub">누적 점수가 어느 구간에 몰려 있나</h3>
     ${BUCKETS.length ? barChart(scoreRows(BUCKETS, "total", "누적 점수"))
-                     : `<div class="empty">데이터 없음</div>`}
-    <h3 class="sub">일일 점수 분포 — 오늘(한국시간)</h3>
+                     : `<div class="empty">아직 없습니다</div>`}
+    <h3 class="sub">오늘 점수가 어느 구간에 몰려 있나 · 한국시간 오늘</h3>
     <div class="muted" style="margin-bottom:6px">오늘 점수를 낸 사람만 셉니다. 0점인 날은 기록이 없습니다.</div>
     ${DAILY_BUCKETS.some((r) => Number(r.players) > 0) ? barChart(scoreRows(DAILY_BUCKETS, "daily", "오늘 점수"))
                            : `<div class="empty">오늘 점수를 낸 회원이 아직 없습니다</div>`}`;
@@ -798,15 +879,15 @@ function retentionTable() {
         <span class="muted">(${fmt(r[k])})</span>`
     : `<span class="muted" title="${n === 1 ? "다음 날이" : `${n}일째가`} 아직 안 지났습니다">—</span>`);
   return `<div class="table-scroll"><table style="min-width:460px">
-    <thead><tr><th>가입일</th><th class="num">인원</th>
-      <th class="num">다음 날</th><th class="num">7일째</th></tr></thead>
+    <thead><tr><th>가입한 날</th><th class="num">가입한 사람</th>
+      <th class="num">다음 날 다시 온 비율</th><th class="num">7일째 다시 온 비율</th></tr></thead>
     <tbody>${RETENTION.map((r) => `<tr>
       <td class="muted">${fmtDate(r.cohort_date)}</td>
       <td class="num">${fmt(r.cohort)}</td>
       <td class="num">${cell(r, "d1", 1)}</td>
       <td class="num">${cell(r, "d7", 7)}</td>
     </tr>`).join("")}</tbody></table></div>
-    <p class="muted" style="font-size:12px">표본이 적은 날은 비율이 크게 튑니다 — 인원수를 같이 보세요.
+    <p class="muted" style="font-size:12px">가입한 사람이 적은 날은 비율이 크게 튑니다. 인원수를 같이 보세요.
       그날이 아직 안 지난 칸은 「—」로 비워 둡니다.</p>`;
 }
 
@@ -814,10 +895,10 @@ function retentionTable() {
 const money = (v, cur) => `${fmt(Math.round(Number(v) || 0))} ${esc(cur || "")}`.trim();
 
 function purchasesTab(err) {
-  if (err) return `<div class="notice">구매 조회 실패: ${esc(err.message)}<br>supabase_purchases.sql을 실행했는지 확인하세요.</div>`;
+  if (err) return loadFail("구매 기록을 불러오지 못했습니다.", err, "supabase_purchases.sql");
   if (!PAY_LEDGER.length) {
     return `<div class="empty">아직 기록된 구매가 없습니다.<br>
-      새 빌드를 배포해야 결제가 서버에 쌓이기 시작합니다 — 과거 결제는 소급되지 않습니다.</div>`;
+      결제 기록은 서버에 남기기 시작한 앱부터 쌓입니다. 그 전 결제는 여기에 나오지 않습니다.</div>`;
   }
 
   // 통화가 여럿이면 통화마다 선을 하나씩 그린다.
@@ -838,7 +919,7 @@ function purchasesTab(err) {
   return `
     <div class="cards">
       ${totals.map((t) => `<div class="card">
-        <div class="label">최근 30일 매출 (${esc(t.cur)})</div>
+        <div class="label">최근 30일 매출 · ${esc(t.cur)}</div>
         <div class="value">${fmt(Math.round(t.revenue))}</div></div>`).join("")}
       <div class="card"><div class="label">결제 건수</div>
         <div class="value">${fmt(PAY_LEDGER.length)}</div></div>
@@ -846,10 +927,10 @@ function purchasesTab(err) {
         <div class="value">${fmt(new Set(PAY_LEDGER.map((r) => r.profile_id)).size)}</div></div>
     </div>
 
-    <h2>일자별 매출 (최근 30일)</h2>
-    ${days.length ? lineChart(days, series) : `<div class="empty">데이터 없음</div>`}
+    <h2>날마다 매출 · 최근 30일</h2>
+    ${days.length ? lineChart(days, series) : `<div class="empty">아직 없습니다</div>`}
 
-    <h2>월별 매출</h2>
+    <h2>달마다 매출</h2>
     <div class="table-scroll"><table style="min-width:420px">
       <thead><tr><th>월</th><th>통화</th><th class="num">매출</th>
         <th class="num">건수</th><th class="num">인원</th></tr></thead>
@@ -859,46 +940,46 @@ function purchasesTab(err) {
         <td class="num">${fmt(r.orders)}</td><td class="num">${fmt(r.buyers)}</td>
       </tr>`).join("")}</tbody></table></div>
 
-    <h2>상품별</h2>
+    <h2>상품마다</h2>
     <div class="table-scroll"><table style="min-width:520px">
       <thead><tr><th>상품</th><th>종류</th><th>통화</th><th class="num">매출</th>
         <th class="num">건수</th><th class="num">인원</th></tr></thead>
       <tbody>${PAY_PRODUCT.map((r) => `<tr>
-        <td>${esc(r.product_id)}</td><td class="muted">${esc(r.kind)}</td>
+        <td>${productName(r.product_id)}</td><td class="muted">${esc(PRODUCT_KINDS[r.kind] || r.kind)}</td>
         <td class="muted">${esc(r.currency)}</td>
         <td class="num">${fmt(Math.round(r.revenue))}</td>
         <td class="num">${fmt(r.orders)}</td><td class="num">${fmt(r.buyers)}</td>
       </tr>`).join("")}</tbody></table></div>
 
-    <h2>원장</h2>
+    <h2>결제 하나하나 · 최근 200건</h2>
     <div class="table-scroll"><table>
       <thead><tr><th>시각</th><th>회원</th><th>상품</th><th class="num">코인</th>
-        <th class="num">금액</th><th>스토어</th></tr></thead>
+        <th class="num">금액</th><th>기기</th></tr></thead>
       <tbody>${PAY_LEDGER.map((r) => `<tr>
         <td class="muted">${new Date(r.created_at).toLocaleString("ko-KR")}</td>
         <td>${esc(r.username || (r.profile_id || "").slice(0, 8) || "(삭제됨)")}</td>
-        <td>${esc(r.product_id)}</td>
+        <td>${productName(r.product_id)}</td>
         <td class="num">${r.coins ? fmt(r.coins) : "—"}</td>
         <td class="num">${money(r.amount, r.currency)}</td>
-        <td class="muted">${esc(r.store)}</td>
+        <td class="muted">${esc(PLATFORM_NAMES[r.store] || r.store)}</td>
       </tr>`).join("")}</tbody></table></div>`;
 }
 
 // 공지가 앱에 보이는 방식(099). 작성 창 안내와 목록 위 안내가 같은 문장을 읽는다.
-const NOTICE_HOW = "모든 공지는 1.5.0 이상 앱의 우편함에 들어갑니다. 「창」을 켠 공지 중 가장 최근 것 하나는 접속할 때 창으로도 한 번 뜹니다. 1.4.4 이하 앱은 창 설정과 상관없이 가장 최근 공지를 띄웁니다.";
+const NOTICE_HOW = "모든 공지는 1.5.0 이상 앱의 우편함에 들어갑니다. 「창으로도 띄우기」를 켠 공지 중 가장 최근 것 하나는 앱을 켤 때 창으로 한 번 뜹니다. 1.4.4 이하 앱은 이 설정과 상관없이 가장 최근 공지를 창으로 띄웁니다.";
 
 function noticesTab(err) {
-  if (err) return `<div class="notice">공지 조회 실패: ${esc(err.message)}<br>supabase_admin_v3.sql을 실행했는지 확인하세요.</div>`;
+  if (err) return loadFail("공지를 불러오지 못했습니다.", err, "supabase_admin_v3.sql");
   const now = Date.now();
   const when = (v) => (v ? new Date(v).toLocaleString("ko-KR", { dateStyle: "short", timeStyle: "short" }) : "—");
   return `<div class="toolbar">
       <span class="muted" style="font-size:12.5px">${NOTICE_HOW}</span>
       <div style="flex:1"></div>
-      <button class="sm" id="newNotice">공지 작성</button>
+      <button class="sm" id="newNotice">공지 쓰기</button>
     </div>
     ${!NOTICES.length ? `<div class="empty">등록된 공지가 없습니다</div>` : `
     <div class="table-scroll"><table>
-      <thead><tr><th>등록</th><th>제목</th><th>내용</th><th>기간</th><th>창</th><th>관리</th></tr></thead>
+      <thead><tr><th>올린 때</th><th>제목</th><th>내용</th><th>보이는 기간</th><th>앱 켤 때 창</th><th>관리</th></tr></thead>
       <tbody>${NOTICES.map((n) => {
         const expired = n.expires_at && new Date(n.expires_at).getTime() <= now;
         const notYet = n.starts_at && new Date(n.starts_at).getTime() > now;
@@ -907,10 +988,10 @@ function noticesTab(err) {
           <td>${esc(n.title)}</td>
           <td class="muted long" style="max-width:360px">${esc(n.body)}</td>
           <td class="muted">${when(n.starts_at)} ~ ${when(n.expires_at)}
-            ${expired ? '<span class="pill heart">만료</span>' : ""}
-            ${notYet ? '<span class="pill today">대기</span>' : ""}</td>
+            ${expired ? '<span class="pill heart">기간 끝</span>' : ""}
+            ${notYet ? '<span class="pill today">시작 전</span>' : ""}</td>
           <td>${n.popup === undefined ? '<span class="muted">—</span>' : `<label class="switch">
-            <input type="checkbox" data-noticepopup="${n.id}" ${n.popup ? "checked" : ""}><span>${n.popup ? "띄움" : "우편함만"}</span></label>`}</td>
+            <input type="checkbox" data-noticepopup="${n.id}" ${n.popup ? "checked" : ""}><span>${n.popup ? "창으로도 띄움" : "우편함에만"}</span></label>`}</td>
           <td><button class="danger sm" data-delnotice="${n.id}">삭제</button></td>
         </tr>`;
       }).join("")}</tbody></table></div>`}`;
@@ -926,20 +1007,20 @@ const PUSH_SOURCES = {
 };
 
 function pushTab(err) {
-  if (err) return `<div class="notice">푸시 조회 실패: ${esc(err.message)}<br>sql/migrations/067_push.sql을 실행했는지 확인하세요.</div>`;
+  if (err) return loadFail("푸시 목록을 불러오지 못했습니다.", err, "sql/migrations/067_push.sql");
   const when = (v) => (v ? new Date(v).toLocaleString("ko-KR", { timeZone: "Asia/Seoul", dateStyle: "short", timeStyle: "short" }) : "—");
   const now = new Date();
   const target = (m) => {
     switch (m.target) {
-      case "all": return "동의한 전체";
+      case "all": return "알림 켠 회원 전체";
       case "users": {
         const ids = (m.target_arg || "").split(",").filter(Boolean);
-        return `지정 ${fmt(ids.length)}명<br><span style="font-size:11px" title="${esc(ids.join("\n"))}">${esc(ids[0] || "")}${ids.length > 1 ? " …" : ""}</span>`;
+        return `직접 고른 ${fmt(ids.length)}명<br><span style="font-size:11px" title="${esc(ids.join("\n"))}">${esc(ids[0] || "")}${ids.length > 1 ? " …" : ""}</span>`;
       }
-      case "filter": return `조건<br><span style="font-size:11px">${describeConds(m.target_arg)}</span>`;
-      case "user": return `지정<br><span style="font-size:11px">${esc(m.target_arg || "")}</span>`;
-      case "inactive_7d": return "7일 미접속";
-      case "top100": return "오늘 상위 100";
+      case "filter": return `조건에 맞는 회원<br><span style="font-size:11px">${describeConds(m.target_arg)}</span>`;
+      case "user": return `직접 고른 회원<br><span style="font-size:11px">${esc(m.target_arg || "")}</span>`;
+      case "inactive_7d": return "7일 넘게 안 들어온 사람";
+      case "top100": return "오늘 점수 상위 100명";
       default: return esc(m.target);
     }
   };
@@ -948,56 +1029,80 @@ function pushTab(err) {
       // 0대이고 실패도 0이면 받을 사람이 없었거나, 발송 함수가 대상을 고르다 실패한 것이다
       // (send-push는 그 경우 이 줄을 「보냄」으로 둔 채 넘어간다). 둘을 가를 기록은 없다.
       const none = !m.sent_count && !m.fail_count && !m.error;
-      return `<span class="pill today">보냄</span> ${fmt(m.sent_count)}대${
-        m.fail_count ? ` <span class="pill heart">실패 ${fmt(m.fail_count)}</span>` : ""}
-        ${m.error ? `<div class="err" style="font-size:11px">대상 고르기 실패: ${esc(m.error)}</div>` : ""}
+      return `<span class="pill today">보냄</span> 기기 ${fmt(m.sent_count)}대${
+        m.fail_count ? ` <span class="pill heart">못 닿음 ${fmt(m.fail_count)}</span>` : ""}
+        ${m.error ? `<div class="err" style="font-size:11px">받을 사람을 고르지 못했습니다: ${esc(plainError(m.error))}</div>` : ""}
         ${none ? '<div class="muted" style="font-size:11px">받을 사람이 없었습니다</div>' : ""}
         <div class="muted" style="font-size:11px">${when(m.sent_at)}</div>`;
     }
     const at = new Date(m.scheduled_at);
-    if (at > now) return '<span class="pill">예약</span>';
+    if (at > now) return '<span class="pill">예약됨</span>';
     // 시각은 지났는데 안 나갔다 — 밤 시간이면 8시를 기다리는 중이다(084).
-    return inQuiet(now) ? `<span class="pill">${QUIET_END} 대기</span>` : '<span class="pill">곧 나감</span>';
+    return inQuiet(now) ? `<span class="pill">${QUIET_END}에 나감</span>` : '<span class="pill">곧 나감</span>';
   };
   const pending = PUSHES.filter((m) => !m.sent_at).length;
   return `<div class="toolbar">
-      <span class="muted" style="font-size:12.5px">기기 알림으로 나갑니다. <b>보낸 뒤에는 되돌릴 수 없습니다</b>.
-        <b>광고성 정보 알림에 동의한 사람에게만</b> 갑니다(기본 꺼짐, 1.4.2부터).
-        한국시간 ${QUIET_TEXT}에는 보내지 않고 ${QUIET_END}에 몰아서 내보냅니다.
-        광고성 정보면 제목 앞 「(광고)」와 본문 끝 수신거부 안내를 서버가 붙입니다. 서비스 안내는 붙이지 않습니다.${pending ? ` 대기 중 ${fmt(pending)}건.` : ""}</span>
+      <span class="muted" style="font-size:12.5px">휴대폰 알림으로 나갑니다. <b>보낸 뒤에는 되돌릴 수 없습니다</b>.
+        <b>앱에서 광고성 정보 알림을 켠 사람에게만</b> 갑니다. 1.4.2부터 생긴 설정이고 처음에는 꺼져 있습니다.
+        한국시간 ${QUIET_TEXT}에는 보내지 않고 ${QUIET_END}에 모아서 내보냅니다.
+        광고성 정보라면 제목 앞 「(광고)」와 본문 끝 수신거부 안내를 서버가 붙이고, 서비스 안내에는 붙이지 않습니다.${pending ? ` 아직 안 나간 푸시 ${fmt(pending)}건.` : ""}</span>
       <div style="flex:1"></div>
-      <button class="sm" id="newPush">푸시 발송</button>
+      <button class="sm" id="newPush">푸시 보내기</button>
     </div>
-    <h3 style="margin:18px 0 6px">일자별 발송·열림
+    <h3 style="margin:18px 0 6px">날마다 보낸 수 · 눌러서 연 수
       <select id="pushDays" style="margin-left:8px">${[7, 30, 90].map((d) =>
         `<option value="${d}" ${d === PUSH_DAYS ? "selected" : ""}>최근 ${d}일</option>`).join("")}</select></h3>
     ${pushDailyTable()}
-    <h3 id="pushHours" style="margin:22px 0 6px">시간대·일자별 열림</h3>
+    <h3 id="pushHours" style="margin:22px 0 6px">몇 시에 눌러서 열었나</h3>
     ${pushHoursView()}
-    <h3 style="margin:22px 0 6px">발송 목록</h3>
-    ${!PUSHES.length ? `<div class="empty">발송한 푸시가 없습니다</div>` : `
+    <h3 style="margin:22px 0 6px">보낸 푸시와 예약</h3>
+    ${!PUSHES.length ? `<div class="empty">보낸 푸시가 없습니다</div>` : `
     <div class="table-scroll"><table>
-      <thead><tr><th>등록</th><th>제목</th><th>본문</th><th>대상</th><th>나갈 시각</th><th>결과</th><th class="num">열림</th><th>관리</th></tr></thead>
+      <thead><tr><th>만든 때</th><th>제목</th><th>본문</th><th>받을 사람</th><th>나갈 시각</th><th>결과</th><th class="num">눌러서 연 수</th><th>관리</th></tr></thead>
       <tbody>${PUSHES.map((m) => `<tr>
           <td class="muted">${when(m.created_at)}</td>
-          <td>${PUSH_SOURCES[m.source] ? `<span class="pill warn" title="우편함에 따로 들어가지 않는 자동 푸시입니다">${PUSH_SOURCES[m.source]}</span> ` : ""}${m.kind === "notice" ? '<span class="pill">서비스 안내</span> ' : ""}${esc(m.title)}</td>
+          <td>${PUSH_SOURCES[m.source] ? `<span class="pill warn" title="서버가 저절로 보낸 푸시입니다. 우편함에 따로 들어가지 않습니다">${PUSH_SOURCES[m.source]}</span> ` : ""}${m.kind === "notice" ? '<span class="pill">서비스 안내</span> ' : ""}${esc(m.title)}</td>
           <td class="muted long" style="max-width:320px">${esc(m.body)}${
-            `<div style="font-size:11px">열 곳: ${esc(linkLabel(m.link, m.kind))}</div>`}</td>
+            `<div style="font-size:11px">누르면 열리는 화면: ${esc(linkLabel(m.link, m.kind))}</div>`}</td>
           <td class="muted long" style="max-width:260px">${target(m)}</td>
           <td class="muted">${when(m.scheduled_at)}</td>
           <td>${status(m)}</td>
           <td class="num" style="white-space:nowrap">${m.sent_at ? `${fmt(m.opens || 0)}회<div class="muted" style="font-size:11px">${pct(m.opens || 0, m.sent_count)}</div>
-            <button class="ghost sm" data-hourpush="${m.id}" title="이 푸시가 언제 열렸는지 아래 표로 봅니다">시간대</button>` : '<span class="muted">—</span>'}</td>
+            <button class="ghost sm" data-hourpush="${m.id}" title="이 푸시를 몇 시에 눌러서 열었는지 아래 표로 봅니다">몇 시에 열었나</button>` : '<span class="muted">—</span>'}</td>
           <td style="white-space:nowrap">${m.sent_at ? "" : `<button class="sm" data-editpush="${m.id}">고치기</button>
-              <button class="danger sm" data-cancelpush="${m.id}">취소</button>`}
-            <button class="ghost sm" data-copypush="${m.id}" title="같은 대상·문구로 새 발송 창을 엽니다">복제</button></td>
+              <button class="danger sm" data-cancelpush="${m.id}">보내지 않기</button>`}
+            <button class="ghost sm" data-copypush="${m.id}" title="받을 사람과 문구를 그대로 채운 새 보내기 창을 엽니다">같은 내용으로 새로</button></td>
         </tr>`).join("")}</tbody></table></div>`}`;
 }
 
 // ------------------------------------------------------------------ 동작
 async function act(fn, done) {
   try { await fn(); await done?.(); }
-  catch (e) { alert("실패: " + e.message); }
+  catch (e) { alert("처리하지 못했습니다.\n\n" + plainError(e.message)); }
+}
+
+// 서버·로그인 라이브러리가 영어로 주는 흔한 오류를 한국어로 옮긴다. 모르는 것은 원문 그대로 둔다.
+// 서버 함수가 직접 내는 오류는 대부분 이미 한국어라 그대로 지나간다.
+const PLAIN_ERRORS = [
+  [/invalid login credentials/i, "이메일이나 비밀번호가 맞지 않습니다"],
+  [/email not confirmed/i, "이메일 확인이 끝나지 않은 계정입니다"],
+  [/failed to fetch|networkerror|load failed/i, "서버에 닿지 못했습니다. 인터넷 연결을 확인하고 다시 해 보세요"],
+  [/jwt expired|invalid jwt|refresh token/i, "로그인이 풀렸습니다. 새로고침한 뒤 다시 로그인하세요"],
+  [/permission denied|not authorized|row-level security/i, "이 계정에는 권한이 없습니다"],
+  [/could not find the function|function .* does not exist/i, "서버에 이 기능이 아직 없습니다. 개발 쪽 서버 업데이트가 필요합니다"],
+  [/invalid totp|invalid mfa|code.*(invalid|expired)/i, "코드가 맞지 않거나 시간이 지났습니다. 앱에 새로 뜬 코드를 넣어 주세요"],
+  [/^bad$/i, "서버가 넣은 값을 받아들이지 않았습니다"],
+];
+function plainError(msg) {
+  const m = String(msg ?? "");
+  const hit = PLAIN_ERRORS.find(([re]) => re.test(m));
+  return hit ? `${hit[1]}. 원문: ${m}` : m;
+}
+
+/** 불러오기 실패 안내. 사장님이 읽을 말을 앞에 두고, 개발 담당에게 넘길 단서는 아래에 작게 둔다. */
+function loadFail(what, err, devHint = "") {
+  return `<div class="notice">${esc(what)} ${esc(plainError(err?.message ?? err))}${devHint
+    ? `<div class="muted" style="font-size:12px;margin-top:4px">개발 담당에게 전할 단서: ${esc(devHint)}</div>` : ""}</div>`;
 }
 
 const findPlayer = (id) => PLAYERS.find((p) => p.id === id);
@@ -1178,7 +1283,7 @@ function openEventWhen(id) {
   const ev = VS_EVENTS.find((x) => x.id === id);
   if (!ev) return;
   const dlg = $("#evDlg");
-  $("#evTitle").textContent = `${ev.code} 기간`;
+  $("#evTitle").textContent = `「${EV_INFO[ev.code]?.[1] ?? ev.code}」 장난 기간`;
   const toLocal = (v) => {
     if (!v) return "";
     const d = new Date(v);
@@ -1194,7 +1299,7 @@ function openEventWhen(id) {
   $("#evOk").onclick = async () => {
     const at = (v) => (v ? new Date(v).toISOString() : null);
     const starts = at($("#evStart").value), ends = at($("#evEnd").value);
-    if (starts && ends && ends <= starts) { $("#evErr").textContent = "종료가 시작보다 빠릅니다"; return; }
+    if (starts && ends && ends <= starts) { $("#evErr").textContent = "끝이 시작보다 빠릅니다"; return; }
     await act(async () => {
       const { error } = await sb.from("versus_events")
         .update({ starts_at: starts, ends_at: ends }).eq("id", id);
@@ -1205,16 +1310,16 @@ function openEventWhen(id) {
 }
 
 // 1.5.0부터 선물은 우편함에 들어가 직접 받는다. 그 전 앱은 접속할 때 저절로 받는다(099).
-const GRANT_HOW = "1.5.0 이상 앱은 우편함에서 직접 받고, 그 전 앱은 접속할 때 저절로 받습니다.";
+const GRANT_HOW = "1.5.0 이상 앱은 우편함에서 눌러서 받고, 그 전 앱은 앱을 켤 때 저절로 받습니다.";
 
 /** id가 null이면 전체 지급. 기간을 비워 두면 제한 없이 받을 수 있다. */
 function openGrant(id) {
   const p = id ? findPlayer(id) : null;
   const dlg = $("#grantDlg");
-  $("#grantTitle").textContent = id ? "보상 지급" : "전체 보상 지급";
+  $("#grantTitle").textContent = id ? "보상 주기" : "모든 회원에게 보상 주기";
   $("#grantWho").textContent = id
-    ? `${p.username} 에게 지급합니다. ${GRANT_HOW}`
-    : `전체 회원 ${SUMMARY?.members ?? PLAYERS.length}명에게 지급합니다. ${GRANT_HOW}`;
+    ? `${p.username} 님에게 줍니다. ${GRANT_HOW}`
+    : `전체 회원 ${SUMMARY?.members ?? PLAYERS.length}명에게 줍니다. ${GRANT_HOW}`;
   $("#gErr").textContent = "";
   ["#gCoins", "#gHints", "#gAutos"].forEach((s) => ($(s).value = 0));
   $("#gMemo").value = "";
@@ -1225,9 +1330,9 @@ function openGrant(id) {
   $("#gEnd").value = "";
   // 110 푸시는 기본 꺼짐. 켜면 지급 뒤 admin_send_gift_push를 부른다.
   $("#gPush").checked = false;
-  $("#gPushHow").textContent = `받는 사람에게 서비스 안내 「우편함 / 선물이 도착했어요.」를 각자의 앱 언어로 보냅니다. `
-    + `1.5.0 이상 앱으로 들어온 적이 있고 광고성 정보 알림을 켠 사람에게만 닿습니다. `
-    + `받기 시작이 뒤면 그 시각에 나가고, 한국시간 ${QUIET_TEXT}에는 ${QUIET_END}에 나갑니다.`;
+  $("#gPushHow").textContent = `받는 사람에게 「우편함 / 선물이 도착했어요.」 알림을 각자의 앱 언어로 보냅니다. 광고가 아닌 서비스 안내로 나갑니다. `
+    + `1.5.0 이상 앱을 쓴 적이 있고 광고성 정보 알림을 켠 사람에게만 닿습니다. `
+    + `받기 시작을 나중으로 정했으면 그 시각에 나가고, 한국시간 ${QUIET_TEXT}에 걸리면 ${QUIET_END}에 나갑니다.`;
   const showPush = () => { $("#gPushHow").style.display = $("#gPush").checked ? "" : "none"; };
   $("#gPush").onchange = showPush;
   showPush();
@@ -1237,11 +1342,11 @@ function openGrant(id) {
     const coins = Number($("#gCoins").value) || 0;
     const hints = Number($("#gHints").value) || 0;
     const autos = Number($("#gAutos").value) || 0;
-    if (coins + hints + autos <= 0) { $("#gErr").textContent = "하나 이상 입력하세요"; return; }
+    if (coins + hints + autos <= 0) { $("#gErr").textContent = "코인, 힌트, 자동배치 중 하나는 1 이상 넣어 주세요"; return; }
     // datetime-local은 표준시 표기가 없다 — 브라우저(=한국) 기준으로 해석해 ISO로 보낸다.
     const at = (v) => (v ? new Date(v).toISOString() : null);
     const starts = at($("#gStart").value), ends = at($("#gEnd").value);
-    if (starts && ends && ends <= starts) { $("#gErr").textContent = "종료가 시작보다 빠릅니다"; return; }
+    if (starts && ends && ends <= starts) { $("#gErr").textContent = "받기 마감이 받기 시작보다 빠릅니다"; return; }
     const withPush = $("#gPush").checked;
     try {
       if (id) {
@@ -1252,7 +1357,7 @@ function openGrant(id) {
         });
         if (withPush) await sendGiftPush(giftId, null);
       } else {
-        const reason = askReason("전체 보상 지급");
+        const reason = askReason("모든 회원에게 보상 주기");
         if (reason === null) return;
         const batchId = await rpc("admin_grant_reward_all", {
           p_coins: coins, p_hints: hints, p_autos: autos,
@@ -1272,10 +1377,10 @@ async function sendGiftPush(giftId, batchId) {
   try {
     const r = await rpc("admin_send_gift_push", { p_gift_id: giftId, p_batch_id: batchId });
     alert(r?.people
-      ? `선물 도착 푸시를 ${fmt(r.people)}명에게 보냅니다.`
+      ? `「선물이 도착했어요」 푸시를 ${fmt(r.people)}명에게 보냅니다.`
       : "푸시를 받을 수 있는 사람이 없어 푸시는 나가지 않았습니다. 보상은 우편함에 들어갔습니다.");
   } catch (e) {
-    alert("보상은 지급했지만 푸시는 보내지 못했습니다: " + e.message);
+    alert("보상은 줬지만 푸시는 보내지 못했습니다.\n\n" + plainError(e.message));
   }
 }
 
@@ -1290,8 +1395,8 @@ function openNotice() {
   $("#nPushKind").innerHTML = $("#pKind").innerHTML;
   $("#nPushKind").value = "ad";
   $("#nPushKindNote").innerHTML = $("#pKindNote").innerHTML;
-  $("#nPushHow").textContent = `공지 제목과 내용을 광고성 정보 알림에 동의한 전체에게 보냅니다. 누르면 우편함이 열립니다. `
-    + `보낸 뒤에는 되돌릴 수 없습니다. 시작 시각을 정했으면 그 시각에 나가고, 한국시간 ${QUIET_TEXT}에는 ${QUIET_END}에 나갑니다.`;
+  $("#nPushHow").textContent = `공지 제목과 내용을 광고성 정보 알림을 켠 회원 전체에게 보냅니다. 알림을 누르면 우편함이 열립니다. `
+    + `보낸 뒤에는 되돌릴 수 없습니다. 보이기 시작을 정했으면 그 시각에 나가고, 한국시간 ${QUIET_TEXT}에 걸리면 ${QUIET_END}에 나갑니다.`;
   const showPush = () => {
     $("#nPushRow").style.display = $("#nPush").checked ? "" : "none";
     $("#nPushKindNote").style.display = $("#nPushKind").value === "notice" ? "" : "none";
@@ -1303,10 +1408,10 @@ function openNotice() {
   $("#nCancel").onclick = () => dlg.close();
   $("#nOk").onclick = async () => {
     const title = $("#nTitle").value.trim(), body = $("#nBody").value.trim();
-    if (!title || !body) { $("#nErr").textContent = "제목과 내용을 모두 입력하세요"; return; }
+    if (!title || !body) { $("#nErr").textContent = "제목과 내용을 모두 적어 주세요"; return; }
     const at = (v) => (v ? new Date(v).toISOString() : null);
     const withPush = $("#nPush").checked, pushKind = $("#nPushKind").value;
-    if (withPush && !confirm(`공지와 함께 푸시를 보냅니다.\n${pushKindLine(pushKind)}\n눌렀을 때: 우편함\n\n"${title}"\n\n보낸 뒤에는 취소할 수 없습니다. 계속할까요?`)) return;
+    if (withPush && !confirm(`공지와 함께 푸시를 보냅니다.\n${pushKindLine(pushKind)}\n누르면 열리는 화면: 우편함\n\n"${title}"\n\n보낸 뒤에는 취소할 수 없습니다. 계속할까요?`)) return;
     $("#nOk").disabled = true;   // 두 번 눌러 두 번 나가는 일을 막는다
     try {
       const noticeId = await rpc("admin_create_notice_v2", {
@@ -1317,7 +1422,7 @@ function openNotice() {
       if (withPush) {
         // 공지는 이미 올라갔다. 푸시가 실패해도 공지를 다시 올리지 않게 창은 닫고 알리기만 한다.
         try { await rpc("admin_send_notice_push", { p_notice_id: noticeId, p_kind: pushKind }); }
-        catch (e) { alert("공지는 올렸지만 푸시는 보내지 못했습니다: " + e.message); }
+        catch (e) { alert("공지는 올렸지만 푸시는 보내지 못했습니다.\n\n" + plainError(e.message)); }
       }
       dlg.close();
       refresh();
@@ -1331,7 +1436,7 @@ function openNotice() {
 const OPS_NUM = [["gte", "이상"], ["lte", "이하"]];
 const OPS_DAYS = [["within", "일 안에"], ["over", "일 넘게 지남"]];
 const COND_TYPES = {
-  rank: { label: "날짜별 랭킹", fields: [
+  rank: { label: "그날 오늘 점수 순위", fields: [
     { k: "date", type: "date", def: () => kstDate(-1), pre: "" },
     { k: "from", type: "number", def: 1, pre: "" },
     { k: "to", type: "number", def: 10, pre: "~", post: "위" }] },
@@ -1339,38 +1444,38 @@ const COND_TYPES = {
     { k: "field", type: "select", opts: [["today", "오늘 점수"], ["total", "누적 점수"]], def: "today" },
     { k: "v", type: "number", def: 0 },
     { k: "op", type: "select", opts: OPS_NUM, def: "lte" }] },
-  seen: { label: "마지막 접속", fields: [
+  seen: { label: "마지막으로 앱을 켠 날", fields: [
     { k: "days", type: "number", def: 7 },
     { k: "op", type: "select", opts: OPS_DAYS, def: "over" }] },
-  joined: { label: "가입", fields: [
+  joined: { label: "가입한 날", fields: [
     { k: "days", type: "number", def: 7 },
     { k: "op", type: "select", opts: OPS_DAYS, def: "within" }] },
-  purchased: { label: "결제", fields: [
+  purchased: { label: "결제한 상품", fields: [
     { k: "item", type: "select", def: "any", opts: [["any", "아무 상품"], ["remove_ads", "광고 제거"],
-      ["support", "응원"], ["coins", "코인팩(아무거나)"], ["coins:600", "코인 600"],
+      ["support", "응원"], ["coins", "코인팩 아무거나"], ["coins:600", "코인 600"],
       ["coins:3300", "코인 3,300"], ["coins:7200", "코인 7,200"]] },
     { k: "has", type: "select", opts: [["true", "산 적 있음"], ["false", "산 적 없음"]], def: "true" }] },
   coins: { label: "코인 잔액", fields: [
     { k: "v", type: "number", def: 5000 },
     { k: "op", type: "select", opts: OPS_NUM, def: "gte" }] },
-  versus: { label: "대전 (최근 90일)", fields: [
+  versus: { label: "대전 · 최근 90일", fields: [
     { k: "field", type: "select", opts: [["played", "판 수"], ["wins", "1등 수"]], def: "played" },
     { k: "v", type: "number", def: 1 },
     { k: "op", type: "select", opts: OPS_NUM, def: "gte" }] },
-  supporter: { label: "응원 결제 회원", fields: [] },
-  platform: { label: "기기", fields: [
+  supporter: { label: "응원 상품을 산 회원", fields: [] },
+  platform: { label: "휴대폰 종류", fields: [
     { k: "v", type: "select", opts: [["ios", "iPhone·iPad"], ["android", "Android"]], def: "ios" }] },
   lang: { label: "앱 언어", fields: [
     { k: "v", type: "select", opts: [["ko", "한국어"], ["en", "English"], ["ja", "日本語"], ["zh", "中文"]], def: "ko" }] },
   // 104 이벤트 조건 셋. id 칸의 목록은 LIVE_EVENTS에서 그때그때 만든다(opts가 함수). 붙으면 광고성으로만 나간다.
   event: { label: "이벤트 참여", fields: [
     { k: "id", type: "select", opts: () => eventCondOpts(), def: () => eventCondOpts()[0]?.[0] ?? "" },
-    { k: "state", type: "select", opts: [["joined", "참여함"], ["not_joined", "참여 안 함 · 레벨과 새 빌드가 되는 사람만"]], def: "joined" }] },
+    { k: "state", type: "select", opts: [["joined", "참여함"], ["not_joined", "참여 안 함 · 참여할 수 있는 레벨과 앱 버전인 사람만"]], def: "joined" }] },
   event_rank: { label: "이벤트 순위", fields: [
     { k: "id", type: "select", opts: () => eventCondOpts(), def: () => eventCondOpts()[0]?.[0] ?? "" },
     { k: "from", type: "number", def: 1, pre: "" },
     { k: "to", type: "number", def: 10, pre: "~", post: "위" }] },
-  event_boards: { label: "산책길 이벤트 판 수", fields: [
+  event_boards: { label: "산책길 이벤트에서 걸은 판 수", fields: [
     { k: "id", type: "select", opts: () => eventCondOpts("walk"), def: () => eventCondOpts("walk")[0]?.[0] ?? "" },
     { k: "v", type: "number", def: 10 },
     { k: "op", type: "select", opts: OPS_NUM, def: "gte" }] },
@@ -1388,7 +1493,7 @@ function eventTag(id) {
 // 자주 쓰는 조건. 고르면 조건 줄이 그대로 들어간다(이미 있는 줄에 더해진다).
 const COND_PRESETS = [
   ["어제 랭킹 1~10위", () => [{ t: "rank", date: kstDate(-1), from: 1, to: 10 }]],
-  ["오늘 0점 (오늘 안 깬 사람)", () => [{ t: "score", field: "today", op: "lte", v: 0 }]],
+  ["오늘 0점, 오늘 한 판도 안 깬 사람", () => [{ t: "score", field: "today", op: "lte", v: 0 }]],
   ["7일 넘게 안 들어온 사람", () => [{ t: "seen", op: "over", days: 7 }]],
   ["가입 3일 안의 새 회원", () => [{ t: "joined", op: "within", days: 3 }]],
   ["결제한 적 없는 사람", () => [{ t: "purchased", item: "any", has: "false" }]],
@@ -1399,6 +1504,14 @@ const COND_PRESETS = [
 const LANG_NAMES = { ko: "한국어", en: "English", ja: "日本語", zh: "中文" };
 // 기기 이름은 짧게 iOS·AOS로 쓴다(사용자 요청, 2026-10-08). 회원 목록 「앱」 칸, 푸시 조건, 기기별 집계, 기록 표가 같이 읽는다.
 const PLATFORM_NAMES = { ios: "iOS", android: "AOS" };
+// 결제 상품 이름. 모르는 상품은 상품 ID를 그대로 보인다. 앞에 붙는 패키지 이름(com.….)은 떼고 찾는다.
+const PRODUCT_KINDS = { coins: "코인팩", remove_ads: "광고 제거", support: "응원" };
+const PRODUCT_NAMES = { remove_ads: "광고 제거", support: "응원", support_developer: "응원",
+  coins_small: "코인 600", coins_medium: "코인 3,300", coins_large: "코인 7,200" };
+function productName(id) {
+  const name = PRODUCT_NAMES[String(id ?? "").split(".").pop()];
+  return name ? `${esc(name)} <span class="muted" style="font-size:11px">${esc(id)}</span>` : esc(id);
+}
 
 /** 한국시간 오늘에서 d일 옮긴 날짜(YYYY-MM-DD). 관리자 브라우저의 시간대와 상관없다. */
 function kstDate(d = 0) {
@@ -1420,30 +1533,30 @@ const QUIET_END = hm(PUSH_QUIET.toMin);
 // 「주의」 두 앱의 PushManager.open(링크 해석)과 짝이다. 하나를 더하면 두 앱도 같이 고친다.
 // 빈 링크는 서버가 /settings로 바꾼다. 수신거부로 바로 가는 길이라 기본값으로 둔다.
 const PUSH_LINKS = [
-  { link: "", label: "설정 화면 · 광고성 알림을 끄는 곳 · 기본" },
-  { link: "/home", label: "홈 화면 · 앱만 열기" },
+  { link: "", label: "설정 화면 · 광고성 알림을 끌 수 있는 곳 · 기본" },
+  { link: "/home", label: "홈 화면 · 앱만 열립니다" },
   { link: "/shop", label: "상점" },
   { link: "/ranking", label: "랭킹" },
   { link: "/missions", label: "미션" },
-  { link: "/mailbox", label: "우편함 · 1.5.0 이상, 그 전 앱은 앱만 열기" },
-  { link: "/vs/", label: "대전 초대 · 방 코드로 바로 입장", code: true },
+  { link: "/mailbox", label: "우편함 · 1.5.0 이상, 그 전 앱은 앱만 열립니다" },
+  { link: "/vs/", label: "대전 초대 · 방 코드를 넣으면 그 방으로 바로 들어갑니다", code: true },
   // 103·104: 서버는 /event/<번호> 꼴만 받고 광고성으로만 보낸다. 옛 앱은 모르는 링크라 앱만 열린다.
-  { link: "/event/", label: "이벤트 · 번호로 바로 열기 · 1.5.0 이상, 그 전 앱은 앱만 열기", event: true },
+  { link: "/event/", label: "이벤트 · 고른 이벤트가 바로 열립니다 · 1.5.0 이상, 그 전 앱은 앱만 열립니다", event: true },
 ];
 /** 링크를 사람이 읽는 이름으로. 모르는 링크는 링크를 그대로 보인다.
  *  서비스 안내(notice)는 링크가 비면 서버가 설정 대신 홈을 연다(095). */
 /** 발송 확인 창의 종류 줄. 푸시 발송 창과 공지 창(110)이 같이 읽는다. */
-const pushKindLine = (kind) => (kind === "notice" ? "종류: 서비스 안내 · 「(광고)」 없이 나갑니다" : "종류: 광고성 정보 · 「(광고)」를 붙입니다");
+const pushKindLine = (kind) => (kind === "notice" ? "알림 종류: 서비스 안내 · 「(광고)」 없이 나갑니다" : "알림 종류: 광고성 정보 · 제목에 「(광고)」를 붙입니다");
 
 function linkLabel(link, kind = "ad") {
-  if (!link && kind === "notice") return "홈 화면 · 앱만 열기 · 기본";
+  if (!link && kind === "notice") return "홈 화면 · 앱만 열립니다 · 기본";
   if (!link || link === "/settings") return PUSH_LINKS[0].label;
   if (/^\/vs\/\d{6}$/.test(link)) return `대전 초대 · 방 ${link.slice(4)}`;
   if (/^\/event\/\d+$/.test(link)) return `이벤트 · ${eventTag(link.slice(7))}`;
   return PUSH_LINKS.find((x) => x.link === link)?.label ?? link;
 }
 // 085 이전에 만든 대상. 새 화면의 조건으로 옮기면 판정이 조금 달라져서(086 seen은 접속 기준) 그대로 둔다.
-const LEGACY_TARGETS = { inactive_7d: "옛 대상: 7일 미접속", top100: "옛 대상: 오늘 상위 100" };
+const LEGACY_TARGETS = { inactive_7d: "예전 방식: 7일 넘게 안 들어온 사람", top100: "예전 방식: 오늘 점수 상위 100명" };
 // 열려 있는 발송 창의 번호. 닫거나 새로 열면 오른다 — 앞 창의 늦은 미리보기 응답을 버리는 데 쓴다.
 let PUSH_DLG = 0;
 const inQuiet = (d) => {
@@ -1461,19 +1574,19 @@ function describeConds(arg) {
     .find(([x]) => String(x) === String(v))?.[1] ?? v;
   return list.map((c) => {
     switch (c.t) {
-      case "rank": return `${c.date === "today" ? "나가는 날" : c.date} 랭킹 ${c.from}~${c.to}위`;
+      case "rank": return `${c.date === "today" ? "나가는 날" : c.date} 오늘 점수 ${c.from}~${c.to}위`;
       case "score": return `${name("score", "field", c.field)} ${fmt(c.v)} ${name("score", "op", c.op)}`;
-      case "seen": return `접속 ${c.days}${name("seen", "op", c.op)}`;
+      case "seen": return `마지막 접속 ${c.days}${name("seen", "op", c.op)}`;
       case "joined": return `가입 ${c.days}${name("joined", "op", c.op)}`;
       case "purchased": return `${name("purchased", "item", c.item)} ${name("purchased", "has", String(c.has))}`;
       case "coins": return `코인 ${fmt(c.v)} ${name("coins", "op", c.op)}`;
       case "versus": return `대전 ${name("versus", "field", c.field)} ${fmt(c.v)} ${name("versus", "op", c.op)}`;
-      case "supporter": return "응원 결제 회원";
+      case "supporter": return "응원 상품을 산 회원";
       case "platform": return PLATFORM_NAMES[c.v] || c.v;
       case "lang": return LANG_NAMES[c.v] || c.v;
       case "event": return `${eventTag(c.id)} ${name("event", "state", c.state)}`;
       case "event_rank": return `${eventTag(c.id)} 순위 ${c.from}~${c.to}위`;
-      case "event_boards": return `${eventTag(c.id)} 판 수 ${fmt(c.v)} ${name("event_boards", "op", c.op)}`;
+      case "event_boards": return `${eventTag(c.id)} 걸은 판 수 ${fmt(c.v)} ${name("event_boards", "op", c.op)}`;
       default: return String(c.t);
     }
   }).map(esc).join(" · ");
@@ -1529,7 +1642,7 @@ function openPush(prefill = null, editId = null) {
     linkEvents.map((e) => `<option value="${e.id}">${esc(`#${e.id} ${e.name_ko} · ${LE_STATE[e.state]?.[0] ?? e.state}${e.test_only ? " · 시험" : ""}`)}</option>`).join("");
   if (li < 0 && eventId0) { li = PUSH_LINKS.findIndex((x) => x.event); $("#pLinkEvent").value = eventId0; }
   if (li < 0) {
-    $("#pLinkSel").insertAdjacentHTML("beforeend", `<option value="raw">그대로 · ${esc(link0)}</option>`);
+    $("#pLinkSel").insertAdjacentHTML("beforeend", `<option value="raw">원래 주소 그대로 · ${esc(link0)}</option>`);
     $("#pLinkSel").value = "raw";
   } else $("#pLinkSel").value = String(li);
   const showLinkCode = () => {
@@ -1575,8 +1688,8 @@ function openPush(prefill = null, editId = null) {
   $("#pFind").value = "";
   $("#pFound").innerHTML = "";
   $("#pErr").textContent = "";
-  dlg.querySelector("h3").textContent = editId ? "예약 고치기" : "푸시 발송";
-  $("#pOk").textContent = editId ? "고치기" : "발송";
+  dlg.querySelector("h3").textContent = editId ? "예약한 푸시 고치기" : "푸시 보내기";
+  $("#pOk").textContent = editId ? "고치기" : "보내기";
 
   const renderConds = () => {
     $("#pConds").innerHTML = conds.map((c, i) => {
@@ -1601,9 +1714,9 @@ function openPush(prefill = null, editId = null) {
         <select data-ci="${i}" data-ck="t">${Object.entries(COND_TYPES).map(([k, t]) =>
           `<option value="${k}" ${k === c.t ? "selected" : ""}>${esc(t.label)}</option>`).join("")}</select>
         ${fields}
-        <button class="ghost sm" type="button" data-cdel="${i}">빼기</button>
+        <button class="ghost sm" type="button" data-cdel="${i}">이 조건 빼기</button>
       </div>`;
-    }).join("") + `<div style="margin:6px 0"><select id="pPreset"><option value="">자주 쓰는 조건 넣기…</option>${
+    }).join("") + `<div style="margin:6px 0"><select id="pPreset"><option value="">자주 쓰는 조건 골라 넣기…</option>${
       COND_PRESETS.map(([l], i) => `<option value="${i}">${esc(l)}</option>`).join("")}</select></div>`;
     $("#pConds").querySelectorAll("[data-ck]").forEach((el) => {
       el.onchange = () => {
@@ -1660,13 +1773,13 @@ function openPush(prefill = null, editId = null) {
     const t = $("#pTarget").value;
     $("#pErr").textContent = "";
     if (t === "users" && !picked.size) {
-      summary = "받을 사람: — (회원을 찾아 넣으세요)";
+      summary = "받을 사람: 아직 없음. 회원을 찾아 넣으세요";
       $("#pCount").textContent = summary;
       $("#pPreview").textContent = "";
       return summary;
     }
     if (t === "filter" && !conds.length) {
-      summary = "받을 사람: — (조건을 하나 이상 넣으세요)";
+      summary = "받을 사람: 아직 없음. 조건을 하나 이상 넣으세요";
       $("#pCount").textContent = summary;
       $("#pPreview").textContent = "";
       return summary;
@@ -1678,8 +1791,8 @@ function openPush(prefill = null, editId = null) {
       if (!live()) return null;
       const langs = Object.entries(r.by_lang || {}).map(([k, n]) => `${LANG_NAMES[k] || k} ${fmt(n)}`).join(" · ");
       const plats = Object.entries(r.by_platform || {}).map(([k, n]) => `${PLATFORM_NAMES[k] || k} ${fmt(n)}`).join(" · ");
-      summary = `받을 사람: ${fmt(r.people)}명, 기기 ${fmt(r.devices)}대`;
-      $("#pCount").innerHTML = `받을 사람: <b>${fmt(r.people)}명</b> (기기 ${fmt(r.devices)}대)` +
+      summary = `받을 사람: ${fmt(r.people)}명, 휴대폰 ${fmt(r.devices)}대`;
+      $("#pCount").innerHTML = `받을 사람: <b>${fmt(r.people)}명</b> · 휴대폰 ${fmt(r.devices)}대` +
         (r.devices ? `<br>${esc(langs)}<br>${esc(plats)}` : "");
       // 이름을 모르던 고른 회원(복제·고치기로 연 창)은 미리보기가 준 이름으로 채운다. 요청이 더 들지 않는다.
       let filled = false;
@@ -1692,11 +1805,11 @@ function openPush(prefill = null, editId = null) {
       $("#pPreview").innerHTML = names ? `${names}${r.people > r.names.length ? ` 외 ${fmt(r.people - r.names.length)}명` : ""}` : "";
       // 한국어가 아닌 사람이 섞여 있으면 문구가 한 벌이라는 것을 한 번 더 알린다.
       const foreign = Object.entries(r.by_lang || {}).filter(([k]) => k !== "ko").reduce((a, [, n]) => a + n, 0);
-      if (foreign) $("#pPreview").innerHTML += `<div style="margin-top:4px">「주의」 한국어가 아닌 기기 ${fmt(foreign)}대에도 이 문구 그대로 갑니다. 언어별로 보내려면 「앱 언어」 조건을 넣어 따로 보내세요.</div>`;
+      if (foreign) $("#pPreview").innerHTML += `<div style="margin-top:4px">「주의」 앱 언어가 한국어가 아닌 휴대폰 ${fmt(foreign)}대에도 이 문구 그대로 갑니다. 언어별로 보내려면 「앱 언어」 조건을 넣어 따로 보내세요.</div>`;
       return summary;
     } catch (e) {
       if (!live()) return null;
-      summary = "받을 사람: 확인 실패";
+      summary = "받을 사람: 세지 못했습니다";
       $("#pCount").textContent = summary;
       $("#pPreview").textContent = e.message;
       return summary;
@@ -1735,7 +1848,7 @@ function openPush(prefill = null, editId = null) {
     $("#pFound").innerHTML = found.map((u) => `<div style="display:flex;gap:8px;align-items:center;padding:4px 0;border-bottom:1px solid var(--line, #eee)">
         <div style="flex:1;min-width:0">${esc(u.username || "(이름 없음)")}
           <span class="muted" style="font-size:11px">${esc(String(u.id).slice(0, 8))} · 누적 ${fmt(u.total_score)} · 오늘 ${fmt(u.today_score)}</span></div>
-        ${u.reachable ? '<span class="pill today">받음</span>' : '<span class="muted" style="font-size:11px" title="광고성 알림을 안 켰거나 기기 토큰이 없습니다">못 받음</span>'}
+        ${u.reachable ? '<span class="pill today">받을 수 있음</span>' : '<span class="muted" style="font-size:11px" title="광고성 알림을 켜지 않았거나, 알림 받을 휴대폰이 서버에 등록되어 있지 않습니다">못 받음</span>'}
         <button class="sm" type="button" data-pick-user="${esc(u.id)}" ${picked.has(u.id) ? "disabled" : ""}>${picked.has(u.id) ? "넣음" : "넣기"}</button>
       </div>`).join("") || ($("#pFind").value.trim() ? '<div class="muted" style="font-size:12px">찾은 회원이 없습니다</div>' : "");
     $("#pFound").querySelectorAll("[data-pick-user]").forEach((b) => {
@@ -1799,7 +1912,7 @@ function openPush(prefill = null, editId = null) {
   $("#pCancel").onclick = () => dlg.close();
   $("#pOk").onclick = async () => {
     const title = $("#pTitle").value.trim(), body = $("#pBody").value.trim();
-    if (!title || !body) { $("#pErr").textContent = "제목과 본문을 모두 입력하세요"; return; }
+    if (!title || !body) { $("#pErr").textContent = "제목과 본문을 모두 적어 주세요"; return; }
     const t = $("#pTarget").value, arg = currentArg();
     if (t === "users" && !picked.size) { $("#pErr").textContent = "보낼 회원을 찾아 넣으세요"; return; }
     const linkNow = currentLink();
@@ -1826,7 +1939,7 @@ function openPush(prefill = null, editId = null) {
                     : `${editId ? "고친 내용은" : "보내면"} 곧 나가고 취소할 수 없습니다. ${editId ? "고칠까요?" : "발송할까요?"}`;
     const kind = $("#pKind").value;
     const kindLine = pushKindLine(kind);
-    if (!confirm(`${counted}\n${when}\n${kindLine}\n눌렀을 때: ${linkLabel(linkNow, kind)}\n\n"${title}"\n\n${verb}`)) return;
+    if (!confirm(`${counted}\n${when}\n${kindLine}\n누르면 열리는 화면: ${linkLabel(linkNow, kind)}\n\n"${title}"\n\n${verb}`)) return;
     $("#pOk").disabled = true;   // 두 번 눌러 두 번 나가는 일을 막는다
     try {
       const common = {
@@ -1853,10 +1966,10 @@ async function pushSelected() {
   // 받을 수 있는지 모르면 막지 않는다. 창의 미리보기가 실제 수를 센다.
   const off = REACH === null ? 0 : ids.filter((id) => !REACH[id]).length;
   if (off && off === ids.length) {
-    alert(`체크한 ${ids.length}명 모두 지금은 푸시를 받을 수 없습니다.\n「푸시」 칸이 「받음」인 회원만 받습니다.`);
+    alert(`체크한 ${ids.length}명 모두 지금은 푸시를 받을 수 없습니다.\n회원 목록의 「푸시」 칸이 「받음」인 회원만 받습니다.`);
     return;
   }
-  if (off && !confirm(`체크한 ${ids.length}명 중 ${off}명은 푸시를 받을 수 없습니다(광고성 알림을 안 켰거나 기기 토큰이 없음).\n나머지 ${ids.length - off}명에게 보내는 창을 열까요?`)) return;
+  if (off && !confirm(`체크한 ${ids.length}명 중 ${off}명은 푸시를 받을 수 없습니다. 광고성 알림을 켜지 않았거나 알림 받을 휴대폰이 등록되어 있지 않습니다.\n나머지 ${ids.length - off}명에게 보내는 창을 열까요?`)) return;
   // 회원 목록에서 열면 이벤트 목록을 아직 안 받았다. 이벤트 조건의 고를 거리가 비지 않게 열기 전에 받는다.
   if (!LIVE_EVENTS.length) await loadLiveEvents();
   openPush({ target: "users", target_arg: ids.join(","),
@@ -1864,13 +1977,13 @@ async function pushSelected() {
 }
 
 async function cancelPush(id) {
-  if (!confirm("아직 안 나간 발송을 취소합니다.")) return;
+  if (!confirm("아직 안 나간 이 푸시를 보내지 않기로 합니다.")) return;
   await act(() => rpc("admin_cancel_push", { p_id: id }), refresh);
 }
 
 async function deleteNotice(id) {
-  if (!confirm("이 공지를 삭제합니다. 아직 못 본 사람은 앞으로도 못 봅니다.")) return;
-  const reason = askReason("공지 삭제");
+  if (!confirm("이 공지를 지웁니다. 아직 못 본 사람은 앞으로도 볼 수 없습니다.")) return;
+  const reason = askReason("공지 지우기");
   if (reason === null) return;
   await act(() => rpc("admin_delete_notice", { p_id: id, p_reason: reason }), refresh);
 }
@@ -1879,7 +1992,7 @@ async function toggleMember(id) {
   if (OPEN_MEMBER === id) { OPEN_MEMBER = null; MEMBER_EVENTS = []; MEMBER_PAYS = []; render(); return; }
   OPEN_MEMBER = id;
   try { MEMBER_EVENTS = await rpc("admin_member_events", { p_target: id, p_limit: 200 }) || []; }
-  catch (e) { MEMBER_EVENTS = []; alert("이력 조회 실패: " + e.message); }
+  catch (e) { MEMBER_EVENTS = []; alert("이 회원의 기록을 불러오지 못했습니다.\n\n" + plainError(e.message)); }
   // 구매 기능을 아직 안 깐 프로젝트에서도 이력은 열려야 한다.
   try { MEMBER_PAYS = await rpc("admin_member_purchases", { p_target: id, p_limit: 100 }) || []; }
   catch { MEMBER_PAYS = []; }
@@ -1890,7 +2003,7 @@ async function toggleBatch(id) {
   if (OPEN_BATCH === id) { OPEN_BATCH = null; BATCH_MEMBERS = []; render(); return; }
   OPEN_BATCH = id;
   try { BATCH_MEMBERS = await rpc("admin_batch_members", { p_batch: id }) || []; }
-  catch (e) { BATCH_MEMBERS = []; alert("명단 조회 실패: " + e.message); }
+  catch (e) { BATCH_MEMBERS = []; alert("받는 사람 명단을 불러오지 못했습니다.\n\n" + plainError(e.message)); }
   render();
 }
 
@@ -1899,13 +2012,13 @@ async function revokeBatch(id) {
   // 등록−수령으로 계산하면 안 된다 — 회수로 지워진 건 등록 숫자에 남아 있어서,
   // 회수를 반복해도 "17건 회수합니다 → 0건 회수했습니다"만 돌았다(실측).
   const left = Number(b?.pending_count || 0);
-  if (!confirm(`아직 안 받아 간 ${left}건을 회수합니다.\n\n` +
-    `이미 받아 간 사람의 코인은 기기에 들어가 있어서 되돌릴 수 없습니다.`)) return;
-  const reason = askReason("지급 묶음 회수");
+  if (!confirm(`아직 안 받아 간 ${left}건을 거둬들입니다.\n\n` +
+    `이미 받아 간 사람의 코인은 그 사람 휴대폰에 들어가 있어서 되돌릴 수 없습니다.`)) return;
+  const reason = askReason("모든 회원에게 준 보상 거둬들이기");
   if (reason === null) return;
   await act(async () => {
     const n = await rpc("admin_revoke_batch", { p_batch: id, p_reason: reason });
-    alert(`${n}건을 회수했습니다`);
+    alert(`${n}건을 거둬들였습니다`);
   }, refresh);
 }
 
@@ -1963,27 +2076,26 @@ function rankRewardEditor(key = "rank_rewards", label = "오늘 점수") {
       <td class="num"><input type="number" min="0" class="t-coins" value="${n(t.coins)}" style="width:100px"></td>
       <td class="num"><input type="number" min="0" class="t-hints" value="${n(t.hints)}" style="width:80px"></td>
       <td class="num"><input type="number" min="0" class="t-autos" value="${n(t.autos)}" style="width:80px"></td>
-      <td><button class="sm" data-tier-del="${i}">삭제</button></td>
+      <td><button class="sm" data-tier-del="${i}">이 줄 지우기</button></td>
     </tr>`;
   const body = tiers.length
     ? tiers.map(row).join("")
-    : `<tr><td colspan="5" class="muted">표가 비어 있습니다. 비면 서버가 기본값으로 정산합니다.</td></tr>`;
+    : `<tr><td colspan="5" class="muted">표가 비어 있습니다. 비어 있으면 기본 보상표로 나눠 줍니다.</td></tr>`;
   // 오늘 점수(rank_rewards)는 늘 켜져 있다. 기록전·숫자는 끌 수 있고, 끄면 그 기간은 정산만 하고 보상을 주지 않는다(105).
   const toggle = key === "rank_rewards" ? "" : `<label class="switch" style="margin-bottom:var(--gap)">
       <input type="checkbox" class="t-enabled" ${cfg.enabled === false ? "" : "checked"}><span>${esc(label)} 랭킹 보상 켜기</span></label>`;
   return `
     <div class="notice">
-      <b>「~등까지」로 적습니다.</b> 1 · 2 · 3 · 5 · 10이면 4등은 「5까지」 줄을 받습니다.
-      <b>마지막 줄이 몇 등까지 줄지를 정합니다.</b>
-      ${key === "rank_rewards" ? "<br>여기를 고치면 <b>앱 안내 문구도 같이 바뀝니다.</b> 앱을 다시 올릴 필요가 없습니다." : "<br>저장하면 다음 정산부터 이 표로 지급합니다."}
-      <br>보상은 마감 뒤 정산되어 <b>우편함</b>으로 들어가고, 정산된 날부터 ${RANK_CLAIM_DAYS}일 안에 받습니다.
-      <br>앱 랭킹 목록은 100명까지만 보여 줍니다. 그보다 많이 주면 지급은 되지만 목록에는 안 보입니다.
+      <b>등수는 「몇 등까지」로 적습니다.</b> 줄이 1, 2, 3, 5, 10이면 4등과 5등은 「5등까지」 줄의 보상을 받습니다.
+      <b>마지막 줄의 등수까지만 보상을 줍니다.</b> 마지막 줄이 10이면 11등부터는 없습니다.
+      ${key === "rank_rewards" ? "<br>여기를 고치면 <b>앱의 보상 안내 문구도 같이 바뀝니다.</b> 앱을 새로 올릴 필요가 없습니다." : "<br>저장하면 다음에 보상을 나눠 줄 때부터 이 표를 씁니다."}
+      ${infoTip(`랭킹이 마감되면 서버가 등수를 매겨 보상을 우편함으로 보내고, 보낸 날부터 ${RANK_CLAIM_DAYS}일 안에 받아야 합니다. 앱 랭킹 목록은 100명까지만 보여 줍니다. 그보다 아래까지 주면 보상은 가지만 목록에는 안 보입니다.`)}
     </div>
     <div class="tier-editor" data-tierkey="${esc(key)}" data-tierlabel="${esc(label)}">
     ${toggle}
     <div class="table-scroll"><table style="min-width:520px">
       <thead><tr>
-        <th class="num">~등까지</th><th class="num">코인</th>
+        <th class="num">몇 등까지</th><th class="num">코인</th>
         <th class="num">힌트</th><th class="num">자동배치</th><th></th>
       </tr></thead>
       <tbody class="tier-body">${body}</tbody>
@@ -2038,15 +2150,15 @@ async function saveRankRewards(box) {
 
   // 같은 등수가 두 줄이면 뒤의 줄은 영영 안 걸린다 — 조용히 죽는 설정은 만들지 않는다.
   const dup = tiers.find((t, i) => i > 0 && t.to === tiers[i - 1].to);
-  if (dup) return alert(`「${dup.to}등까지」가 두 줄입니다. 한 줄로 합쳐 주세요.`);
+  if (dup) return alert(`「${dup.to}등까지」 줄이 두 개입니다. 한 줄로 합쳐 주세요.`);
 
   const last = tiers.length ? tiers[tiers.length - 1].to : 0;
-  if (last > 100 && !confirm(`${last}등까지 줍니다. 앱 목록은 100명까지라 101등부터는 목록에 안 보입니다. 그래도 저장할까요?`)) return;
+  if (last > 100 && !confirm(`${last}등까지 줍니다. 앱 랭킹 목록은 100명까지라 101등부터는 보상은 받아도 목록에는 안 보입니다. 그래도 저장할까요?`)) return;
   const en = box.querySelector(".t-enabled");
   if (!confirm(`${label} 랭킹: ${en && !en.checked ? "보상을 끕니다.\n\n" : ""}${last}등까지 보상을 줍니다.\n\n` +
                tiers.map((t) => `  ~${t.to}등: 코인 ${t.coins}` +
-                 (t.hints || t.autos ? ` · 힌트 ${t.hints} · 자동 ${t.autos}` : "")).join("\n") +
-               `\n\n${key === "rank_rewards" ? "앱 안내 문구도 이대로 바뀝니다. " : ""}저장할까요?`)) return;
+                 (t.hints || t.autos ? ` · 힌트 ${t.hints} · 자동배치 ${t.autos}` : "")).join("\n") +
+               `\n\n${key === "rank_rewards" ? "앱의 보상 안내 문구도 이대로 바뀝니다. " : ""}저장할까요?`)) return;
 
   const value = { ...(CONFIG?.[key] && typeof CONFIG[key] === "object" ? CONFIG[key] : {}), tiers };
   if (en) value.enabled = en.checked;
@@ -2061,8 +2173,7 @@ async function saveRankRewards(box) {
  */
 function updateTab(err) {
   if (err) {
-    return `<div class="notice">설정 조회 실패: ${esc(err.message)}<br>
-            sql/migrations/013_app_config.sql을 실행했는지 확인하세요.</div>`;
+    return loadFail("설정을 불러오지 못했습니다.", err, "sql/migrations/013_app_config.sql");
   }
   const g = (k, p) => Number(CONFIG?.[k]?.[p] ?? 0);
   const url = (p) => String(CONFIG?.store_url?.[p] ?? "");
@@ -2071,23 +2182,25 @@ function updateTab(err) {
       <td><b>${label}</b></td>
       <td class="num"><input type="number" id="min_${p}" value="${g("min_version", p)}" style="width:90px"></td>
       <td class="num"><input type="number" id="latest_${p}" value="${g("latest_version", p)}" style="width:90px"></td>
-      <td><input type="text" id="url_${p}" value="${esc(url(p))}" placeholder="스토어 주소" style="width:100%"></td>
+      <td><input type="text" id="url_${p}" value="${esc(url(p))}" placeholder="앱 스토어 페이지 주소" style="width:100%"></td>
     </tr>`;
   return `
+    <h2>앱 업데이트 요구</h2>
     <div class="notice">
-      <b>강제 업데이트는 되돌리기 어렵습니다.</b>
-      최소 버전을 지금 배포된 버전보다 높게 넣으면 <b>모든 사용자가 앱을 못 씁니다.</b>
-      새 버전이 스토어에 올라가 심사를 통과한 뒤에 올리세요. 0이면 검사하지 않습니다.
+      <b>업데이트 강제는 되돌리기 어렵습니다.</b>
+      「꼭 있어야 하는 최소 빌드」를 지금 스토어에 나간 앱보다 높게 넣으면 <b>모든 사람이 앱을 못 씁니다.</b>
+      새 버전이 스토어 심사를 통과해 내려받을 수 있게 된 뒤에 올리세요. 0이면 검사하지 않습니다.
     </div>
     <div class="table-scroll"><table style="min-width:640px">
       <thead><tr>
-        <th>플랫폼</th><th class="num">최소 버전 (강제)</th>
-        <th class="num">최신 버전 (권장)</th><th>스토어 주소</th>
+        <th>기기</th><th class="num">꼭 있어야 하는 최소 빌드${infoTip("이 번호보다 낮은 앱은 업데이트하기 전까지 쓸 수 없습니다. 0이면 검사하지 않습니다.")}</th>
+        <th class="num">권하는 최신 빌드${infoTip("이 번호보다 낮은 앱에는 업데이트를 권하는 안내가 뜹니다. 앱은 계속 쓸 수 있습니다.")}</th><th>스토어 주소${infoTip("업데이트 안내에서 「업데이트」를 누르면 열리는 스토어 페이지입니다.")}</th>
       </tr></thead>
-      <tbody>${row("android", "Android")}${row("ios", "iOS")}</tbody>
+      <tbody>${row("android", "AOS")}${row("ios", "iOS")}</tbody>
     </table></div>
+    <div class="muted" style="font-size:12.5px;margin-top:6px">숫자는 빌드 번호입니다. 예: 1.5.1은 52${infoTip("빌드 번호는 앱을 스토어에 올릴 때마다 하나씩 붙는 숫자입니다. 사람이 읽는 1.5.1 같은 버전과 따로 셉니다.")}</div>
     <div class="toolbar"><button class="sm" id="saveVersions">저장</button></div>
-    <div class="muted" style="font-size:12.5px;margin-bottom:var(--gap)">1.5.0: 새 빌드가 퍼지면 최소 버전을 올려 1.4.4의 오늘의 퍼즐 도구 길을 닫습니다.
+    <div class="muted" style="font-size:12.5px;margin-bottom:var(--gap)">1.5.0을 낼 때 할 일: 새 앱이 충분히 퍼지면 최소 빌드를 올려 1.4.4에 남은 오늘의 퍼즐 도구 사용 길을 닫습니다.
       이벤트 번호가 여섯 자리가 되기 전에도 올립니다.</div>
 
     ${cfgEditor("daily_record")}
@@ -2098,23 +2211,23 @@ function updateTab(err) {
     <h2>점검 모드</h2>
     ${maintenanceBanner()}
     <div class="notice">
-      켜면 앱이 안내 문구를 띄우고 <b>랭킹·같이하기만</b> 잠급니다.
-      레벨 진행(오프라인 게임)은 막지 않습니다. 서버를 못 읽는 앱도 막히지 않습니다.
-      <br>앱은 <b>1분 안에</b> 스스로 확인합니다 — 사용자가 앱을 껐다 켤 필요가 없습니다.
+      켜면 앱이 안내 문구를 띄우고 <b>랭킹과 같이하기만</b> 잠급니다.
+      인터넷 없이 하는 레벨 진행은 막지 않습니다. 서버에 닿지 못하는 앱도 막히지 않습니다.
+      <br>앱이 <b>1분 안에</b> 스스로 알아챕니다. 사용자가 앱을 껐다 켤 필요는 없습니다.
     </div>
     <div class="toolbar">
       <label class="switch">
         <input type="checkbox" id="maintOn" ${CONFIG?.maintenance?.on ? "checked" : ""}>
-        <span>점검 중</span>
+        <span>지금 점검 중으로 바꾸기</span>
       </label>
       <!-- input[type=text]은 줄바꿈을 담지 못해 엔터를 쳐도 한 줄로 붙었다
            (사용자 제보). 앱은 두 줄 이상도 그대로 그리므로 textarea로 바꾼다. -->
-      <textarea id="maintMsg" rows="2" placeholder="안내 문구 (비우면 기본 문구) — 줄바꿈 가능"
+      <textarea id="maintMsg" rows="2" placeholder="앱에 띄울 안내 문구. 비우면 기본 문구, 줄을 바꿔 써도 됩니다"
                 style="flex:1;resize:vertical;font:inherit">${esc(CONFIG?.maintenance?.message || "")}</textarea>
       <button class="sm" id="saveMaint">저장</button>
     </div>
     <div class="toolbar">
-      <span class="muted">예약(한국시간, 비우면 예약 없음)</span>
+      <span class="muted">점검 예약 · 한국시간, 비우면 예약 없음</span>
       <input type="datetime-local" id="maintFrom" value="${esc(CONFIG?.maintenance?.starts_at || "")}">
       <span class="muted">~</span>
       <input type="datetime-local" id="maintTo" value="${esc(CONFIG?.maintenance?.ends_at || "")}">
@@ -2125,25 +2238,25 @@ function updateTab(err) {
       <button class="sm" id="saveMaintSched">저장</button>
     </div>
     <div class="muted" style="margin-top:-6px;font-size:12px">
-      예약이 있으면 그 시간 동안 앱이 스스로 점검 상태가 됩니다. 스위치를 켤 필요가 없습니다.
-      <b>넣은 뒤 저장을 눌러야</b> 반영됩니다.
+      예약을 넣으면 그 시간 동안 앱이 알아서 점검 상태가 됩니다. 위 스위치를 켤 필요는 없습니다.
+      <b>시각을 넣은 뒤 저장을 눌러야</b> 반영됩니다.
     </div>
 
-    <h2>서버 주소 이사</h2>
+    <h2>서버 주소 옮기기</h2>
     <div class="notice">
-      <b>평소에는 비워 두세요.</b> 값을 넣으면 앱이 <b>다음 실행부터</b> 그 주소로 접속합니다.
-      옛 주소를 내리기 전까지는 두 주소가 <b>모두 살아 있어야</b> 합니다.
+      <b>평소에는 비워 두세요.</b> 서버를 다른 곳으로 옮길 때만 씁니다. 값을 넣으면 앱이 <b>다음에 켤 때부터</b> 그 주소로 접속합니다.
+      옛 주소를 닫기 전까지는 두 주소가 <b>모두 살아 있어야</b> 합니다.
       잘못 넣어도 앱은 세 번 실패하면 원래 주소로 스스로 돌아옵니다.
     </div>
     <div class="toolbar">
-      <input type="text" id="apiUrl" placeholder="https://api.내도메인.com (비우면 기본 주소)"
+      <input type="text" id="apiUrl" placeholder="예: https://api.내도메인.com · 비우면 기본 주소"
              value="${esc(String(CONFIG?.api_url ?? ""))}" style="flex:1">
       <button class="danger sm" id="saveApiUrl">저장</button>
     </div>
 
-    <h2>이상 징후 문턱</h2>
+    <h2>코인 급증 기준</h2>
     <div class="toolbar">
-      <span class="muted">오늘 코인 획득이 이 값 이상이면 상단에 배지로 띄웁니다</span>
+      <span class="muted">한 사람이 오늘 번 코인이 이 값 이상이면 「이상 징후」에 올립니다. 예: 3000이면 하루 3,000코인 이상 번 사람</span>
       <input type="number" id="anomalyTh" value="${Number(CONFIG?.anomaly_threshold ?? 3000)}" style="width:110px">
       <button class="sm" id="saveAnomaly">저장</button>
     </div>`;
@@ -2170,8 +2283,8 @@ const NAV = [
   { id: "liveevents", label: "이벤트" },
   { label: "같이하기", items: [["versus", "현황"], ["versusset", "설정"]] },
   { label: "회원", items: [["players", "회원 목록"], ["rewards", "보상"]] },
-  { label: "기록", items: [["events", "행동 로그"], ["purchases", "구매"], ["audit", "관리 기록"]] },
-  { label: "운영", items: [["anomaly", "이상 징후"], ["update", "업데이트"],
+  { label: "기록", items: [["events", "앱 사용 기록"], ["purchases", "결제"], ["audit", "관리 기록"]] },
+  { label: "운영", items: [["anomaly", "이상 징후"], ["update", "업데이트·게임 설정"],
                           ["notices", "공지"], ["push", "푸시"], ["server", "서버 상태"]] },
 ];
 
@@ -2179,7 +2292,7 @@ let SRV = null, WINNERS = [], TRANSFERS = [], COIN_AUDIT = [];
 /** 최근 랭킹 보상 지급(107 admin_rank_grants). 못 읽었으면 null. */
 let GRANTS = null;
 /** 지급 줄의 랭킹 이름. */
-const GRANT_KIND = { today: "오늘 점수", daily_time: "기록전", number: "숫자", event: "이벤트" };
+const GRANT_KIND = { today: "오늘 점수", daily_time: "기록전", number: "숫자 퍼즐", event: "이벤트" };
 
 /** 최근 랭킹 보상 표. 수령은 받음 · 우편함 대기(기한) · 기한 지남. */
 function grantsTable() {
@@ -2188,7 +2301,7 @@ function grantsTable() {
   const rec = (g) => g.record_value == null ? "—"
     : g.kind === "daily_time" ? fmtDur(g.record_value) : g.kind === "event" ? `${fmt(g.record_value)}판` : fmt(g.record_value);
   return `<div class="table-scroll"><table>
-    <thead><tr><th>정산</th><th>랭킹</th><th>기간</th><th class="c fit">등수</th><th>닉네임</th><th class="num">기록</th><th>보상</th><th class="c">수령</th></tr></thead>
+    <thead><tr><th>보상 보낸 날</th><th>랭킹</th><th>기간</th><th class="c fit">등수</th><th>닉네임</th><th class="num">기록</th><th>보상</th><th class="c">받았나</th></tr></thead>
     <tbody>${GRANTS.map((g) => `<tr>
       <td class="muted">${esc(fmtDate(g.created_at))}</td>
       <td>${esc(GRANT_KIND[g.kind] || g.kind)}</td>
@@ -2199,7 +2312,7 @@ function grantsTable() {
       <td>${rewardText(g)}</td>
       <td class="c">${g.claimed_at ? `<span class="muted">받음 ${esc(fmtDate(g.claimed_at))}</span>`
         : g.claim_until && new Date(g.claim_until).getTime() <= now ? '<span class="pill heart" style="margin-left:0">기한 지남</span>'
-        : `<span class="pill warn" style="margin-left:0">우편함 대기</span>${g.claim_until ? `<div class="muted" style="font-size:11px">${esc(fmtDateTime(g.claim_until))}까지</div>` : ""}`}</td>
+        : `<span class="pill warn" style="margin-left:0">우편함에 있음</span>${g.claim_until ? `<div class="muted" style="font-size:11px">${esc(fmtDateTime(g.claim_until))}까지</div>` : ""}`}</td>
     </tr>`).join("")}</tbody></table></div>`;
 }
 /** 오늘 랭킹 화면. 077이 있어야 채워진다. */
@@ -2226,8 +2339,7 @@ let VS_EVENTS = [];
  */
 function rankingTab(err) {
   if (err) {
-    return `<div class="notice">랭킹 조회 실패: ${esc(err.message)}<br>
-            sql/migrations/077_admin_daily_ranking.sql을 실행했는지 확인하세요.</div>`;
+    return loadFail("랭킹을 불러오지 못했습니다.", err, "sql/migrations/077_admin_daily_ranking.sql");
   }
   const today = kstToday();
   const day = RANK_DATE || today;
@@ -2237,31 +2349,31 @@ function rankingTab(err) {
 
   const cards = `
     <div class="cards">
-      <div class="card"><div class="label">참가자</div><div class="value">${fmt(RANK_TOTAL)}</div></div>
+      <div class="card"><div class="label">점수를 낸 사람</div><div class="value">${fmt(RANK_TOTAL)}</div></div>
       <div class="card"><div class="label">최고 점수</div><div class="value">${score("top_score")}</div></div>
-      <div class="card"><div class="label">평균</div><div class="value">${score("avg_score")}</div></div>
-      <div class="card"><div class="label">중앙값</div><div class="value">${score("median_score")}</div></div>
+      <div class="card"><div class="label">평균 점수</div><div class="value">${score("avg_score")}</div></div>
+      <div class="card"><div class="label">가운데 사람 점수</div><div class="value">${score("median_score")}</div></div>
     </div>`;
 
   const days = RANK_STATS.map((r) => String(r.day).slice(5, 10));
   const charts = RANK_STATS.length ? `
-    <h3 class="sub">날짜별 참가자</h3>
+    <h3 class="sub">날마다 점수를 낸 사람</h3>
     ${lineChart(days, [
-      { name: "참가자", color: "#7aa2f7", values: RANK_STATS.map((r) => Number(r.players)) },
+      { name: "점수를 낸 사람", color: "#7aa2f7", values: RANK_STATS.map((r) => Number(r.players)) },
     ])}
-    <h3 class="sub">점수 분포 (최고 · 평균 · 중앙값)</h3>
+    <h3 class="sub">날마다 최고 · 평균 · 가운데 사람 점수</h3>
     ${lineChart(days, [
       { name: "최고", color: "#d9a441", values: RANK_STATS.map((r) => Number(r.top_score)) },
       { name: "평균", color: "#17b3a8", values: RANK_STATS.map((r) => Number(r.avg_score)) },
-      { name: "중앙값", color: "#9a8cff", values: RANK_STATS.map((r) => Number(r.median_score)) },
+      { name: "가운데 사람", color: "#9a8cff", values: RANK_STATS.map((r) => Number(r.median_score)) },
     ])}`
-    : `<div class="empty">집계가 없습니다</div>`;
+    : `<div class="empty">모은 숫자가 없습니다</div>`;
 
   const rows = RANKING.length ? `<div class="table-scroll"><table style="min-width:720px">
       <thead><tr>
         <th class="num fit">등수</th><th>닉네임</th><th class="num">오늘 점수</th>
-        <th class="num">누적</th><th class="num">코인</th>
-        <th>보상</th><th class="c fit">수령</th>
+        <th class="num">누적 점수</th><th class="num">코인</th>
+        <th>보상</th><th class="c fit">받았나</th>
       </tr></thead>
       <tbody>${RANKING.map((r) => `<tr>
         <td class="num fit">${r.rank}</td>
@@ -2273,14 +2385,14 @@ function rankingTab(err) {
         <td class="muted">${r.reward_coins == null ? "—"
           : `코인 ${fmt(r.reward_coins)}` +
             ((r.reward_hints || r.reward_autos)
-              ? ` · 힌트 ${r.reward_hints} · 자동 ${r.reward_autos}` : "")}</td>
+              ? ` · 힌트 ${r.reward_hints} · 자동배치 ${r.reward_autos}` : "")}</td>
         <td class="c fit">${r.reward_coins == null ? '<span class="muted">—</span>'
             : r.claimed ? '<span class="muted">받아 감</span>'
-                        : '<span class="pill heart">소멸/대기</span>'}</td>
+                        : '<span class="pill heart" title="아직 안 받았거나, 받을 기한이 지나 사라졌습니다">안 받음</span>'}</td>
       </tr>`).join("")}</tbody></table></div>`
     : (RANK_SINCE && day < RANK_SINCE)
-      ? `<div class="empty">${day}은 <b>기록 시작 전</b>입니다 —
-         날짜별 기록은 ${RANK_SINCE}부터 쌓입니다</div>`
+      ? `<div class="empty">${day}은 <b>기록을 남기기 전</b>입니다.
+         날짜별 기록은 ${RANK_SINCE}부터 있습니다</div>`
       : `<div class="empty">그날 점수를 낸 사람이 없습니다</div>`;
 
   // 50명씩 끊어 받는다. 전체 수를 알고 있으므로 몇 쪽인지 바로 쓸 수 있다.
@@ -2288,34 +2400,34 @@ function rankingTab(err) {
   const paging = pages > 1 ? `
     <div class="toolbar">
       <button class="sm" id="rankPrev" ${RANK_PAGE === 0 ? "disabled" : ""}>이전</button>
-      <span class="muted">${RANK_PAGE + 1} / ${pages} 쪽 (${fmt(RANK_TOTAL)}명)</span>
+      <span class="muted">${RANK_PAGE + 1} / ${pages}쪽 · ${fmt(RANK_TOTAL)}명</span>
       <button class="sm" id="rankNext" ${RANK_PAGE + 1 >= pages ? "disabled" : ""}>다음</button>
     </div>` : "";
 
   return `
     <div class="notice">
-      <b>앱이 보는 것과 같은 목록입니다.</b> 「그 날짜에 점수 1 이상」인 사람만 셉니다 —
-      회원 목록과 모집단이 다릅니다(그쪽은 점수가 0인 사람도 들어 있습니다).
-      <br>앱은 이 중 <b>100명까지</b> 보여 줍니다. 그보다 아래는 앱에서
-      「내 순위 N위」 줄로만 알 수 있습니다.
-      <br><b>지난 날짜도 정확합니다</b>(080부터). 점수를 올릴 때 날짜별로 한 줄씩
-      따로 남기므로, 그 사람이 다시 접속해도 지난 날짜의 줄은 그대로 있습니다.
+      <b>앱 랭킹 화면과 같은 목록입니다.</b> 그 날짜에 점수를 1점 이상 낸 사람만 셉니다.
+      점수가 0인 사람까지 들어 있는 회원 목록과는 인원이 다릅니다.
+      <br>앱은 이 중 <b>100명까지</b> 보여 줍니다. 그보다 아래인 사람은 앱에서
+      「내 순위 N위」 줄로만 자기 등수를 봅니다.
+      <br><b>지난 날짜도 정확합니다.</b> 날짜마다 점수를 따로 남기므로, 그 사람이 다음 날 다시 들어와도
+      지난 날짜의 점수는 그대로 있습니다.
       ${RANK_SINCE
         ? `기록은 <b>${RANK_SINCE}</b>부터 있습니다. 그 전 날짜는 1~10등만
-           「운영 → 서버 상태」의 수상자 표에 남아 있습니다.`
-        : `<b>서버에 080이 아직 안 올라갔습니다.</b> 지금 보이는 지난 날짜는
-           다시 접속하지 않은 사람만 남은 수라 참고용입니다.`}
+           「운영 → 서버 상태」의 최근에 나간 랭킹 보상 표에 남아 있습니다.`
+        : `<b>서버가 아직 날짜마다 점수를 남기지 않습니다.</b> 지금 보이는 지난 날짜는
+           그 뒤로 다시 들어오지 않은 사람만 남은 숫자라 참고만 하세요. 개발 담당에게 전할 단서: 080`}
     </div>
     <div class="toolbar">
       <input type="date" id="rankDate" value="${day}" max="${today}"
              ${RANK_SINCE ? `min="${RANK_SINCE}"` : ""}>
       <button class="sm" id="rankToday">오늘</button>
       <div style="flex:1"></div>
-      <span class="muted">기준 ${day} (한국시간)</span>
+      <span class="muted">보는 날짜 ${day} · 한국시간</span>
     </div>
     ${cards}
     ${charts}
-    <h2>참가자 (${fmt(RANK_TOTAL)}명)</h2>
+    <h2>점수를 낸 사람 · ${fmt(RANK_TOTAL)}명</h2>
     ${paging}
     ${rows}
     ${paging}`;
@@ -2372,23 +2484,23 @@ async function loadServer() {
  * 자리다. 관리자 화면이 답해야 하는 질문이라 제일 먼저 답한다.
  */
 function serverTab(err) {
-  if (err) return `<div class="notice">서버 상태 조회 실패: ${esc(err.message)}</div>`;
+  if (err) return loadFail("서버 상태를 불러오지 못했습니다.", err);
   const mig = SRV ? `
     <div class="cards">
-      <div class="card"><div class="label">적용된 마이그레이션</div>
+      <div class="card"><div class="label">서버에 적용된 업데이트 파일</div>
         <div class="value">${fmt(SRV.applied)} / ${fmt(SRV.total)}</div></div>
     </div>
     ${(SRV.missing || []).length
       ? `<div class="notice" style="border-color:var(--danger);color:var(--danger)">
-           <b>아직 안 돌린 파일</b> — ${(SRV.missing || []).map(esc).join(", ")}
+           <b>아직 서버에 적용 안 된 파일이 있습니다.</b> 개발 담당에게 알려 주세요: ${(SRV.missing || []).map(esc).join(", ")}
          </div>`
-      : `<div class="notice">빠진 파일 없습니다.</div>`}`
-    : `<div class="empty">052를 적용하면 여기에 나옵니다</div>`;
+      : `<div class="notice">빠진 파일이 없습니다. 서버가 최신입니다.</div>`}`
+    : `<div class="empty">서버가 이 정보를 아직 주지 않습니다. 개발 담당에게 전할 단서: 052</div>`;
 
   const audit = COIN_AUDIT.length ? `<div class="table-scroll"><table style="min-width:720px">
-      <thead><tr><th>닉네임</th><th class="num">실제 잔액</th><th class="num">기대 잔액</th>
-        <th class="num">차이</th><th class="num">획득</th><th class="num">소모</th>
-        <th class="num">받은 보상</th><th>가입</th></tr></thead>
+      <thead><tr><th>닉네임</th><th class="num">앱이 알린 잔액</th><th class="num">기록으로 계산한 잔액</th>
+        <th class="num">차이</th><th class="num">번 코인</th><th class="num">쓴 코인</th>
+        <th class="num">받은 보상</th><th>가입한 날</th></tr></thead>
       <tbody>${COIN_AUDIT.map((r) => `<tr>
         <td>${esc(r.username || "—")}</td>
         <td class="num">${fmt(r.actual)}</td>
@@ -2399,12 +2511,12 @@ function serverTab(err) {
         <td class="num">${fmt(r.granted)}</td>
         <td class="muted">${fmtDate(r.created_at)}</td>
       </tr>`).join("")}</tbody></table></div>`
-    : `<div class="empty">차이가 큰 계정이 없습니다</div>`;
+    : `<div class="empty">잔액 차이가 큰 계정이 없습니다</div>`;
 
   // 065: 10등까지, 코인·아이템·수령 여부. 107 admin_rank_grants가 없는 서버에서만 쓰는 옛 표다.
   // 18절부터 랭킹 보상은 우편함으로 받고 기한은 정산된 날부터 7일이다.
   const winners = WINNERS.length ? `<div class="table-scroll"><table style="min-width:560px">
-      <thead><tr><th>날짜</th><th class="c fit">등수</th><th>닉네임</th><th class="num">코인</th><th>아이템</th><th class="c fit">수령</th></tr></thead>
+      <thead><tr><th>날짜</th><th class="c fit">등수</th><th>닉네임</th><th class="num">코인</th><th>아이템</th><th class="c fit">받았나</th></tr></thead>
       <tbody>${WINNERS.map((w) => `<tr>
         <td class="muted">${fmtDate(w.award_date)}</td>
         <td class="c fit">${w.rank}등</td>
@@ -2412,41 +2524,42 @@ function serverTab(err) {
         <td class="num">${(w.coins ?? "").toLocaleString ? (w.coins).toLocaleString() : w.coins ?? ""}</td>
         <td class="muted">${(w.hints || w.autos) ? `힌트 ${w.hints} · 자동 ${w.autos}` : "—"}</td>
         <td class="c fit">${w.claimed ? '<span class="muted">받아 감</span>'
-                        : '<span class="pill heart">소멸/대기</span>'}</td>
+                        : '<span class="pill heart" title="아직 안 받았거나, 받을 기한이 지나 사라졌습니다">안 받음</span>'}</td>
       </tr>`).join("")}</tbody></table></div>`
     : `<div class="empty">아직 없습니다</div>`;
 
   const transfers = TRANSFERS.length ? `<div class="table-scroll"><table style="min-width:560px">
-      <thead><tr><th>코드</th><th>닉네임</th><th>발급</th><th class="c fit">상태</th></tr></thead>
+      <thead><tr><th>코드</th><th>닉네임</th><th>만든 날</th><th class="c fit">상태</th></tr></thead>
       <tbody>${TRANSFERS.map((t) => `<tr>
         <td><b>${esc(t.code)}</b></td>
         <td>${esc(t.username || "—")}</td>
         <td class="muted">${fmtDate(t.created_at)}</td>
         <td class="c fit">${t.used_at ? `<span class="muted">사용됨 ${fmtDate(t.used_at)}</span>`
-              : t.expired ? '<span class="pill heart">만료</span>'
-              : '<span class="pill today">대기</span>'}</td>
+              : t.expired ? '<span class="pill heart">기한 지남</span>'
+              : '<span class="pill today">아직 안 씀</span>'}</td>
       </tr>`).join("")}</tbody></table></div>`
-    : `<div class="empty">발급된 코드가 없습니다</div>`;
+    : `<div class="empty">만든 코드가 없습니다</div>`;
 
   return `
-    <h2>마이그레이션</h2>
+    <h2>서버 업데이트 상태</h2>
+    <div class="muted" style="margin-bottom:6px">서버 구조를 바꾸는 파일이 몇 개 적용됐는지 봅니다. 빠진 파일이 있으면 개발 담당에게 알려 주세요.</div>
     ${mig}
 
-    <h2>코인 잔액 대조</h2>
+    <h2>코인 잔액 맞춰 보기</h2>
     <div class="muted" style="margin-bottom:6px">
       운영 → <b>이상 징후</b>에 같은 표가 다른 항목과 함께 있습니다.</div>
     <div class="notice">
-      앱이 올린 잔액과 <b>events로 계산한 잔액</b>을 맞대어 봅니다. 차이가 크게 양수면
-      이벤트 없이 코인이 생긴 것입니다. <b>막지는 않습니다</b> — 오프라인에서 쓰고 늦게
-      올라오거나 기기 이전 직후에도 차이가 날 수 있어, 판단은 사람이 합니다.
-      events는 30일만 보관하므로 <b>가입이 오래된 계정일수록 차이가 크게 나옵니다.</b>
+      앱이 알려 온 잔액과, <b>앱이 보낸 코인 기록으로 계산한 잔액</b>을 나란히 봅니다. 차이가 크게 플러스면
+      기록 없이 코인이 생긴 것입니다. <b>막지는 않고 보여 주기만 합니다.</b> 인터넷 없이 쓰고 늦게
+      올라오거나 기기를 옮긴 직후에도 차이가 날 수 있어서 판단은 사람이 합니다.
+      코인 기록은 30일만 남기므로 <b>가입한 지 오래된 계정일수록 차이가 크게 나옵니다.</b>
     </div>
     ${audit}
 
     <h2>랭킹 보상 설정</h2>
-    <div class="muted">랭킹 메뉴로 옮겼습니다. 오늘 점수 · 오늘의 퍼즐 기록 · 숫자 탭 아래에 각각 있습니다.</div>
+    <div class="muted">랭킹 메뉴로 옮겼습니다. 오늘 점수, 오늘의 퍼즐 기록, 숫자 퍼즐 탭 아래에 각각 있습니다.</div>
 
-    <h2>최근 랭킹 보상</h2>
+    <h2>최근에 나간 랭킹 보상</h2>
     <div class="toolbar">
       <select id="winnerDays">
         ${[7, 14, 30, 90].map((d) =>
@@ -2455,13 +2568,13 @@ function serverTab(err) {
     </div>
     ${GRANTS ? grantsTable() : winners}
 
-    <h2>기기 이전 코드 (최근 50건)</h2>
+    <h2>기기 옮기기 코드 · 최근 50건</h2>
     ${transfers}
 
     <h2>정리</h2>
     <div class="toolbar">
-      <span class="muted">프로필 없이 24시간 넘게 남아 있는 익명 계정을 지웁니다 — MAU에 잡힙니다</span>
-      <button class="danger sm" id="cleanupOrphans">고아 계정 정리</button>
+      <span class="muted">회원 정보가 만들어지지 않은 채 24시간 넘게 남은 빈 계정을 지웁니다. 남겨 두면 한 달 이용자 수가 부풀려집니다</span>
+      <button class="danger sm" id="cleanupOrphans">빈 계정 정리</button>
     </div>`;
 }
 
@@ -2491,9 +2604,9 @@ function markSeen(key, count) {
 
 const ALERT_ROWS = [
   ["coin_gap_players", "잔액이 안 맞는 계정", "anomaly"],
-  ["open_reports", "처리 안 된 신고", "versus"],
-  ["unclaimed_rewards", "안 받아 간 보상", "rewards"],
-  ["stale_rooms", "방치된 대전 방", "versus"],
+  ["open_reports", "처리 안 한 신고", "versus"],
+  ["unclaimed_rewards", "아직 안 받아 간 보상", "rewards"],
+  ["stale_rooms", "버려진 대전 방", "versus"],
 ];
 
 /** 종 메뉴가 열려 있는지. 다시 그려도(확인을 눌러도) 열린 채로 둔다. */
@@ -2527,12 +2640,12 @@ function alertBell() {
         <button class="go" data-tab="${tabId}">${label} <b>${fmt(n)}</b></button>
         <button class="seen" data-seen="${k}" data-seen-n="${n}">확인</button>
       </div>`).join("")
-    : `<div class="empty">지금은 조용합니다</div>`;
+    : `<div class="empty">지금은 확인할 것이 없습니다</div>`;
   // 종은 "무엇이 몇 건"까지만 말한다. 자세히 보려면 한 페이지에 모아 둔 곳으로 보낸다.
   const more = `<div class="line" style="border-top:1px solid var(--line);margin-top:4px">
       <button class="go" data-tab="anomaly">이상 징후 모두 보기</button></div>`;
   return `<div class="bell${BELL_OPEN ? " open" : ""}">
-    <button class="top" title="봐야 할 것">🔔${total
+    <button class="top" title="확인할 것">확인할 것${total
       ? `<span class="pill heart" style="margin-left:4px">${fmt(total)}</span>` : ""}</button>
     <div class="menu">${list}${more}</div>
   </div>`;
@@ -2600,8 +2713,8 @@ function maintenanceBanner() {
   return `<div class="notice" style="${on
       ? "border-color:var(--danger);color:var(--danger);font-weight:800"
       : ""}">
-    지금 상태: <b>${on ? "🛠 점검 중 (앱이 잠겨 있습니다)" : "정상 — 잠긴 것 없음"}</b>
-    ${sched ? `<br><span class="muted">예약: ${esc(sched)} (한국시간)</span>` : ""}
+    지금 상태: <b>${on ? "점검 중. 앱의 랭킹과 같이하기가 잠겨 있습니다" : "정상. 잠긴 것 없음"}</b>
+    ${sched ? `<br><span class="muted">예약: ${esc(sched)} · 한국시간</span>` : ""}
   </div>`;
 }
 
@@ -2610,12 +2723,12 @@ async function saveMaintenance() {
   const message = $("#maintMsg").value.trim();
   const starts_at = $("#maintFrom").value || "";
   const ends_at = $("#maintTo").value || "";
-  if (starts_at && ends_at && starts_at >= ends_at) { alert("종료가 시작보다 빠릅니다"); return; }
+  if (starts_at && ends_at && starts_at >= ends_at) { alert("점검 예약의 끝이 시작보다 빠릅니다"); return; }
   // 켤 때만 묻고 끌 때는 안 물었다 — 푼 줄 알았는데 안 풀렸는지, 실수로 풀었는지
   // 알 길이 없었다(사용자 지적). 양쪽 다 묻고, 지금 상태는 위 배너로 늘 보인다.
   const was = CONFIG?.maintenance?.on === true;
-  if (on && !was && !confirm("점검 모드를 켭니다.\n\n모든 앱에서 랭킹·같이하기가 잠기고 안내가 뜹니다.\n앱은 1분 안에 반영합니다.")) return;
-  if (!on && was && !confirm("점검 모드를 풉니다.\n\n랭킹·같이하기가 다시 열립니다.")) return;
+  if (on && !was && !confirm("점검 모드를 켭니다.\n\n모든 앱에서 랭킹과 같이하기가 잠기고 안내 문구가 뜹니다.\n앱은 1분 안에 따라옵니다.")) return;
+  if (!on && was && !confirm("점검 모드를 풉니다.\n\n랭킹과 같이하기가 다시 열립니다.")) return;
   await act(() => rpc("admin_set_config", {
     p_key: "maintenance", p_value: { on, message, starts_at, ends_at },
   }), refresh);
@@ -2624,11 +2737,11 @@ async function saveMaintenance() {
 async function saveApiUrl() {
   const v = $("#apiUrl").value.trim();
   if (v && !/^https:\/\/[a-z0-9.-]+$/i.test(v)) {
-    alert("https://호스트 형태로만 넣어 주세요 (경로·슬래시 없이)");
+    alert("https://api.내도메인.com 처럼 주소 이름까지만 넣어 주세요. 뒤에 / 나 경로를 붙이면 안 됩니다");
     return;
   }
   if (v && !confirm(
-    `앱이 다음 실행부터 ${v} 로 접속합니다.\n\n` +
+    `앱이 다음에 켤 때부터 ${v} 로 접속합니다.\n\n` +
     `이 주소가 지금 살아 있는지 확인하셨나요?\n` +
     `옛 주소도 당분간 함께 살려 두어야 합니다.`)) return;
   await act(() => rpc("admin_set_config", { p_key: "api_url", p_value: v }), refresh);
@@ -2647,9 +2760,9 @@ async function saveVersions() {
 
   const on = Math.max(min.android, min.ios) > 0;
   if (on && !confirm(
-    `최소 버전을 Android ${min.android} / iOS ${min.ios}로 올립니다.\n\n` +
-    `이 버전보다 낮은 앱은 즉시 사용할 수 없게 됩니다.\n` +
-    `새 버전이 스토어에 이미 올라가 있는지 확인하셨나요?`)) return;
+    `꼭 있어야 하는 최소 빌드를 AOS ${min.android}, iOS ${min.ios}로 정합니다.\n\n` +
+    `이 번호보다 낮은 앱은 바로 쓸 수 없게 됩니다.\n` +
+    `새 버전이 스토어에서 내려받을 수 있는 상태인지 확인하셨나요?`)) return;
 
   await act(async () => {
     await rpc("admin_set_config", { p_key: "min_version", p_value: min });
@@ -2689,8 +2802,8 @@ async function toggleVersus() {
 async function toggleVersusEvents() {
   const next = !EV_ON;
   if (!confirm(next
-    ? "「장난」을 켭니다.\n\n다음 판부터 판마다 5개가 다시 뽑힙니다.\n판 시작 여유도 6초 → 8초가 됩니다(읽을 시간).\n\n방장이 방마다 따로 끌 수도 있습니다 — 그 방은 그대로 꺼진 채입니다."
-    : "「장난」을 끕니다.\n\n다음 판부터 선물·안개 같은 것이 하나도 안 나옵니다.\n판 시작 여유는 8초 → 6초로 줄어듭니다.\n개별 설정과 기간은 그대로 남아, 다시 켜면 지금 상태로 돌아옵니다.")) return false;
+    ? "「장난」을 켭니다.\n\n다음 판부터 판마다 5개가 다시 뽑힙니다.\n판 시작 전 기다리는 시간도 6초에서 8초로 늘어 장난을 읽을 틈이 생깁니다.\n\n방장이 방마다 따로 끌 수도 있고, 그렇게 끈 방은 그대로 꺼진 채입니다."
+    : "「장난」을 끕니다.\n\n다음 판부터 선물·안개 같은 것이 하나도 안 나옵니다.\n판 시작 전 기다리는 시간은 8초에서 6초로 줄어듭니다.\n개별 설정과 기간은 그대로 남아, 다시 켜면 지금 상태로 돌아옵니다.")) return false;
   let ok = false;
   await act(async () => {
     await rpc("admin_set_config", { p_key: "versus_events_on", p_value: next });
@@ -2721,13 +2834,13 @@ function versusSetupTab() {
       <span class="muted" style="font-size:12.5px">${note}</span>
     </div>`;
   return `
-    <h2>기능 스위치</h2>
+    <h2>켜고 끄기</h2>
     ${sw("같이하기", VS_ON, "toggleVersus",
-         "앱은 켤 때 이 값을 읽습니다. 이미 실행 중인 앱은 다시 켜야 반영됩니다.")}
+         "끄면 앱에서 같이하기 버튼이 사라집니다. 앱은 켤 때 이 값을 읽어서, 이미 켜져 있는 앱은 다시 켜야 바뀝니다.")}
     ${sw("장난", EV_ON, "toggleVsEvents",
-         "다음 판부터 적용됩니다. 진행 중인 판은 그대로 끝납니다. 방장이 방마다 따로 끌 수도 있습니다(068).")}
-    ${EV_ON ? "" : `<div class="notice">전체가 꺼져 있어 아래 개별 설정은 지금 효과가 없습니다.
-        다시 켜면 이 상태 그대로 돌아옵니다.</div>`}
+         "대전 중에 끼어드는 선물·안개 같은 깜짝 효과입니다. 다음 판부터 바뀌고, 진행 중인 판은 그대로 끝납니다. 방장이 방마다 따로 끌 수도 있습니다.")}
+    ${EV_ON ? "" : `<div class="notice">장난 전체가 꺼져 있어서 아래 하나하나의 설정은 지금 아무 효과가 없습니다.
+        다시 켜면 아래 상태 그대로 돌아옵니다.</div>`}
     ${versusEventsTable()}`;
 }
 
@@ -2759,17 +2872,17 @@ function anomalyTab() {
       ${n > 0 && tab ? `<button class="ghost sm" data-tab="${tab}">보러 가기</button>` : ""}</div>`;
 
   const anomalies = ANOMALIES.length ? `<div class="table-scroll"><table style="min-width:420px">
-      <thead><tr><th>닉네임</th><th class="num">오늘 획득</th><th>가입</th></tr></thead>
+      <thead><tr><th>닉네임</th><th class="num">오늘 번 코인</th><th>가입한 날</th></tr></thead>
       <tbody>${ANOMALIES.map((a) => `<tr>
         <td>${esc(a.username || "—")}</td>
         <td class="num" style="color:var(--danger);font-weight:800">${fmt(a.earned_today)}</td>
         <td class="muted">${fmtDate(a.created_at)}</td>
       </tr>`).join("")}</tbody></table></div>`
-    : `<div class="empty">문턱(${fmt(th)})을 넘은 계정이 없습니다</div>`;
+    : `<div class="empty">오늘 ${fmt(th)}코인 넘게 번 계정이 없습니다</div>`;
 
   const audit = COIN_AUDIT.length ? `<div class="table-scroll"><table style="min-width:640px">
-      <thead><tr><th>닉네임</th><th class="num">실제</th><th class="num">기대</th>
-        <th class="num">차이</th><th class="num">획득</th><th class="num">소모</th></tr></thead>
+      <thead><tr><th>닉네임</th><th class="num">앱이 알린 잔액</th><th class="num">기록으로 계산한 잔액</th>
+        <th class="num">차이</th><th class="num">번 코인</th><th class="num">쓴 코인</th></tr></thead>
       <tbody>${COIN_AUDIT.map((r) => `<tr>
         <td>${esc(r.username || "—")}</td>
         <td class="num">${fmt(r.actual)}</td>
@@ -2782,17 +2895,17 @@ function anomalyTab() {
 
   return `
     <div class="cards">
-      ${card("코인 급증", ANOMALIES.length, null)}
-      ${card("잔액 불일치", COIN_AUDIT.length, null)}
-      ${card("미처리 신고", openReports, "versus")}
-      ${card("방치된 방", stale, "versus")}
+      ${card("코인을 갑자기 많이 번 계정", ANOMALIES.length, null)}
+      ${card("잔액이 안 맞는 계정", COIN_AUDIT.length, null)}
+      ${card("처리 안 한 신고", openReports, "versus")}
+      ${card("버려진 대전 방", stale, "versus")}
     </div>
-    <h2>오늘 코인 ${fmt(th)} 이상 획득</h2>
-    <div class="muted" style="margin-bottom:6px">문턱은 운영 → 업데이트에서 바꿉니다.</div>
+    <h2>오늘 코인을 ${fmt(th)}개 이상 번 계정</h2>
+    <div class="muted" style="margin-bottom:6px">기준 숫자는 운영 → 업데이트·게임 설정 맨 아래 「코인 급증 기준」에서 바꿉니다.</div>
     ${anomalies}
-    <h2>코인 잔액 대조 (054 · 막지 않고 보고만)</h2>
+    <h2>잔액이 안 맞는 계정 · 막지 않고 보여 주기만</h2>
     <div class="muted" style="margin-bottom:6px">
-      실제 잔액이 기대값보다 2,000 넘게 많은 계정입니다. 기기 시계를 돌렸거나 결제 취소가 섞였을 수 있습니다.</div>
+      앱이 알린 잔액이 기록으로 계산한 잔액보다 2,000 넘게 많은 계정입니다. 휴대폰 시계를 돌렸거나 결제를 취소한 경우가 섞였을 수 있습니다.</div>
     ${audit}`;
 }
 
@@ -2852,6 +2965,10 @@ function appIcon(name, px = 22, alt = "") {
 function versusEventsTable() {
   if (!VS_EVENTS.length) return "";
   const KIND = { buff: "이로움", debuff: "해로움", neutral: "중립" };
+  // 「설정」 칸의 항목 이름(061 versus_events.config). 모르는 항목은 그대로 보인다.
+  const CONF = { bones: ["뼈다귀", "개"], seconds: ["시간", "초"], cells: ["칸", "개"], ratio: ["비율", "%"] };
+  const confText = (c) => Object.entries(c || {}).map(([k, v]) => k === "duration_ms" ? `지속 ${msText(v)}`
+    : CONF[k] ? `${CONF[k][0]} ${v}${CONF[k][1]}` : `${k} ${typeof v === "object" ? JSON.stringify(v) : v}`).join(" · ");
   const CLS = { buff: "today", debuff: "heart", neutral: "" };
   const when = (v) => (v ? new Date(v).toLocaleString("ko-KR", { dateStyle: "short", timeStyle: "short" }) : "—");
   const now = Date.now();
@@ -2868,24 +2985,24 @@ function versusEventsTable() {
   const short = Object.entries(need).filter(([k, v]) => (alive[k] || 0) < v);
   const warn = short.length
     ? `<div class="notice" style="border-color:var(--danger);color:var(--danger)">
-         ${short.map(([k, v]) => `${KIND[k]}이 ${v}개 이상 켜져 있어야 합니다 (지금 ${alive[k] || 0}개)`).join(" · ")}
+         ${short.map(([k, v]) => `${KIND[k]}이 ${v}개 이상 켜져 있어야 합니다. 지금 ${alive[k] || 0}개`).join(" · ")}
          <br>부족하면 그 판은 장난이 다섯 개가 안 됩니다.</div>`
     : "";
 
   return `<h2>장난</h2>
   <div class="muted" style="font-size:12.5px;margin-bottom:8px">
-    판마다 <b>이로움 2 · 해로움 2 · 중립 1</b>로 뽑습니다. 끄면 다음 판부터 빠집니다.
+    판마다 <b>이로움 2개, 해로움 2개, 중립 1개</b>를 뽑습니다. 하나를 끄면 다음 판부터 뽑지 않습니다.
   </div>${warn}
   <div class="table-scroll"><table>
-    <thead><tr><th class="c fit">갈래</th><th>이름</th><th>설정</th><th>기간</th><th class="c fit">상태</th><th>관리</th></tr></thead>
+    <thead><tr><th class="c fit">갈래</th><th>이름</th><th>세기</th><th>켜 둘 기간</th><th class="c fit">상태</th><th>관리</th></tr></thead>
     <tbody>${VS_EVENTS.map((e) => {
       const started = !e.starts_at || new Date(e.starts_at).getTime() <= now;
       const ended = e.ends_at && new Date(e.ends_at).getTime() <= now;
       const on = e.enabled && started && !ended;
-      const state = !e.enabled ? "꺼짐" : ended ? "기간 끝" : !started ? "대기" : "켜짐";
+      const state = !e.enabled ? "꺼짐" : ended ? "기간 끝" : !started ? "기간 전" : "켜짐";
       // 목록에 없는 코드는 **DB에만 있고 앱은 모르는 사건**이다. 물음표로 눈에 띄게 둔다 —
       // 조용히 코드만 보여 주면 왜 앱에서 아무 일도 안 일어나는지 알 수 없다.
-      const info = EV_INFO[e.code] || ["ev_unknown", e.code, "앱에 이 코드가 없습니다"];
+      const info = EV_INFO[e.code] || ["ev_unknown", e.code, "앱이 모르는 장난입니다. 켜도 앱에서 아무 일이 없습니다"];
       return `<tr>
         <td class="c fit"><span class="pill ${CLS[e.category] || ""}">${KIND[e.category] || e.category}</span></td>
         <td>
@@ -2898,12 +3015,12 @@ function versusEventsTable() {
             </div>
           </div>
         </td>
-        <td class="muted">${esc(JSON.stringify(e.config))}</td>
+        <td class="muted">${esc(confText(e.config))}</td>
         <td class="muted">${when(e.starts_at)} ~ ${when(e.ends_at)}</td>
         <td class="c fit">${on ? '<b style="color:var(--accent)">켜짐</b>' : `<span class="muted">${state}</span>`}</td>
         <td><div class="actions">
           <button class="ghost sm" data-evtoggle="${e.id}">${e.enabled ? "끄기" : "켜기"}</button>
-          <button class="ghost sm" data-evwhen="${e.id}">기간</button>
+          <button class="ghost sm" data-evwhen="${e.id}">기간 정하기</button>
         </div></td>
       </tr>`;
     }).join("")}</tbody></table></div>`;
@@ -2911,53 +3028,52 @@ function versusEventsTable() {
 
 function versusTab(err) {
   if (err) {
-    return `<div class="notice">대전 집계 조회 실패: ${esc(err.message)}<br>
-            sql/migrations/014_versus.sql을 실행했는지 확인하세요.</div>`;
+    return loadFail("대전 기록을 불러오지 못했습니다.", err, "sql/migrations/014_versus.sql");
   }
   const totalMatches = VS_DAILY.reduce((a, r) => a + Number(r.matches || 0), 0);
   const matchPanel = MATCH ? `
-    <h2>공개 매칭 현황</h2>
+    <h2>모르는 사람과 붙기 현황</h2>
     <div class="cards">
-      <div class="card"><div class="label">대기 알림</div><div class="value">${fmt(MATCH.waiting_people)}</div></div>
-      <div class="card"><div class="label">공개 방</div><div class="value">${fmt(MATCH.public_rooms)}</div></div>
-      <div class="card"><div class="label">방치된 방</div>
+      <div class="card"><div class="label" title="누가 대전을 찾으면 알려 달라고 신청해 둔 사람">상대 오면 알림 신청한 사람</div><div class="value">${fmt(MATCH.waiting_people)}</div></div>
+      <div class="card"><div class="label">누구나 들어올 수 있는 방</div><div class="value">${fmt(MATCH.public_rooms)}</div></div>
+      <div class="card"><div class="label">버려진 방</div>
         <div class="value" style="${Number(MATCH.stale_rooms) > 0 ? "color:var(--danger)" : ""}">${fmt(MATCH.stale_rooms)}</div></div>
       <div class="card"><div class="label">빈 방</div>
         <div class="value" style="${Number(MATCH.empty_rooms) > 0 ? "color:var(--danger)" : ""}">${fmt(MATCH.empty_rooms)}</div></div>
-      <div class="card"><div class="label">미처리 신고</div>
+      <div class="card"><div class="label">처리 안 한 신고</div>
         <div class="value" style="${Number(MATCH.open_reports) > 0 ? "color:var(--danger)" : ""}">${fmt(MATCH.open_reports)}</div></div>
     </div>
     <div class="toolbar">
-      <button class="danger sm" id="purgeRooms">가비지 방 정리</button>
-      <span class="muted">빈 방은 삭제하고, 30분 넘게 소식 없는 방은 닫습니다</span>
+      <button class="danger sm" id="purgeRooms">버려진 방 정리</button>
+      <span class="muted">사람이 없는 방은 지우고, 30분 넘게 아무 움직임이 없는 방은 닫습니다</span>
     </div>` : "";
 
   const reportsTable = REPORTS.length ? `
-    <h2>신고 (${REPORTS.filter((r) => !r.handled_at).length}건 미처리)</h2>
+    <h2>신고 · 처리 안 한 것 ${REPORTS.filter((r) => !r.handled_at).length}건</h2>
     <div class="table-scroll"><table style="min-width:640px">
-      <thead><tr><th>시각</th><th>대상</th><th>신고자</th><th>방</th><th class="c fit">상태</th><th>관리</th></tr></thead>
+      <thead><tr><th>날짜</th><th>신고당한 사람</th><th>신고한 사람</th><th>방</th><th class="c fit">상태</th><th>관리</th></tr></thead>
       <tbody>${REPORTS.map((r) => `<tr>
         <td class="muted">${fmtDate(r.created_at)}</td>
         <td><b>${esc(r.target_name || "(삭제됨)")}</b></td>
         <td class="muted">${esc(r.reporter_name || "-")}</td>
         <td class="muted">${esc(r.room_code || "-")}</td>
-        <td class="c fit">${r.handled_at ? '<span class="muted">처리됨</span>' : '<span class="pill heart">대기</span>'}</td>
+        <td class="c fit">${r.handled_at ? '<span class="muted">처리함</span>' : '<span class="pill heart">처리 전</span>'}</td>
         <td><div class="actions">
           ${r.handled_at ? "" : `
-            <button class="ghost sm" data-report-ok="${r.id}">확인만</button>
-            <button class="danger sm" data-report-rename="${r.id}">닉네임 강제 변경</button>`}
+            <button class="ghost sm" data-report-ok="${r.id}" title="아무것도 바꾸지 않고 처리한 것으로만 표시합니다">문제없음으로 처리</button>
+            <button class="danger sm" data-report-rename="${r.id}" title="신고당한 사람의 닉네임을 임의 이름으로 바꿉니다">닉네임 강제 변경</button>`}
         </div></td>
       </tr>`).join("")}</tbody>
     </table></div>` : "";
 
   const roomsTable = VS_ROOMS.length ? `
-    <h2>지금 열려 있는 방 (${VS_ROOMS.length})</h2>
+    <h2>지금 열려 있는 방 · ${VS_ROOMS.length}개</h2>
     <div class="table-scroll"><table style="min-width:560px">
-      <thead><tr><th>방</th><th class="c fit">상태</th><th class="num">판</th><th class="num">인원</th>
-                 <th class="c fit">장난</th><th>참가자</th><th>만든 때</th><th>관리</th></tr></thead>
+      <thead><tr><th>방 코드</th><th class="c fit">상태</th><th class="num">지금 판 / 최대 판</th><th class="num">인원</th>
+                 <th class="c fit">장난</th><th>참가자</th><th>만든 날</th><th>관리</th></tr></thead>
       <tbody>${VS_ROOMS.map((r) => `<tr>
         <td><b>${esc(r.code)}</b></td>
-        <td class="c fit">${r.status === "playing" ? "대전 중" : "대기"}</td>
+        <td class="c fit">${r.status === "playing" ? "대전 중" : "사람 기다리는 중"}</td>
         <td class="num">${r.round_no}/${r.win_target * 2 - 1}</td>
         <td class="num">${r.players}</td>
         <!-- 070. **꺼진 방만 눈에 띄게** 적는다 — 켜진 것이 기본이라 전부 칠하면
@@ -2966,28 +3082,28 @@ function versusTab(err) {
               ? `<span style="color:var(--danger)">꺼짐</span>` : `<span class="muted">켜짐</span>`}</td>
         <td class="muted">${esc(r.usernames || "")}</td>
         <td class="muted">${fmtDate(r.created_at)}</td>
-        <td><button class="danger sm" data-close-room="${esc(r.code)}">닫기</button></td>
+        <td><button class="danger sm" data-close-room="${esc(r.code)}">방 닫기</button></td>
       </tr>`).join("")}</tbody>
     </table></div>` : `<h2>지금 열려 있는 방</h2><div class="empty">없습니다</div>`;
   return `
     ${VS_ON ? "" : `<div class="notice" style="border-color:var(--danger);color:var(--danger)">
-        같이하기가 <b>꺼져 있습니다</b> — 설정에서 켤 수 있습니다.</div>`}
+        같이하기가 <b>꺼져 있습니다.</b> 같이하기 → 설정에서 켤 수 있습니다.</div>`}
     ${matchPanel}
     ${roomsTable}
     ${reportsTable}
     <div class="cards">
-      <div class="card"><div class="label">누적 판수 (30일)</div><div class="value">${fmt(totalMatches)}</div></div>
-      <div class="card"><div class="label">참여 계정</div><div class="value">${fmt(VS_PLAYERS.length)}</div></div>
+      <div class="card"><div class="label">30일 동안 한 판 수</div><div class="value">${fmt(totalMatches)}</div></div>
+      <div class="card"><div class="label">대전에 참여한 회원</div><div class="value">${fmt(VS_PLAYERS.length)}</div></div>
     </div>
-    <h2>일자별 판수 · 참여자 · 무승부</h2>
+    <h2>날마다 판 수 · 참여한 사람 · 비긴 판</h2>
     ${versusDailyChart()}
-    <h2>모드별 (30일)</h2>
+    <h2>대전 방식마다 · 30일</h2>
     ${versusModesSection()}
-    <h2>판 크기별</h2>
+    <h2>판 크기마다</h2>
     ${VS_BOARDS.length
       ? barChart(sumBy(VS_BOARDS, (r) => `${r.board_n}×${r.board_n}`, (r) => Number(r.matches)))
-      : `<div class="empty">데이터 없음</div>`}
-    <h2>계정별 전적</h2>
+      : `<div class="empty">아직 없습니다</div>`}
+    <h2>회원마다 전적</h2>
     ${versusPlayersTable()}`;
 }
 
@@ -3002,7 +3118,7 @@ function sumBy(rows, keyOf, valOf) {
 function modeLabel(mode) {
   return mode === "trio" ? "1:1:1"
        : mode === "team" ? "2:2"
-       : mode === "coop" ? "🤝2:2 협동"
+       : mode === "coop" ? "2:2 협동"
        : mode === "duo"  ? "1:1"
        : mode || "—";
 }
@@ -3010,15 +3126,15 @@ function modeLabel(mode) {
 /** 051부터 일자별이 (날짜 × 모드)로 온다. 선 그래프는 날짜 단위라 다시 합친다.
  *  무승부 선을 같이 그리는 이유: 무승부가 갑자기 늘면 제한 시간이 짧다는 신호다. */
 function versusDailyChart() {
-  if (!VS_DAILY.length) return `<div class="empty">아직 진행된 판이 없습니다</div>`;
+  if (!VS_DAILY.length) return `<div class="empty">아직 한 판도 없습니다</div>`;
   const days = [...new Set(VS_DAILY.map((r) => r.day))].sort();
   const pick = (field) => days.map((d) =>
     VS_DAILY.filter((r) => r.day === d)
             .reduce((sum, r) => sum + Number(r[field] || 0), 0));
   return lineChart(days, [
-    { name: "판수", color: "#17b3a8", values: pick("matches") },
-    { name: "참여자", color: "#7aa2f7", values: pick("players") },
-    { name: "무승부", color: "#e0af68", values: pick("draws") },
+    { name: "판 수", color: "#17b3a8", values: pick("matches") },
+    { name: "참여한 사람", color: "#7aa2f7", values: pick("players") },
+    { name: "비긴 판", color: "#e0af68", values: pick("draws") },
   ]);
 }
 
@@ -3027,15 +3143,15 @@ function versusDailyChart() {
  *  사람을 붙잡아 두는 시간만 쓰고 있는 것이다. */
 function versusModesSection() {
   if (!VS_MODES.length) {
-    return `<div class="empty">데이터 없음 (051 적용 후 채워집니다)</div>`;
+    return `<div class="empty">아직 모은 숫자가 없습니다. 개발 담당에게 전할 단서: 051</div>`;
   }
   const chart = barChart(VS_MODES.map((r) => ({
     bucket: modeLabel(r.mode), players: Number(r.matches),
   })));
   const table = `<div class="table-scroll"><table style="min-width:520px">
     <thead><tr>
-      <th>모드</th><th class="num">판수</th><th class="num">참여자</th>
-      <th class="num">무승부</th><th class="num">이탈</th><th class="num">평균 시간</th>
+      <th>대전 방식</th><th class="num">판 수</th><th class="num">참여한 사람</th>
+      <th class="num">비긴 판</th><th class="num">중간에 나간 판</th><th class="num">평균 시간</th>
     </tr></thead>
     <tbody>${VS_MODES.map((r) => `<tr>
       <td>${esc(modeLabel(r.mode))}</td>
@@ -3061,12 +3177,12 @@ function versusPlayersTable() {
   if (!VS_PLAYERS.length) return `<div class="empty">기록이 아직 없습니다</div>`;
   return `<div class="table-scroll"><table style="min-width:820px">
     <thead><tr>
-      <th>닉네임</th><th class="num">판수</th>
-      <th class="num">승</th><th class="num">패</th><th class="num">무</th>
-      <th class="num">승률</th>
+      <th>닉네임</th><th class="num">판 수</th>
+      <th class="num">이김</th><th class="num">짐</th><th class="num">비김</th>
+      <th class="num">이긴 비율</th>
       <th class="num">2등</th><th class="num">3등</th>
-      <th class="num">평균 등수</th><th class="num">미완주</th>
-      <th class="num">최고 기록</th><th>마지막</th>
+      <th class="num">평균 등수</th><th class="num">끝까지 못 푼 판</th>
+      <th class="num">가장 빠른 기록</th><th>마지막으로 한 날</th>
     </tr></thead>
     <tbody>${VS_PLAYERS.map((r) => `<tr>
       <td>${esc(r.username || "—")}</td>
@@ -3112,16 +3228,16 @@ function playersTable() {
       <th class="num fit">#</th>
       ${th("username", "닉네임", "pin")}
       ${th("level", "레벨", "num")}
-      ${th("total", "누적", "num")}
-      ${th("daily", "오늘", "num")}
+      ${th("total", "누적 점수", "num")}
+      ${th("daily", "오늘 점수", "num")}
       ${th("coins", "코인", "num")}
-      ${th("vs", "대전 (승-패-무)", "num")}
-      ${th("coop", "협동", "num")}
-      <th class="num">결제</th>
-      <th class="fit" title="마지막으로 켠 앱. 1.5.0부터 버전이 남습니다">앱</th>
+      ${th("vs", "대전 승-패-무", "num")}
+      ${th("coop", "협동 이김 / 판", "num")}
+      <th class="num">결제 합계</th>
+      <th class="fit">앱 버전${infoTip("마지막으로 켠 앱의 기기와 버전입니다. 버전은 1.5.0부터 남고, 그 전 앱은 「1.4.4 이하」로 보입니다.")}</th>
       ${th("played", "마지막 플레이")}
-      ${th("created", "가입일")}
-      <th class="c fit" title="광고성 정보 알림에 동의했고(2년 안) 기기 토큰이 서버에 있는 회원">푸시</th>
+      ${th("created", "가입한 때")}
+      <th class="c fit">푸시${infoTip("「받음」은 광고성 정보 알림을 켠 지 2년이 안 됐고, 알림 받을 휴대폰이 서버에 등록된 회원입니다. 이런 회원에게만 푸시가 닿습니다.")}</th>
       <th>관리</th>
     </tr></thead><tbody>${list.map((p, i) => {
       const played = p.daily_date === today && (p.daily_score || 0) > 0;
@@ -3131,7 +3247,7 @@ function playersTable() {
         <td class="pin">${esc(p.username || "(이름 없음)")}
           ${p.supporter ? '<span class="pill heart">응원</span>' : ""}
           ${played ? '<span class="pill today">오늘</span>' : ""}
-          ${p.reset_requested_at ? '<span class="pill heart">초기화 대기</span>' : ""}
+          ${p.reset_requested_at ? '<span class="pill heart" title="다음에 앱을 켜면 게임이 처음부터 시작됩니다">게임 초기화 요청됨</span>' : ""}
           ${TEST_SET.has(String(p.id)) ? '<span class="pill dim">시험 계정</span>' : ""}</td>
         <td class="num">${p.max_level == null ? '<span class="muted">—</span>' : fmt(p.max_level)}</td>
         <td class="num">${fmt(p.total_score)}</td>
@@ -3145,29 +3261,29 @@ function playersTable() {
           : `${fmt(p.coop_wins)} / ${fmt(p.coop_played)}판`}</td>
         <td class="num">${(() => {
           const t = PAY_TOTALS[p.id];
-          return t ? `${money(t.revenue, t.currency)} <span class="muted">(${t.orders})</span>`
+          return t ? `${money(t.revenue, t.currency)} <span class="muted">· ${t.orders}건</span>`
                    : '<span class="muted">—</span>';
         })()}</td>
         <td class="fit">${appVersionCell(p.id)}</td>
         <td class="muted">${fmtDate(p.daily_date)}
-          ${p.coins_at ? `<div class="muted" style="font-size:11px">접속 ${
+          ${p.coins_at ? `<div class="muted" style="font-size:11px">마지막 접속 ${
             // daily_date와 같은 날이면 시:분만, 다른 날이면 날짜까지 적는다.
             fmtDate(p.coins_at) === fmtDate(p.daily_date) ? fmtTime(p.coins_at)
                                                           : fmtDateTime(p.coins_at)}</div>` : ""}</td>
         <td class="muted">${fmtDateTime(p.created_at)}</td>
-        <td class="c fit">${REACH === null ? '<span class="muted" title="받을 수 있는 회원 목록을 못 읽었습니다">?</span>'
-          : REACH[p.id] ? `<span class="pill today" title="동의 ${esc(fmtDate(REACH[p.id].consented_at))} · 기기 ${REACH[p.id].devices}대">받음</span>`
-                          : '<span class="muted" title="광고성 알림을 안 켰거나, 동의한 지 2년이 지났거나, 기기 토큰이 없습니다">—</span>'}</td>
+        <td class="c fit">${REACH === null ? '<span class="muted" title="푸시를 받을 수 있는 회원 목록을 못 읽었습니다">?</span>'
+          : REACH[p.id] ? `<span class="pill today" title="알림 켠 날 ${esc(fmtDate(REACH[p.id].consented_at))} · 휴대폰 ${REACH[p.id].devices}대">받음</span>`
+                          : '<span class="muted" title="광고성 알림을 켜지 않았거나, 켠 지 2년이 지났거나, 알림 받을 휴대폰이 등록되어 있지 않습니다">—</span>'}</td>
         <td><div class="actions">
-          <button class="ghost sm" data-act="name" data-id="${p.id}">닉네임</button>
-          <button class="ghost sm" data-act="score" data-id="${p.id}">점수</button>
-          <button class="ghost sm" data-act="heart" data-id="${p.id}">응원</button>
-          <button class="ghost sm" data-act="gift" data-id="${p.id}">보상</button>
-          <button class="ghost sm" data-act="zero" data-id="${p.id}">점수0</button>
-          <button class="ghost sm" data-act="wipe" data-id="${p.id}">진행초기화</button>
-          <button class="ghost sm" data-act="log" data-id="${p.id}">${OPEN_MEMBER === p.id ? "접기" : "이력"}</button>
-          <button class="ghost sm" data-act="testacct" data-id="${p.id}" title="시험 계정은 랭킹과 이벤트 순위에서 빠집니다">${TEST_SET.has(String(p.id)) ? "시험 해제" : "시험 계정"}</button>
-          <button class="danger sm" data-act="del" data-id="${p.id}">삭제</button>
+          <button class="ghost sm" data-act="name" data-id="${p.id}">닉네임 바꾸기</button>
+          <button class="ghost sm" data-act="score" data-id="${p.id}">점수 고치기</button>
+          <button class="ghost sm" data-act="heart" data-id="${p.id}" title="이름 옆 응원 배지를 켜고 끕니다">응원 배지</button>
+          <button class="ghost sm" data-act="gift" data-id="${p.id}">보상 주기</button>
+          <button class="ghost sm" data-act="zero" data-id="${p.id}" title="오늘 점수와 누적 점수를 0으로 만듭니다">점수 0으로</button>
+          <button class="ghost sm" data-act="wipe" data-id="${p.id}" title="레벨, 코인, 아이템을 처음 상태로 돌립니다. 그 사람이 다음에 앱을 켤 때 적용됩니다">게임 초기화</button>
+          <button class="ghost sm" data-act="log" data-id="${p.id}">${OPEN_MEMBER === p.id ? "기록 접기" : "기록 보기"}</button>
+          <button class="ghost sm" data-act="testacct" data-id="${p.id}" title="시험 계정은 랭킹과 이벤트 순위에서 빠집니다">${TEST_SET.has(String(p.id)) ? "시험 계정 풀기" : "시험 계정으로"}</button>
+          <button class="danger sm" data-act="del" data-id="${p.id}">계정 삭제</button>
         </div></td>
       </tr>` + (OPEN_MEMBER === p.id ? memberEventsRow() : "");
     }).join("")}</tbody></table></div>` + playersPaging();
@@ -3184,7 +3300,7 @@ function playersPaging() {
   return `
     <div class="toolbar">
       <button class="sm" id="playerPrev" ${PLAYER_PAGE === 0 ? "disabled" : ""}>이전</button>
-      <span class="muted">${PLAYER_PAGE + 1} / ${pages} 쪽 (${fmt(PLAYER_TOTAL)}명)</span>
+      <span class="muted">${PLAYER_PAGE + 1} / ${pages}쪽 · ${fmt(PLAYER_TOTAL)}명</span>
       <button class="sm" id="playerNext" ${PLAYER_PAGE + 1 >= pages ? "disabled" : ""}>다음</button>
     </div>`;
 }
@@ -3192,54 +3308,97 @@ function playersPaging() {
 /** 회원 한 명의 최근 행동. 문의가 들어왔을 때 확인할 최소한의 창구다. */
 function memberEventsRow() {
   const pays = MEMBER_PAYS.length
-    ? `<div class="muted" style="font-size:12px;margin:2px 0 6px">구매 내역</div>
+    ? `<div class="muted" style="font-size:12px;margin:2px 0 6px">결제한 것</div>
        <div class="table-scroll" style="margin-bottom:10px">
          <table style="min-width:380px"><tbody>${MEMBER_PAYS.map((p) => `<tr>
            <td class="muted">${new Date(p.created_at).toLocaleString("ko-KR")}</td>
-           <td>${esc(p.product_id)}</td>
+           <td>${productName(p.product_id)}</td>
            <td class="num">${p.coins ? fmt(p.coins) : "—"}</td>
            <td class="num">${money(p.amount, p.currency)}</td>
-           <td class="muted">${esc(p.store)}</td>
+           <td class="muted">${esc(PLATFORM_NAMES[p.store] || p.store)}</td>
          </tr>`).join("")}</tbody></table></div>`
     : "";
   const plays = `<div class="actions" style="margin:2px 0 8px">
-      <span class="muted" style="font-size:12px;align-self:center">모드별 기록</span>
+      <span class="muted" style="font-size:12px;align-self:center">이 회원의 판 기록 보기</span>
       <button class="ghost sm" data-memplay="daily" data-id="${esc(OPEN_MEMBER)}">오늘의 퍼즐 기록</button>
-      <button class="ghost sm" data-memplay="number" data-id="${esc(OPEN_MEMBER)}">숫자 판</button>
-      <button class="ghost sm" data-memplay="event" data-id="${esc(OPEN_MEMBER)}">이벤트 산책</button></div>`;
+      <button class="ghost sm" data-memplay="number" data-id="${esc(OPEN_MEMBER)}">숫자 퍼즐</button>
+      <button class="ghost sm" data-memplay="event" data-id="${esc(OPEN_MEMBER)}">이벤트 산책길</button></div>`;
   const inner = plays + pays + (MEMBER_EVENTS.length
     ? `<div class="table-scroll" style="max-height:260px;overflow-y:auto">
          <table style="min-width:380px"><tbody>${MEMBER_EVENTS.map((e) => `<tr>
            <td class="muted">${new Date(e.created_at).toLocaleString("ko-KR")}</td>
-           <td>${esc(e.name)}</td>
+           <td>${eventName(e.name)}</td>
            <td class="num">${e.value ?? ""}</td>
-           <td class="muted">${esc(e.platform || "")}</td>
+           <td class="muted">${esc(PLATFORM_NAMES[e.platform] || e.platform || "")}</td>
          </tr>`).join("")}</tbody></table></div>`
-    : `<div class="muted" style="font-size:12.5px">기록된 행동 로그가 없습니다</div>`);
+    : `<div class="muted" style="font-size:12.5px">앱이 보낸 사용 기록이 없습니다</div>`);
   return `<tr><td colspan="10" style="white-space:normal">${inner}</td></tr>`;
 }
 
+// 앱이 보내는 사용 기록 이름(SupabaseManager.logEvent). 모르는 이름은 그대로 보인다.
+// 코인 쓴 곳 이름은 서버 admin_coin_sinks(100)와 같은 말이다.
+const EVENT_NAMES = {
+  app_open: "앱 켬", tutorial_start: "튜토리얼 시작", tutorial_done: "튜토리얼 끝냄", level_clear: "레벨 판 깸",
+  purchase_remove_ads: "광고 제거 구매", coin_earned: "코인 얻음",
+};
+const EVENT_PARTS = {
+  hints: "힌트", autos: "자동배치", revive: "부활", rename: "닉네임 변경", walk_bone: "산책 쉼터 뼈다귀",
+  walk_continue: "산책 이어 걷기", hint: "힌트", auto: "자동배치", other: "기타", reset: "게임 초기화", import: "기기 옮김",
+};
+function eventName(name) {
+  const n = String(name ?? "");
+  const tail = (prefix) => EVENT_PARTS[n.slice(prefix.length)] ?? n.slice(prefix.length);
+  const text = EVENT_NAMES[n]
+    ?? (n.startsWith("coin_spent_") ? `코인 씀 · ${tail("coin_spent_")}`
+      : n.startsWith("ad_watched_") ? `광고 봄 · ${tail("ad_watched_")}`
+      : n.startsWith("coin_rebase_") ? `코인 다시 맞춤 · ${tail("coin_rebase_")}`
+      : null);
+  return text ? `${esc(text)} <span class="muted" style="font-size:11px">${esc(n)}</span>` : esc(n);
+}
+
 function eventsTable(err) {
-  if (err) return `<div class="notice">행동 로그 조회 실패: ${esc(err.message)}<br>supabase_admin_features.sql을 실행했는지 확인하세요.</div>`;
-  if (!EVENTS.length) return `<div class="empty">아직 쌓인 행동 로그가 없습니다. 앱에 계측을 넣으면 여기에 나타납니다.</div>`;
+  if (err) return loadFail("앱 사용 기록을 불러오지 못했습니다.", err, "supabase_admin_features.sql");
+  if (!EVENTS.length) return `<div class="empty">아직 쌓인 앱 사용 기록이 없습니다. 앱이 기록을 보내기 시작하면 여기에 나타납니다.</div>`;
   const byDay = {};
   for (const e of EVENTS) (byDay[e.day] ??= []).push(e);
   return Object.entries(byDay).map(([day, list]) => `
     <h2>${day}</h2>
     <div class="table-scroll"><table style="min-width:420px">
-      <thead><tr><th>행동</th><th class="num">횟수</th><th class="num">사람</th></tr></thead>
+      <thead><tr><th>한 일</th><th class="num">횟수</th><th class="num">사람 수</th></tr></thead>
       <tbody>${list.map((e) => `<tr>
-        <td>${esc(e.name)}</td><td class="num">${fmt(e.count)}</td><td class="num">${fmt(e.users)}</td>
+        <td>${eventName(e.name)}</td><td class="num">${fmt(e.count)}</td><td class="num">${fmt(e.users)}</td>
       </tr>`).join("")}</tbody>
     </table></div>`).join("");
 }
 
+// 관리 기록의 작업 이름(admin_actions.action). 서버 admin_log를 부르는 곳의 이름과 짝이다. 모르는 이름은 그대로 보인다.
+const AUDIT_NAMES = {
+  set_scores: "점수 고침", set_username: "닉네임 바꿈", set_supporter: "응원 배지", delete_profile: "계정 삭제",
+  reset_all_scores: "전체 점수 초기화", request_game_reset: "게임 초기화 요청", request_all_game_reset: "전체 게임 초기화 요청",
+  cancel_game_reset: "게임 초기화 요청 거둠", grant_reward: "보상 줌", grant_reward_all: "모든 회원에게 보상 줌",
+  revoke_batch: "보상 거둬들임", gift_push: "선물 도착 푸시", create_notice: "공지 올림", delete_notice: "공지 지움",
+  set_notice_popup: "공지 창 띄우기 바꿈", notice_push: "공지 푸시", set_config: "설정 바꿈", force_rename: "닉네임 강제 변경",
+  close_room: "대전 방 닫음", purge_rooms: "버려진 방 정리", cleanup_orphan_users: "빈 계정 정리",
+  test_account_on: "시험 계정 지정", test_account_off: "시험 계정 풀기", rank_exclude: "랭킹에서 뺌",
+  live_event_create: "이벤트 만듦", live_event_update: "이벤트 고침", live_event_end_now: "이벤트 지금 끝냄",
+  live_event_cancel: "이벤트 취소", live_event_exclude: "이벤트 순위에서 뺌",
+};
+// 관리 기록 「내용」 칸의 항목 이름. 모르는 항목은 그대로 보인다.
+const AUDIT_KEYS = {
+  reason: "사유", note: "메모", value: "값", key: "설정", minutes: "분", affected: "대상 수", report: "신고 번호",
+  id: "번호", coins: "코인", hints: "힌트", autos: "자동배치", memo: "메모", daily: "오늘 점수", total: "누적 점수",
+  name: "이름", kind: "종류", event_id: "이벤트 번호", batch_id: "묶음 번호", notice_id: "공지 번호", code: "코드",
+};
+function auditDetail(d) {
+  if (!d || typeof d !== "object") return esc(d ?? "");
+  return Object.entries(d).map(([k, v]) =>
+    `${esc(AUDIT_KEYS[k] || k)}: ${esc(v && typeof v === "object" ? JSON.stringify(v) : String(v))}`).join(" · ");
+}
+
 function auditTable(err) {
   // 조회 실패를 "기록 없음"으로 보여주면 원인을 영영 못 찾는다.
-  if (err) return `<div class="notice">관리 기록 조회 실패: ${esc(err.message)}<br>
-    supabase_admin_features.sql이 끝까지 실행됐는지 확인하세요
-    (admin_actions 테이블과 읽기 정책이 필요합니다).</div>`;
-  if (!AUDIT.length) return `<div class="empty">기록된 관리 작업이 없습니다</div>`;
+  if (err) return loadFail("관리 기록을 불러오지 못했습니다.", err, "supabase_admin_features.sql 끝까지, admin_actions 표와 읽기 정책");
+  if (!AUDIT.length) return `<div class="empty">남은 관리 기록이 없습니다</div>`;
   // 작업 종류·대상으로 거른다. 100건 나열에서 원하는 한 건을 찾는 게 일이었다.
   const kinds = [...new Set(AUDIT.map((a) => a.action))].sort();
   const rows = AUDIT.filter((a) =>
@@ -3249,18 +3408,18 @@ function auditTable(err) {
   return `<div class="toolbar">
     <select id="auditKind">
       <option value="">모든 작업</option>
-      ${kinds.map((k) => `<option value="${esc(k)}" ${k === AUDIT_KIND ? "selected" : ""}>${esc(k)}</option>`).join("")}
+      ${kinds.map((k) => `<option value="${esc(k)}" ${k === AUDIT_KIND ? "selected" : ""}>${esc(AUDIT_NAMES[k] || k)}</option>`).join("")}
     </select>
-    <input type="search" id="auditQ" placeholder="대상 id·내용 검색" value="${esc(AUDIT_Q)}">
+    <input type="search" id="auditQ" placeholder="회원 ID 앞부분이나 내용으로 찾기" value="${esc(AUDIT_Q)}">
     <span class="muted">${rows.length} / ${AUDIT.length}건</span>
   </div>
   <div class="table-scroll"><table>
-    <thead><tr><th>시각</th><th>작업</th><th>대상</th><th>내용</th></tr></thead>
+    <thead><tr><th>시각</th><th>한 일</th><th>대상 회원 ID</th><th>내용</th></tr></thead>
     <tbody>${rows.map((a) => `<tr>
       <td class="muted">${new Date(a.created_at).toLocaleString("ko-KR")}</td>
-      <td>${esc(a.action)}</td>
+      <td>${esc(AUDIT_NAMES[a.action] || a.action)}</td>
       <td class="muted">${esc((a.target_id || "").slice(0, 8))}</td>
-      <td class="muted long" style="max-width:520px">${esc(JSON.stringify(a.detail))}</td>
+      <td class="muted long" style="max-width:520px">${auditDetail(a.detail)}</td>
     </tr>`).join("")}</tbody></table></div>`;
 }
 
@@ -3278,11 +3437,11 @@ function batchState(b, now) {
   // revoked_at은 059부터 채워진다. 그 전에 회수한 묶음은 null이라 숫자로 추측한다 —
   // 받아 간 사람이 대상보다 적은데 남은 건수가 0이면 회수됐거나 대상이 탈퇴한 것이다.
   const revoked = b.revoked_at || (left === 0 && Number(b.claimed_count || 0) < Number(b.target_count || 0));
-  if (revoked) return { key: "revoked", label: "회수됨", cls: "heart" };
-  if (left === 0) return { key: "allDone", label: "전원 수령", cls: "" };
-  if (expired) return { key: "expired", label: "만료", cls: "heart" };
-  if (!started) return { key: "notYet", label: "대기", cls: "today" };
-  return { key: "live", label: "진행 중", cls: "today" };
+  if (revoked) return { key: "revoked", label: "거둬들임", cls: "heart" };
+  if (left === 0) return { key: "allDone", label: "모두 받아 감", cls: "" };
+  if (expired) return { key: "expired", label: "기한 지남", cls: "heart" };
+  if (!started) return { key: "notYet", label: "받기 시작 전", cls: "today" };
+  return { key: "live", label: "받는 중", cls: "today" };
 }
 
 /** 아직 사람이 받아 갈 수 있는 묶음인가 — 이것만 "진행 중" 탭에 남는다. */
@@ -3302,7 +3461,7 @@ function rewardCells(b) {
   const parts = [
     b.coins && `${appIcon("coin_icon", 16, "코인")} ${fmt(b.coins)}`,
     b.hints && `${appIcon("hint", 16, "힌트")} ${fmt(b.hints)}`,
-    b.autos && `${appIcon("dog_01", 16, "저절로 놓기")} ${fmt(b.autos)}`,
+    b.autos && `${appIcon("dog_01", 16, "자동배치")} ${fmt(b.autos)}`,
   ].filter(Boolean);
   return parts.length
     ? `<span style="display:inline-flex;align-items:center;gap:10px;flex-wrap:wrap">${parts.join("")}</span>`
@@ -3312,10 +3471,10 @@ function rewardCells(b) {
 function batchesTable(shown) {
   if (!shown.length) return "";
   const when = (v) => (v ? new Date(v).toLocaleString("ko-KR", { dateStyle: "short", timeStyle: "short" }) : "—");
-  return `<h2>전체 지급 묶음</h2>
+  return `<h2>모든 회원에게 준 보상</h2>
   <div class="table-scroll"><table>
-    <thead><tr><th>등록</th><th>내용</th><th>메모</th><th>받을 수 있는 기간</th>
-      <th class="c fit">상태</th><th class="num">수령</th><th>관리</th></tr></thead>
+    <thead><tr><th>만든 때</th><th>보상</th><th>메모</th><th>받을 수 있는 기간</th>
+      <th class="c fit">상태</th><th class="num">받아 간 사람 / 받을 사람</th><th>관리</th></tr></thead>
     <tbody>${shown.map(({ b, st }) => {
       const rows = `<tr>
         <td class="muted">${when(b.created_at)}</td>
@@ -3329,17 +3488,17 @@ function batchesTable(shown) {
             : ""}</td>
         <td class="num">${fmt(b.claimed_count)} / ${fmt(b.target_count)}</td>
         <td><div class="actions">
-          <button class="ghost sm" data-batch="${b.id}">${OPEN_BATCH === b.id ? "접기" : "명단"}</button>
-          ${Number(b.pending_count) > 0 ? `<button class="danger sm" data-revoke="${b.id}">회수</button>` : ""}
+          <button class="ghost sm" data-batch="${b.id}">${OPEN_BATCH === b.id ? "명단 접기" : "받는 사람 명단"}</button>
+          ${Number(b.pending_count) > 0 ? `<button class="danger sm" data-revoke="${b.id}" title="아직 안 받아 간 사람의 보상을 거둬들입니다">안 받은 것 거두기</button>` : ""}
         </div></td>
       </tr>`;
       if (OPEN_BATCH !== b.id) return rows;
       const members = BATCH_MEMBERS.length
         ? BATCH_MEMBERS.map((m) => `<span class="mem ${m.claimed_at ? "got" : ""}">${esc(m.username || "—")}</span>`).join("")
-        : '<span class="muted">명단 없음</span>';
+        : '<span class="muted">명단이 없습니다</span>';
       return rows + `<tr><td colspan="7" style="white-space:normal">
         <div class="muted" style="font-size:12px;margin-bottom:6px">
-          진한 표시가 받아 간 사람입니다</div>${members}</td></tr>`;
+          진하게 칠한 이름이 받아 간 사람입니다</div>${members}</td></tr>`;
     }).join("")}</tbody></table></div>`;
 }
 
@@ -3348,17 +3507,17 @@ function batchesTable(shown) {
  * 두 표가 다른 것을 재는 것처럼 읽힌다.
  */
 function rewardState(r, now) {
-  if (r.claimed_at) return { key: "claimed", label: "받아감", cls: "" };
-  if (r.expires_at && new Date(r.expires_at).getTime() <= now) return { key: "expired", label: "만료", cls: "heart" };
-  if (r.starts_at && new Date(r.starts_at).getTime() > now) return { key: "notYet", label: "대기", cls: "today" };
-  return { key: "live", label: "안 받아감", cls: "today" };
+  if (r.claimed_at) return { key: "claimed", label: "받아 감", cls: "" };
+  if (r.expires_at && new Date(r.expires_at).getTime() <= now) return { key: "expired", label: "기한 지남", cls: "heart" };
+  if (r.starts_at && new Date(r.starts_at).getTime() > now) return { key: "notYet", label: "받기 시작 전", cls: "today" };
+  return { key: "live", label: "아직 안 받아 감", cls: "today" };
 }
 
 function rewardsRows(shown) {
   if (!shown.length) return "";
-  return `<h2>개별 지급</h2><div class="table-scroll"><table>
-    <thead><tr><th>시각</th><th>대상</th><th class="num">코인</th>
-      <th class="num">힌트</th><th class="num">자동</th>
+  return `<h2>한 사람에게 준 보상</h2><div class="table-scroll"><table>
+    <thead><tr><th>준 때</th><th>받는 사람</th><th class="num">코인</th>
+      <th class="num">힌트</th><th class="num">자동배치</th>
       <th>메모</th><th class="c fit">상태</th></tr></thead>
     <tbody>${shown.map(({ r, st }) => {
       const who = PLAYERS.find((p) => p.id === r.profile_id);
@@ -3388,18 +3547,18 @@ function rewardsTable() {
   const liveS = singles.filter((m) => m.st.key === "live" || m.st.key === "notYet");
   const doneS = singles.filter((m) => !(m.st.key === "live" || m.st.key === "notYet"));
 
-  if (!marked.length && !singles.length) return `<div class="empty">지급한 보상이 없습니다</div>`;
+  if (!marked.length && !singles.length) return `<div class="empty">준 보상이 없습니다</div>`;
 
   const live = BATCH_VIEW === "live";
   // 탭 하나로 두 표를 같이 거른다 — 표마다 탭을 두면 어느 쪽을 보고 있는지 헷갈린다.
   const tabs = `<div class="subtabs">
-    <button class="${live ? "on" : ""}" data-bview="live">진행 중 <b>${fmt(liveB.length + liveS.length)}</b></button>
-    <button class="${!live ? "on" : ""}" data-bview="done">지난 것 <b>${fmt(doneB.length + doneS.length)}</b></button>
+    <button class="${live ? "on" : ""}" data-bview="live">아직 받는 중 <b>${fmt(liveB.length + liveS.length)}</b></button>
+    <button class="${!live ? "on" : ""}" data-bview="done">끝난 것 <b>${fmt(doneB.length + doneS.length)}</b></button>
   </div>`;
 
   const body = batchesTable(live ? liveB : doneB) + rewardsRows(live ? liveS : doneS);
   return tabs + (body || `<div class="empty">${
-    live ? "진행 중인 지급이 없습니다" : "지난 지급이 없습니다"}</div>`);
+    live ? "아직 받는 중인 보상이 없습니다" : "끝난 보상이 없습니다"}</div>`);
 }
 
 // ------------------------------------------------------------------ 화면
@@ -3411,7 +3570,7 @@ function rewardsTable() {
 const LE_STATE = {
   scheduled: ["예정", "warn"],
   live: ["진행 중", "today"],
-  results: ["결과 공개", "dim"],
+  results: ["결과 보여 주는 중", "dim"],
   closed: ["끝남", "dim"],
   cancelled: ["취소됨", "heart"],
 };
@@ -3478,14 +3637,14 @@ function checkLiveEvent(v, ev, now, events) {
     }
   }
   if (def && !(Number.isInteger(v.level) && v.level >= def.minLevel)) {
-    errors.push(`${def.label} 이벤트는 레벨 ${def.minLevel}부터 열 수 있습니다.`);
+    errors.push(`${def.label} 이벤트는 참여 레벨을 ${def.minLevel} 이상으로 정해야 합니다.`);
   }
   for (const [name, b] of [["iOS", v.buildIos], ["Android", v.buildAnd]]) {
-    if (!(Number.isInteger(b) && b >= 0)) errors.push(`최소 빌드 ${name}는 0 이상의 정수여야 합니다.`);
+    if (!(Number.isInteger(b) && b >= 0)) errors.push(`${name} 앱 최소 빌드 번호는 0 이상의 정수여야 합니다.`);
   }
   let prev = 0;
   for (const t of v.tiers) {
-    if (!(t.to >= 1 && t.to <= 100)) { errors.push("보상 표의 「~등까지」는 1~100이어야 합니다. 앱 목록이 100명까지입니다."); break; }
+    if (!(t.to >= 1 && t.to <= 100)) { errors.push("보상 표의 「몇 등까지」는 1~100이어야 합니다. 앱 순위 목록이 100명까지입니다."); break; }
     if (t.to <= prev) { errors.push(`보상 표의 「${t.to}등까지」가 앞 줄과 겹칩니다.`); break; }
     if (t.coins < 0 || t.hints < 0 || t.autos < 0) { errors.push("보상은 0 이상이어야 합니다."); break; }
     prev = t.to;
@@ -3508,8 +3667,7 @@ function tiersText(tiers) {
 /** 이벤트 목록. 줄 사이에 실제 이벤트끼리의 빈 기간(「다음 이벤트까지 3일 4시간」)을 넣는다. */
 function liveEventsTab() {
   if (LE_ERR) {
-    return `<div class="notice">이벤트 조회 실패: ${esc(LE_ERR.message)}<br>
-      sql/migrations/103_live_events.sql을 실행하면 나옵니다.</div>`;
+    return loadFail("이벤트를 불러오지 못했습니다.", LE_ERR, "sql/migrations/103_live_events.sql");
   }
   const now = Date.now();
   // 실제 이벤트(취소·시험 아님)끼리 시작 순으로 세워 앞 이벤트의 결과 공개 끝과의 간격을 센다.
@@ -3530,18 +3688,18 @@ function liveEventsTab() {
       ? `<s class="muted">${esc(fmtDateTime(e.ends_at))}</s><br><span class="pill warn" style="margin-left:0" title="${esc(e.end_reason || "")}">지금 끝냄 ${esc(fmtDateTime(e.ended_early_at))}</span>`
       : esc(fmtDateTime(e.ends_at));
     const reward = e.cancelled_at ? '<span class="muted">없음</span>'
-      : e.settled_at ? `지급 ${fmt(e.grants)} · 수령 ${fmt(e.claimed)}`
-      : '<span class="muted">정산 전</span>';
+      : e.settled_at ? `보낸 보상 ${fmt(e.grants)} · 받아 감 ${fmt(e.claimed)}`
+      : '<span class="muted">보상 보내기 전</span>';
     const mb = e.min_build || {};
     const btn = (attr, label, cls = "ghost") => `<button class="${cls} sm" ${attr}="${e.id}">${label}</button>`;
     const acts = [
       e.state === "scheduled" ? btn("data-le-edit", "고치기", "") : "",
-      e.state === "live" ? btn("data-le-edit", "결과 공개 끝 늘리기") : "",
+      e.state === "live" ? btn("data-le-edit", "결과 공개 끝 늦추기") : "",
       ["results", "closed", "cancelled"].includes(e.state) ? btn("data-le-edit", "보기") : "",
-      e.state !== "scheduled" && !e.cancelled_at ? btn("data-le-rank", String(LE_OPEN) === String(e.id) ? "순위 닫기" : "순위") : "",
-      btn("data-le-stats", "통계"),
+      e.state !== "scheduled" && !e.cancelled_at ? btn("data-le-rank", String(LE_OPEN) === String(e.id) ? "순위 접기" : "순위 보기") : "",
+      btn("data-le-stats", "차트"),
       // 시험 전용과 취소된 이벤트는 서버가 이벤트 조건을 거절한다(104 push_validate).
-      !e.cancelled_at && !e.test_only && e.state === "scheduled" ? btn("data-le-startpush", "시작 알림 예약") : "",
+      !e.cancelled_at && !e.test_only && e.state === "scheduled" ? btn("data-le-startpush", "시작 알림 푸시 예약") : "",
       !e.cancelled_at && !e.test_only && e.state !== "scheduled" ? btn("data-le-push", "참여자에게 푸시") : "",
       e.state === "live" ? btn("data-le-end", "지금 끝내기", "danger") : "",
       e.state === "scheduled" || e.state === "live" ? btn("data-le-cancel", "취소", "danger") : "",
@@ -3554,8 +3712,8 @@ function liveEventsTab() {
       <td>${esc(fmtDateTime(e.starts_at))}</td>
       <td>${end}</td>
       <td>${esc(fmtDateTime(e.results_until))}</td>
-      <td class="num">${fmt(e.min_level)}<div class="muted" style="font-size:11.5px">iOS ${fmt(mb.ios ?? 0)} · Android ${fmt(mb.android ?? 0)}</div></td>
-      <td class="num">${fmt(e.participants)}<div class="muted" style="font-size:11.5px">순위 ${fmt(e.ranked)}</div></td>
+      <td class="num">${fmt(e.min_level)}<div class="muted" style="font-size:11.5px">iOS ${fmt(mb.ios ?? 0)} · AOS ${fmt(mb.android ?? 0)}</div></td>
+      <td class="num">${fmt(e.participants)}<div class="muted" style="font-size:11.5px">순위에 든 사람 ${fmt(e.ranked)}</div></td>
       <td class="num">${fmt(e.runs)}</td>
       <td title="${esc(tiersText(e.rewards?.tiers))}">${reward}<div class="muted" style="font-size:11.5px">${
         e.rewards?.tiers?.length ? `${e.rewards.tiers[e.rewards.tiers.length - 1].to}등까지 · 1등 코인 ${fmt(e.rewards.tiers[0].coins)}` : "보상 없음"}</div></td>
@@ -3569,17 +3727,17 @@ function liveEventsTab() {
     return gapRow + row(e);
   }).join("");
   return `
-    <div class="notice">이벤트가 차지하는 기간은 <b>시작부터 결과 공개 끝까지</b>이고 다른 이벤트와 겹칠 수 없습니다.
-      시험 전용 이벤트는 시험 전용끼리만 겹침을 봅니다.
-      순위 보상은 끝난 뒤 정산되어 <b>우편함</b>으로 들어가고, 정산된 날부터 ${RANK_CLAIM_DAYS}일 안에 받습니다.
-      결과 공개 끝은 앱에서 순위 결과를 보여 주는 기간입니다.</div>
+    <div class="notice">이벤트 하나는 <b>시작부터 결과 공개 끝까지</b> 자리를 차지하고, 그동안 다른 이벤트를 열 수 없습니다.
+      시험 전용 이벤트는 시험 전용끼리만 겹치는지 봅니다.
+      이벤트가 끝나면 순위대로 보상이 <b>우편함</b>으로 가고, 보낸 날부터 ${RANK_CLAIM_DAYS}일 안에 받아야 합니다.
+      결과 공개 끝은 이벤트가 끝난 뒤에도 앱에서 순위 결과를 보여 주는 마지막 때입니다.</div>
     <div class="toolbar">
       <button id="leNew">새 이벤트</button>
-      <span class="muted" style="font-size:12.5px">시각은 모두 한국시간입니다. 예정인 이벤트만 고칠 수 있고, 진행 중에는 결과 공개 끝만 늘릴 수 있습니다.</span>
+      <span class="muted" style="font-size:12.5px">시각은 모두 한국시간입니다. 시작 전인 이벤트만 고칠 수 있고, 진행 중에는 결과 공개 끝을 늦추는 것만 됩니다.</span>
     </div>
     ${LIVE_EVENTS.length ? `<div class="table-scroll"><table>
       <thead><tr><th class="num fit">번호</th><th>이름</th><th class="c">상태</th><th>시작</th><th>끝</th><th>결과 공개 끝</th>
-        <th class="num">여는 레벨 · 빌드</th><th class="num">참여자</th><th class="num">산책</th><th>보상</th><th>관리</th></tr></thead>
+        <th class="num">참여 레벨 · 최소 빌드</th><th class="num">참여한 사람</th><th class="num">산책 횟수</th><th>보상</th><th>관리</th></tr></thead>
       <tbody>${rows}</tbody></table></div>`
     : '<div class="empty">아직 만든 이벤트가 없습니다</div>'}
     ${LE_OPEN != null ? `<div id="leRankBox">${liveRankingBox()}</div>` : ""}`;
@@ -3593,12 +3751,12 @@ function openLiveEvent(id = null) {
   const def = KIND_DEFAULTS[kind0];
   const st = ev ? ev.state : null;
   const readOnly = ev && st !== "scheduled" && st !== "live";
-  $("#leTitle").textContent = !ev ? "새 이벤트" : readOnly ? `#${ev.id} 보기` : st === "live" ? `#${ev.id} 결과 공개 끝 늘리기` : `#${ev.id} 고치기`;
+  $("#leTitle").textContent = !ev ? "새 이벤트" : readOnly ? `#${ev.id} 보기` : st === "live" ? `#${ev.id} 결과 공개 끝 늦추기` : `#${ev.id} 고치기`;
   $("#leHow").textContent = !ev || st === "scheduled"
-    ? "시작 전까지는 모두 고칠 수 있습니다. 시작하면 결과 공개 끝을 늘리는 것만 됩니다."
-    : st === "live" ? "진행 중입니다. 결과 공개 끝을 늘리는 것만 됩니다."
+    ? "시작 전까지는 모두 고칠 수 있습니다. 시작하면 결과 공개 끝을 늦추는 것만 됩니다."
+    : st === "live" ? "진행 중입니다. 결과 공개 끝을 늦추는 것만 됩니다."
     : "끝났거나 취소된 이벤트는 고칠 수 없습니다.";
-  $("#leUntilHow").textContent = `결과 공개 끝까지 앱에서 순위 결과를 보여 줍니다. 순위 보상은 끝난 뒤 정산되어 우편함으로 들어가고, 정산된 날부터 ${RANK_CLAIM_DAYS}일 안에 받습니다.`;
+  $("#leUntilHow").textContent = `끝난 뒤에도 결과 공개 끝까지는 앱에서 순위 결과를 보여 줍니다. 순위 보상은 이벤트가 끝나면 우편함으로 가고, 보낸 날부터 ${RANK_CLAIM_DAYS}일 안에 받아야 합니다. 참여할 수 있는 레벨에 못 미친 사람은 참여하지 못합니다.`;
   $("#leKind").innerHTML = Object.entries(KIND_DEFAULTS).map(([k, d]) => `<option value="${k}">${esc(d.label)}</option>`).join("");
   $("#leKind").value = kind0;
   $("#leNameKo").value = ev?.name_ko || "";
@@ -3622,7 +3780,7 @@ function openLiveEvent(id = null) {
         <td class="num"><input type="number" min="0" class="t-coins" value="${n(t.coins)}" style="width:90px"></td>
         <td class="num"><input type="number" min="0" class="t-hints" value="${n(t.hints)}" style="width:64px"></td>
         <td class="num"><input type="number" min="0" class="t-autos" value="${n(t.autos)}" style="width:64px"></td>
-        <td><button class="ghost sm" type="button" data-le-tierdel="${i}">빼기</button></td></tr>`).join("")
+        <td><button class="ghost sm" type="button" data-le-tierdel="${i}">이 줄 지우기</button></td></tr>`).join("")
       : '<tr><td colspan="5" class="muted">보상이 없습니다</td></tr>';
     $("#leTierBody").querySelectorAll("[data-le-tierdel]").forEach((b) => {
       b.onclick = () => { readTiers(); tiers.splice(Number(b.dataset.leTierdel), 1); drawTiers(); check(); };
@@ -3681,9 +3839,9 @@ function openLiveEvent(id = null) {
       `시작 ${fmtDateTime(v.start.toISOString())}`,
       `끝 ${fmtDateTime(v.end.toISOString())}`,
       `결과 공개 끝 ${fmtDateTime(v.until.toISOString())}`,
-      `여는 레벨 ${v.level} · 최소 빌드 iOS ${v.buildIos} · Android ${v.buildAnd}`,
+      `참여 레벨 ${v.level} · 최소 빌드 번호 iOS ${v.buildIos} · AOS ${v.buildAnd}`,
       `보상 ${tiersText(v.tiers) || "없음"}`,
-      `보상은 정산 뒤 우편함으로 들어가고 ${RANK_CLAIM_DAYS}일 안에 받습니다.`,
+      `보상은 이벤트가 끝나면 우편함으로 가고, ${RANK_CLAIM_DAYS}일 안에 받아야 합니다.`,
       ...result.warns.map((w) => `주의: ${w}`),
     ];
     if (!confirm(`${lines.join("\n")}\n\n저장할까요?`)) return;
@@ -3728,13 +3886,13 @@ async function endLiveEventNow(id) {
   const e = LIVE_EVENTS.find((x) => String(x.id) === String(id));
   if (!e) return;
   if (!confirm(`#${e.id} ${e.name_ko}을(를) 지금 끝냅니다.\n\n` +
-               "지금 시각으로 순위를 확정하고, 정산 대기 뒤 보상을 정산합니다. 결과 공개 끝은 그대로입니다.\n" +
-               `보상은 우편함으로 들어가고 정산된 날부터 ${RANK_CLAIM_DAYS}일 안에 받습니다.\n\n되돌릴 수 없습니다. 계속할까요?`)) return;
+               "지금 시각으로 순위를 굳히고, 잠시 기다렸다가 순위대로 보상을 보냅니다. 결과 공개 끝은 그대로입니다.\n" +
+               `보상은 우편함으로 가고, 보낸 날부터 ${RANK_CLAIM_DAYS}일 안에 받아야 합니다.\n\n되돌릴 수 없습니다. 계속할까요?`)) return;
   const reason = askReasonRequired("이벤트 지금 끝내기");
   if (reason === null) return;
   await act(async () => {
     const r = await rpc("admin_live_event_end_now", { p_id: Number(e.id), p_reason: reason });
-    alert(`끝냈습니다. 정산 시각은 ${fmtDateTime(r?.settle_after)}입니다.`);
+    alert(`끝냈습니다. 보상은 ${fmtDateTime(r?.settle_after)}에 보냅니다.`);
     await cancelEventPushes(r?.pending_pushes);
   }, refresh);
 }
@@ -3743,7 +3901,7 @@ async function cancelLiveEvent(id) {
   const e = LIVE_EVENTS.find((x) => String(x.id) === String(id));
   if (!e) return;
   if (!confirm(`#${e.id} ${e.name_ko}을(를) 취소합니다.\n\n` +
-               "기록과 결과를 감추고 보상을 주지 않습니다. 되돌릴 수 없습니다. 계속할까요?")) return;
+               "참여 기록과 순위 결과를 감추고 보상을 주지 않습니다. 되돌릴 수 없습니다. 계속할까요?")) return;
   const reason = askReasonRequired("이벤트 취소");
   if (reason === null) return;
   await act(async () => {
@@ -3768,7 +3926,7 @@ function pushToEvent(id, start = false) {
 // 보고서의 막대는 모두 { key, label, n, filter }이다. 막대를 누르면 그 filter를 그대로 원본 표 함수에 넘겨
 // 그 갈래의 원본 줄만 본다. 서버가 막대 n과 표 total_count가 같다고 약속한다(107 머리말).
 
-const CHART_VIEWS = [["all", "전체"], ["daily", "오늘의 퍼즐"], ["number", "숫자"], ["event", "이벤트"]];
+const CHART_VIEWS = [["all", "전체"], ["daily", "오늘의 퍼즐 기록전"], ["number", "숫자 퍼즐"], ["event", "이벤트"]];
 /** 날짜별 쌓은 막대와 참여자 선의 색. 모르는 갈래는 PLAY_PALETTE에서 차례로 고른다. */
 const PLAY_COLORS = {
   participants: "#5b4fc4",
@@ -3970,11 +4128,11 @@ function playDayTable(days) {
 
 /** 가로 막대 묶음. 막대를 누르면 원본 표를 그 갈래로 거른다. */
 function playBars(list, prefix = "") {
-  if (!list?.length) return '<div class="empty">데이터 없음</div>';
+  if (!list?.length) return '<div class="empty">아직 없습니다</div>';
   const max = Math.max(1, ...list.map((b) => Number(b.n) || 0));
   return `<div class="bars">${list.map((b) => {
     const v = Number(b.n) || 0, label = prefix ? `${prefix}: ${b.label}` : b.label;
-    return `<div class="bar-row${v ? ' clickable"' + playAttr(b, label) + ' title="누르면 아래 원본 기록을 이 조건으로 거릅니다' : ""}">
+    return `<div class="bar-row${v ? ' clickable"' + playAttr(b, label) + ' title="누르면 아래 판 기록을 이 조건으로 거릅니다' : ""}">
       <span class="bar-label">${esc(b.label)}</span>
       <span class="bar-track"><span class="bar-fill" style="width:${(v / max) * 100}%"></span></span>
       <span class="bar-value">${fmt(v)}</span>
@@ -4000,7 +4158,7 @@ function playMistakeTable(rows, sizeLabel = (s) => `${s}×${s}`) {
   const heads = (rows[0].buckets || []).map((b) => `<th class="num">실수 ${esc(b.label)}</th>`).join("");
   const extra = "boards" in rows[0];
   return `<div class="table-scroll"><table>
-    <thead><tr><th>크기</th>${extra ? '<th class="num">판 수</th><th class="num">판당 실수</th>' : ""}${heads}</tr></thead>
+    <thead><tr><th>판 크기</th>${extra ? '<th class="num">판 수</th><th class="num">판마다 실수</th>' : ""}${heads}</tr></thead>
     <tbody>${rows.map((r) => `<tr><td>${esc(sizeLabel(r.size))}</td>${extra
       ? `<td class="num">${fmt(r.boards)}</td><td class="num">${r.avg_misses == null ? "—" : esc(String(r.avg_misses))}</td>` : ""}${
       (r.buckets || []).map((b) => `<td class="num">${playLink(b, `${sizeLabel(r.size)} 실수 ${b.label}`)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
@@ -4036,31 +4194,31 @@ function playRowsTable(labels) {
   const dev = (r) => `${esc(PLATFORM_NAMES[r.platform] || r.platform || "")} ${r.build ?? ""}`;
   const cols = {
     daily: {
-      head: ["날짜", "닉네임", ["크기", "c"], ["상태", "c"], "사유", ["기록", "num"], ["실수", "num"], ["놓은 마리", "num"], "시작", "기기", "깃발"],
+      head: ["날짜", "닉네임", ["판 크기", "c"], ["결과", "c"], "까닭", ["걸린 시간", "num"], ["실수", "num"], ["놓은 강아지", "num"], "시작한 때", "기기 · 빌드", "주의 표시"],
       row: (r) => [esc(r.day), who(r), `<td class="c">${r.size}×${r.size}`, `<td class="c">${esc(L(r.derived_status))}`,
         esc(r.reason_label || ""), `<td class="num">${r.derived_status === "cleared" ? fmtDur(r.elapsed_ms) : "—"}`,
         `<td class="num">${r.mistakes ?? "—"}`, `<td class="num">${r.placed_dogs ?? '<span class="muted">모름</span>'}`,
         esc(fmtDateTime(r.started_at)), dev(r), flags(r.flags)],
     },
     number: {
-      head: ["날짜", "닉네임", ["크기", "c"], ["판", "num"], ["상태", "c"], "끝난 이유 · 사유", ["점수", "num"], ["걸린 시간", "num"],
-        ["실수", "num"], ["놓은 마리", "num"], "도구", ["순위", "c"], "기기", "깃발"],
+      head: ["날짜", "닉네임", ["판 크기", "c"], ["판 번호", "num"], ["결과", "c"], "끝난 까닭", ["점수", "num"], ["걸린 시간", "num"],
+        ["실수", "num"], ["놓은 강아지", "num"], "도구", ["랭킹 점수에", "c"], "기기 · 빌드", "주의 표시"],
       row: (r) => [esc(r.day), who(r), `<td class="c">${r.size}×${r.size}`, `<td class="num">${r.board_no ?? ""}`,
         `<td class="c">${esc(L(r.derived_status))}`, esc(r.reason_label || ""), `<td class="num">${r.score == null ? "—" : fmt(r.score)}`,
         `<td class="num">${fmtDur(r.elapsed_ms)}`, `<td class="num">${r.mistakes ?? "—"}`,
         `<td class="num">${r.placed_dogs ?? '<span class="muted">모름</span>'}`,
         esc([r.tool === "hint" ? "힌트" : r.tool === "auto" ? "자동배치" : "", r.tool_ad ? "광고 도구" : "",
              r.revive_ads ? `광고 부활 ${r.revive_ads}` : "", r.coins_spent ? `코인 ${fmt(r.coins_spent)}` : ""].filter(Boolean).join(" · ")),
-        `<td class="c">${r.counted ? "셈" : '<span class="muted">안 셈</span>'}`, dev(r), flags(r.flags)],
+        `<td class="c">${r.counted ? "넣음" : '<span class="muted">안 넣음</span>'}`, dev(r), flags(r.flags)],
     },
     event: {
-      head: ["날짜", "닉네임", ["상태", "c"], "끝난 이유 · 사유", ["판 수", "num"], ["순위에 셈", "num"], ["이어 걷기", "num"],
-        ["산책 시간", "num"], "마지막 판", "도구", "시작", "기기", "깃발"],
+      head: ["날짜", "닉네임", ["결과", "c"], "끝난 까닭", ["걸은 판 수", "num"], ["순위에 넣은 판", "num"], ["이어 걷기", "num"],
+        ["산책 시간", "num"], "마지막 판", "도구", "시작한 때", "기기 · 빌드", "주의 표시"],
       row: (r) => [esc(r.day), who(r), `<td class="c">${esc(L(r.derived_status))}`, esc(r.reason_label || ""),
         `<td class="num">${fmt(r.boards)}`, `<td class="num">${fmt(r.counted_boards)}`, `<td class="num">${r.continues ?? 0}`,
         `<td class="num">${fmtDur(r.walk_ms)}`,
         r.last_size ? esc(`${r.last_size}×${r.last_size} · ${r.last_placed ?? "?"}마리 · 실수 ${r.last_misses ?? "?"}`) : '<span class="muted">—</span>',
-        esc([r.hints ? `힌트 ${r.hints}` : "", r.autos ? `자동 ${r.autos}` : "", r.tool_ads ? `광고 ${r.tool_ads}` : "",
+        esc([r.hints ? `힌트 ${r.hints}` : "", r.autos ? `자동배치 ${r.autos}` : "", r.tool_ads ? `광고 ${r.tool_ads}` : "",
              r.rest_bones ? `쉼터 뼈 ${r.rest_bones}` : ""].filter(Boolean).join(" · ")),
         esc(fmtDateTime(r.started_at)), dev(r), flags(r.flags)],
     },
@@ -4070,22 +4228,22 @@ function playRowsTable(labels) {
   const head = cols.head.map((h) => (Array.isArray(h) ? `<th class="${h[1]}">${h[0]}</th>` : `<th>${h}</th>`)).join("");
   const pages = Math.max(1, Math.ceil(PLAY_TOTAL / PLAY_SIZE));
   const chip = PLAY_FILTER
-    ? `<span class="pill today" style="margin-left:0">${esc(PLAY_FILTER.label)}</span><button class="ghost sm" id="playClear">조건 해제</button>`
-    : '<span class="muted" style="font-size:12.5px">막대나 숫자를 누르면 그 갈래만 봅니다</span>';
-  return `<h3 class="sub" id="playRows" style="scroll-margin-top:90px">원본 기록</h3>
+    ? `<span class="pill today" style="margin-left:0">${esc(PLAY_FILTER.label)}</span><button class="ghost sm" id="playClear">조건 풀기</button>`
+    : '<span class="muted" style="font-size:12.5px">위의 막대나 숫자를 누르면 그에 해당하는 판만 여기에 거릅니다</span>';
+  return `<h3 class="sub" id="playRows" style="scroll-margin-top:90px">판 하나하나의 기록</h3>
     <div class="toolbar">${chip}
-      <span class="muted" style="font-size:12.5px">${fmt(PLAY_TOTAL)}줄</span>
+      <span class="muted" style="font-size:12.5px">${fmt(PLAY_TOTAL)}건</span>
       <div style="flex:1"></div>
-      ${PLAY_TOTAL ? '<button class="ghost sm" id="playToPlayers" title="이 조건에 걸린 회원을 회원 목록에서 봅니다">이 회원들 보기</button>' : ""}
+      ${PLAY_TOTAL ? '<button class="ghost sm" id="playToPlayers" title="이 조건에 걸린 회원을 회원 목록에서 봅니다">이 회원들을 회원 목록에서 보기</button>' : ""}
     </div>
-    ${PLAY_ROWS_ERR ? `<div class="notice">원본 기록 조회 실패: ${esc(PLAY_ROWS_ERR.message)}<br>sql/migrations/107_admin_records.sql을 실행하면 나옵니다.</div>`
+    ${PLAY_ROWS_ERR ? loadFail("판 하나하나의 기록을 불러오지 못했습니다.", PLAY_ROWS_ERR, "sql/migrations/107_admin_records.sql")
       : PLAY_ROWS.length ? `<div class="table-scroll"><table><thead><tr>${head}</tr></thead>
         <tbody>${PLAY_ROWS.map((r) => `<tr>${cols.row(r).map(cell).join("")}</tr>`).join("")}</tbody></table></div>
         ${pages > 1 ? `<div class="toolbar" style="margin-top:8px">
           <button class="ghost sm" id="playPrev" ${PLAY_PAGE ? "" : "disabled"}>이전</button>
           <span class="muted">${PLAY_PAGE + 1} / ${pages}쪽</span>
           <button class="ghost sm" id="playNext" ${PLAY_PAGE + 1 < pages ? "" : "disabled"}>다음</button></div>` : ""}`
-      : '<div class="empty">조건에 맞는 기록이 없습니다</div>'}`;
+      : '<div class="empty">조건에 맞는 판이 없습니다</div>'}`;
 }
 
 /** 오늘의 퍼즐 · 숫자 · 이벤트 보기 하나. */
@@ -4095,80 +4253,81 @@ function playTab() {
         `<option value="${e.id}" ${String(e.id) === String(PLAY_EVENT) ? "selected" : ""}>${esc(
           `#${e.id} ${e.name_ko} · ${LE_STATE[e.state]?.[0] ?? e.state}${e.test_only ? " · 시험" : ""}`)}</option>`).join("")
         : '<option value="">이벤트가 없습니다</option>'}</select>
-       <button class="ghost sm" data-tab="liveevents" title="일정·지금 끝내기·취소·푸시는 이벤트 메뉴에 있습니다">이벤트 메뉴</button>`
+       <button class="ghost sm" data-tab="liveevents" title="일정, 지금 끝내기, 취소, 푸시는 이벤트 메뉴에 있습니다">이벤트 메뉴로</button>`
     : `<select id="playDays">${[...new Set([14, 30, 90, PLAY_MEMBER_DAYS])].map((d) => `<option value="${d}" ${d === PLAY_DAYS ? "selected" : ""}>최근 ${d}일</option>`).join("")}</select>`;
   const head = `<div class="toolbar">${tools}
-      <label class="tgl" title="시험 계정의 기록도 셉니다"><input type="checkbox" id="playTest" ${PLAY_TEST ? "checked" : ""}>
-        <span class="tgl-track"><span class="tgl-thumb"></span></span><span>시험 계정 포함</span></label>
+      <label class="tgl" title="켜면 시험 계정의 판도 같이 셉니다"><input type="checkbox" id="playTest" ${PLAY_TEST ? "checked" : ""}>
+        <span class="tgl-track"><span class="tgl-thumb"></span></span><span>시험 계정도 세기</span></label>
       <span class="muted" style="font-size:12.5px">날짜와 시각은 한국시간입니다</span></div>`;
   if (PLAY_ERR) {
-    return head + `<div class="notice">보고서 조회 실패: ${esc(PLAY_ERR.message)}<br>sql/migrations/107_admin_records.sql을 실행하면 나옵니다.</div>`;
+    return head + loadFail("차트를 불러오지 못했습니다.", PLAY_ERR, "sql/migrations/107_admin_records.sql");
   }
   if (CHART_VIEW === "event" && LE_ERR) {
-    return head + `<div class="notice">이벤트 조회 실패: ${esc(LE_ERR.message)}<br>sql/migrations/103_live_events.sql을 실행하면 나옵니다.</div>`;
+    return head + loadFail("이벤트를 불러오지 못했습니다.", LE_ERR, "sql/migrations/103_live_events.sql");
   }
   const R = PLAY_REPORT;
-  if (!R) return head + `<div class="empty">${CHART_VIEW === "event" ? "아직 만든 이벤트가 없습니다" : "보고서가 비어 있습니다. 관리자 계정인지 확인하세요."}</div>`;
+  if (!R) return head + `<div class="empty">${CHART_VIEW === "event" ? "아직 만든 이벤트가 없습니다" : "받아 온 내용이 비어 있습니다. 관리자로 등록된 계정인지 확인하세요."}</div>`;
   const labels = playLabels(R);
   let body = "";
   if (CHART_VIEW === "daily") {
     body = `
       ${playCards(R.cards, { participants: "참여자" })}
-      <h3 class="sub">일자별 시작 · 성공 · 실패 · 끝내지 않음 · 제외</h3>
+      <h3 class="sub">날마다 시작 · 성공 · 실패 · 끝내지 않음 · 제외</h3>
+      <div class="muted" style="font-size:12px;margin-bottom:6px">「끝내지 않음」은 풀다가 그만둔 판, 「제외」는 랭킹에서 빠진 판입니다.</div>
       ${dayBars(R.daily || [])}${playDayTable(R.daily || [])}
-      <h3 class="sub">어디까지 갔나: 실패 · 끝내지 않음 때 놓은 마리 수</h3>
-      ${playBars([...(R.placed?.bars || []).map((b) => ({ ...b, label: `${b.label}마리` })), R.placed?.unknown].filter(Boolean), "놓은 마리")}
-      <h3 class="sub">끝난 이유</h3>${playBars(R.end_reasons, "끝난 이유")}
-      <h3 class="sub">걸린 시간 (성공 기록)</h3>${playBars(R.time?.buckets, "걸린 시간")}
+      <h3 class="sub">어디까지 갔나 · 실패하거나 끝내지 않은 판에서 놓은 강아지 수</h3>
+      ${playBars([...(R.placed?.bars || []).map((b) => ({ ...b, label: `${b.label}마리` })), R.placed?.unknown].filter(Boolean), "놓은 강아지")}
+      <h3 class="sub">끝난 까닭</h3>${playBars(R.end_reasons, "끝난 까닭")}
+      <h3 class="sub">걸린 시간 · 성공한 기록만</h3>${playBars(R.time?.buckets, "걸린 시간")}
       ${(R.time?.by_weekday || []).length ? `<div class="table-scroll" style="margin-top:8px"><table>
-        <thead><tr><th>요일</th><th class="num">성공</th><th class="num">25%</th><th class="num">중앙값</th><th class="num">75%</th></tr></thead>
+        <thead><tr><th>요일</th><th class="num">성공</th><th class="num">빠른 쪽 25%${infoTip("성공한 사람 중 빠른 쪽 4분의 1이 이 시간 안에 들어옵니다.")}</th><th class="num">가운데${infoTip("성공한 사람을 시간 순으로 세웠을 때 가운데 사람의 시간입니다.")}</th><th class="num">느린 쪽 25%${infoTip("성공한 사람의 4분의 3이 이 시간 안에 들어옵니다. 이보다 느린 사람이 4분의 1입니다.")}</th></tr></thead>
         <tbody>${R.time.by_weekday.map((w) => `<tr><td>${LC_WEEK[w.weekday]}</td><td class="num">${playLink(w.bar, `${LC_WEEK[w.weekday]}요일 성공`)}</td>
           <td class="num">${w.p25 == null ? "—" : fmtDur(w.p25)}</td><td class="num">${w.p50 == null ? "—" : fmtDur(w.p50)}</td>
           <td class="num">${w.p75 == null ? "—" : fmtDur(w.p75)}</td></tr>`).join("")}</tbody></table></div>` : ""}
-      <h3 class="sub">크기별 실수</h3>${playMistakeTable(R.mistakes)}
-      <h3 class="sub">랭킹 제외 사유</h3>${R.exclusions?.length ? playBars(R.exclusions, "제외 사유") : '<div class="empty">제외된 기록이 없습니다</div>'}
-      <h3 class="sub">오프라인</h3>${playBars(R.offline, "오프라인")}
-      <h3 class="sub">시작 시각</h3>${playHours(R.hours)}
-      <div class="muted" style="font-size:12px;margin-top:8px">기록전은 도구와 부활이 없습니다. 날짜별 순위는 랭킹 메뉴에서 봅니다.</div>`;
+      <h3 class="sub">판 크기마다 실수</h3>${playMistakeTable(R.mistakes)}
+      <h3 class="sub">랭킹에서 빠진 까닭</h3>${R.exclusions?.length ? playBars(R.exclusions, "빠진 까닭") : '<div class="empty">랭킹에서 빠진 기록이 없습니다</div>'}
+      <h3 class="sub">인터넷 없이 한 판</h3>${playBars(R.offline, "인터넷 없이")}
+      <h3 class="sub">몇 시에 시작했나</h3>${playHours(R.hours)}
+      <div class="muted" style="font-size:12px;margin-top:8px">기록전에는 도구와 부활이 없습니다. 날짜마다 순위는 랭킹 메뉴에서 봅니다.</div>`;
   } else if (CHART_VIEW === "number") {
     body = `
       ${playCards(R.cards, { participants: "참여자" })}
-      <h3 class="sub">일자별 시작 · 성공 · 실패 · 끝내지 않음 · 끝나지 않음</h3>
+      <h3 class="sub">날마다 시작 · 성공 · 실패 · 끝내지 않음 · 끝나지 않음</h3>
       ${dayBars(R.daily || [])}${playDayTable(R.daily || [])}
-      <div class="muted" style="font-size:12px;margin-top:6px">「끝나지 않음」은 시작 줄만 온 판입니다. 숫자 판은 날이 지나도 이어 풀 수 있어 포기로 보지 않습니다.</div>
-      <h3 class="sub">크기별 성공률</h3>
+      <div class="muted" style="font-size:12px;margin-top:6px">「끝나지 않음」은 시작했다는 알림만 온 판입니다. 숫자 퍼즐은 날이 지나도 이어 풀 수 있어서 그만둔 것으로 보지 않습니다.</div>
+      <h3 class="sub">판 크기마다 성공한 비율</h3>
       ${(R.sizes || []).length ? `<div class="table-scroll"><table>
-        <thead><tr><th>크기</th><th class="num">전체</th><th class="num">성공</th><th class="num">성공률</th></tr></thead>
+        <thead><tr><th>판 크기</th><th class="num">전체</th><th class="num">성공</th><th class="num">성공 비율</th></tr></thead>
         <tbody>${R.sizes.map((z) => `<tr><td>${esc(z.all?.label ?? z.size)}</td><td class="num">${playLink(z.all, `${z.all?.label} 전체`)}</td>
           <td class="num">${playLink(z.cleared, `${z.cleared?.label} 성공`)}</td><td class="num">${pct(Number(z.cleared?.n) || 0, Number(z.all?.n) || 0)}</td></tr>`).join("")}</tbody></table></div>` : ""}
-      <h3 class="sub">어디까지 갔나: 실패 · 끝내지 않음 때 놓은 마리 수</h3>
-      ${playBars([...(R.placed?.bars || []).map((b) => ({ ...b, label: `${b.label}마리` })), R.placed?.unknown].filter(Boolean), "놓은 마리")}
-      <h3 class="sub">끝난 이유</h3>${playBars(R.end_reasons, "끝난 이유")}
-      <h3 class="sub">걸린 시간 (성공 판)</h3>${playBars(R.time?.buckets, "걸린 시간")}
-      <h3 class="sub">크기별 실수</h3>${playMistakeTable(R.mistakes)}
-      <h3 class="sub">도구 · 부활 · 코인</h3>${playBars(R.tools, "도구")}
-      <h3 class="sub">제외 · 오프라인</h3>${playBars(R.exclusions, "제외")}
-      <h3 class="sub">시작 시각</h3>${playHours(R.hours)}`;
+      <h3 class="sub">어디까지 갔나 · 실패하거나 끝내지 않은 판에서 놓은 강아지 수</h3>
+      ${playBars([...(R.placed?.bars || []).map((b) => ({ ...b, label: `${b.label}마리` })), R.placed?.unknown].filter(Boolean), "놓은 강아지")}
+      <h3 class="sub">끝난 까닭</h3>${playBars(R.end_reasons, "끝난 까닭")}
+      <h3 class="sub">걸린 시간 · 성공한 판만</h3>${playBars(R.time?.buckets, "걸린 시간")}
+      <h3 class="sub">판 크기마다 실수</h3>${playMistakeTable(R.mistakes)}
+      <h3 class="sub">도구 · 부활 · 코인 쓴 것</h3>${playBars(R.tools, "도구")}
+      <h3 class="sub">랭킹에서 빠짐 · 인터넷 없이 한 판</h3>${playBars(R.exclusions, "빠짐")}
+      <h3 class="sub">몇 시에 시작했나</h3>${playHours(R.hours)}`;
   } else {
     const ev = LIVE_EVENTS.find((e) => String(e.id) === String(PLAY_EVENT));
     body = `
       ${ev ? `<div class="muted" style="font-size:12.5px;margin-bottom:8px">${esc(fmtDateTime(ev.starts_at))} ~ ${esc(fmtDateTime(ev.effective_end))}
-        · 결과 공개 끝 ${esc(fmtDateTime(ev.results_until))} · ${LE_STATE[ev.state]?.[0] ?? esc(ev.state)}. 이 화면은 스스로 새로고침하지 않습니다.</div>` : ""}
-      ${playCards(R.cards, { participants: "참여자", avg_boards: "평균 판 수 (끝난 산책)", max_boards: "최고 판 수" })}
-      <h3 class="sub">일자별 참여자 · 산책 시작 · 산책 끝</h3>
+        · 결과 공개 끝 ${esc(fmtDateTime(ev.results_until))} · ${LE_STATE[ev.state]?.[0] ?? esc(ev.state)}. 이 화면은 저절로 새로 받지 않습니다. 맨 위 새로고침을 누르세요.</div>` : ""}
+      ${playCards(R.cards, { participants: "참여한 사람", avg_boards: "끝난 산책의 평균 판 수", max_boards: "가장 많이 걸은 판 수" })}
+      <h3 class="sub">날마다 참여한 사람 · 산책 시작 · 산책 끝</h3>
       ${dayBars(R.daily || [])}${playDayTable(R.daily || [])}
-      <h3 class="sub">어디까지 갔나: 걸은 판 수 (끝난 산책)</h3>${playBars(R.boards, "걸은 판 수")}
-      <h3 class="sub">마지막 판에서 놓은 마리 수 (끝난 산책)</h3>
-      ${playBars([...(R.placed?.bars || []).map((b) => ({ ...b, label: `${b.label}마리` })), R.placed?.unknown].filter(Boolean), "마지막 판 놓은 마리")}
-      <h3 class="sub">끝난 이유</h3>${playBars(R.end_reasons, "끝난 이유")}
-      <h3 class="sub">산책 길이 (끝난 산책)</h3>${playBars(R.time?.buckets, "산책 길이")}
+      <h3 class="sub">어디까지 갔나 · 끝난 산책에서 걸은 판 수</h3>${playBars(R.boards, "걸은 판 수")}
+      <h3 class="sub">끝난 산책의 마지막 판에서 놓은 강아지 수</h3>
+      ${playBars([...(R.placed?.bars || []).map((b) => ({ ...b, label: `${b.label}마리` })), R.placed?.unknown].filter(Boolean), "마지막 판 놓은 강아지")}
+      <h3 class="sub">끝난 까닭</h3>${playBars(R.end_reasons, "끝난 까닭")}
+      <h3 class="sub">산책 길이 · 끝난 산책만</h3>${playBars(R.time?.buckets, "산책 길이")}
       <h3 class="sub">이어 걷기 · 쉼터</h3>${playBars(R.continues, "이어 걷기")}
       <h3 class="sub">도구</h3>${playBars(R.tools, "도구")}
-      <h3 class="sub">크기별 실수</h3>
-      <div class="muted" style="font-size:12px;margin-bottom:6px">판 수와 판당 실수는 판 단위입니다. 구간 숫자는 그 크기 판의 실수가 그 구간인 산책 수입니다.</div>
+      <h3 class="sub">판 크기마다 실수</h3>
+      <div class="muted" style="font-size:12px;margin-bottom:6px">「판 수」와 「판마다 실수」는 판을 셉니다. 구간 칸의 숫자는 그 크기 판에서 실수가 그만큼 나온 산책의 수입니다.</div>
       ${playMistakeTable(R.mistakes)}
-      <h3 class="sub">거절 사유 · 오프라인 · 깃발</h3>${playBars(R.exclusions, "거절 · 깃발")}
-      <h3 class="sub">시작 시각</h3>${playHours(R.hours)}`;
+      <h3 class="sub">받지 않은 까닭 · 인터넷 없이 · 주의 표시</h3>${playBars(R.exclusions, "받지 않음 · 주의 표시")}
+      <h3 class="sub">몇 시에 시작했나</h3>${playHours(R.hours)}`;
   }
   return head + body + playRowsTable(labels);
 }
@@ -4193,9 +4352,9 @@ let LE_TIMER = null, LE_TIMER_START = 0, LE_TIMER_STOPPED = false;
 /** 받을 보상의 상태 → [이름, 알약 class]. 서버 claim_state(103·107)의 값이다. 보상은 우편함으로 받는다(18절). */
 const CLAIM_STATE = {
   claimed: ["받음", "dim"],
-  unclaimed: ["우편함 대기", "warn"],
+  unclaimed: ["우편함에 있음", "warn"],
   expired: ["기한 지남", "heart"],
-  pending: ["정산 전 예상", "dim"],
+  pending: ["보내기 전 예상", "dim"],
 };
 
 async function loadLiveRanking() {
@@ -4227,9 +4386,9 @@ function liveRankingBox() {
   const live = e.state === "live";
   const refresh = live
     ? (LE_TIMER_STOPPED
-        ? `<span class="muted" style="font-size:12.5px">${LE_RANK_REFRESH_MAX_MS / 60000}분이 지나 자동 새로고침을 멈췄습니다.</span>
-           <button class="ghost sm" id="leRankResume">다시 켜기</button>`
-        : `<span class="muted" style="font-size:12.5px">${LE_RANK_REFRESH_MS / 1000}초마다 표만 다시 받습니다. 마지막 ${esc(fmtTime(new Date(LE_RANK_AT).toISOString()))}</span>`)
+        ? `<span class="muted" style="font-size:12.5px">${LE_RANK_REFRESH_MAX_MS / 60000}분이 지나 표를 저절로 새로 받는 것을 멈췄습니다.</span>
+           <button class="ghost sm" id="leRankResume">다시 저절로 받기</button>`
+        : `<span class="muted" style="font-size:12.5px">${LE_RANK_REFRESH_MS / 1000}초마다 순위 표만 새로 받습니다. 마지막으로 받은 때 ${esc(fmtTime(new Date(LE_RANK_AT).toISOString()))}</span>`)
     : "";
   const pages = Math.max(1, Math.ceil(LE_RANK_TOTAL / LE_RANK_SIZE));
   const rows = LE_RANK.map((r) => {
@@ -4244,34 +4403,34 @@ function liveRankingBox() {
       <td class="num">${x.walk_ms == null ? "—" : fmtDur(x.walk_ms)}</td>
       <td class="num">${fmt(r.runs)}</td>
       <td>${flagPills(r.flags)}</td>
-      <td class="long">${r.excluded_at ? `<span class="pill heart" style="margin-left:0">제외</span> ${esc(r.exclude_reason || "")}` : ""}</td>
+      <td class="long">${r.excluded_at ? `<span class="pill heart" style="margin-left:0">순위에서 뺌</span> ${esc(r.exclude_reason || "")}` : ""}</td>
       <td>${rewardText(r)}</td>
       <td class="c">${claimPill(r.claim_state)}</td>
       <td>${esc(PLATFORM_NAMES[r.platform] || r.platform || "")} ${r.build ?? ""}</td>
       <td>${esc(fmtDateTime(r.achieved_at))}</td>
-      <td>${r.profile_id && !r.excluded_at ? `<button class="danger sm" data-le-exclude="${esc(r.profile_id)}" data-name="${esc(r.username || "")}">제외</button>` : ""}</td>
+      <td>${r.profile_id && !r.excluded_at ? `<button class="danger sm" data-le-exclude="${esc(r.profile_id)}" data-name="${esc(r.username || "")}">순위에서 빼기</button>` : ""}</td>
     </tr>`;
   }).join("");
   return `<h2>#${e.id} ${esc(e.name_ko)} 순위</h2>
     <div class="cards">
-      <div class="card"><div class="label">참여자</div><div class="value">${fmt(e.participants)}</div></div>
-      <div class="card"><div class="label">순위에 듦</div><div class="value">${fmt(e.ranked)}</div></div>
-      <div class="card"><div class="label">산책 수</div><div class="value">${fmt(e.runs)}</div></div>
-      <div class="card"><div class="label">${e.settled_at ? "지급 · 수령" : "보상"}</div><div class="value">${e.settled_at ? `${fmt(e.grants)} · ${fmt(e.claimed)}` : "정산 전"}</div></div>
-      ${live ? `<div class="card"><div class="label">끝까지</div><div class="value">${fmtSpan(new Date(e.effective_end) - Date.now())}</div></div>` : ""}
+      <div class="card"><div class="label">참여한 사람</div><div class="value">${fmt(e.participants)}</div></div>
+      <div class="card"><div class="label">순위에 든 사람</div><div class="value">${fmt(e.ranked)}</div></div>
+      <div class="card"><div class="label">산책 횟수</div><div class="value">${fmt(e.runs)}</div></div>
+      <div class="card"><div class="label">${e.settled_at ? "보낸 보상 · 받아 감" : "보상"}</div><div class="value">${e.settled_at ? `${fmt(e.grants)} · ${fmt(e.claimed)}` : "보내기 전"}</div></div>
+      ${live ? `<div class="card"><div class="label">끝날 때까지</div><div class="value">${fmtSpan(new Date(e.effective_end) - Date.now())}</div></div>` : ""}
     </div>
     <div class="toolbar">${refresh}<div style="flex:1"></div>
-      <button class="ghost sm" data-le-stats="${e.id}">통계</button>
-      <button class="ghost sm" id="leRankClose">닫기</button></div>
-    <div class="muted" style="font-size:12px;margin-bottom:6px">등수가 없는 줄은 판 0, 제외, 시험 계정입니다. 보상은 정산 뒤 우편함으로 들어가고 정산된 날부터 ${RANK_CLAIM_DAYS}일 안에 받습니다.</div>
-    ${LE_RANK_ERR ? `<div class="notice">순위 조회 실패: ${esc(LE_RANK_ERR.message)}<br>sql/migrations/103_live_events.sql을 실행하면 나옵니다.</div>`
+      <button class="ghost sm" data-le-stats="${e.id}">차트로 보기</button>
+      <button class="ghost sm" id="leRankClose">순위 접기</button></div>
+    <div class="muted" style="font-size:12px;margin-bottom:6px">등수가 없는 줄은 한 판도 못 걸었거나, 순위에서 뺐거나, 시험 계정입니다. 보상은 이벤트가 끝나면 우편함으로 가고, 보낸 날부터 ${RANK_CLAIM_DAYS}일 안에 받아야 합니다.</div>
+    ${LE_RANK_ERR ? loadFail("순위를 불러오지 못했습니다.", LE_RANK_ERR, "sql/migrations/103_live_events.sql")
       : LE_RANK.length ? `<div class="table-scroll"><table>
-        <thead><tr><th class="num fit">등수</th><th>닉네임</th><th class="num">판 수</th><th class="num">보탠 뼈</th><th class="num">이어 걷기</th>
-          <th class="num">산책 시간</th><th class="num">산책</th><th>깃발</th><th>제외</th><th>보상</th><th class="c">수령</th><th>기기</th><th>기록 시각</th><th></th></tr></thead>
+        <thead><tr><th class="num fit">등수</th><th>닉네임</th><th class="num">걸은 판 수</th><th class="num">보탠 뼈${infoTip("산책 중 쉼터에서 사거나 이어 걷기로 더 받은 뼈다귀 수입니다. 걸은 판 수가 같으면 이 값이 적은 사람이 앞입니다.")}</th><th class="num">이어 걷기</th>
+          <th class="num">산책 시간</th><th class="num">산책 횟수</th><th>주의 표시</th><th>순위에서 뺌</th><th>보상</th><th class="c">받았나</th><th>기기 · 빌드</th><th>기록 낸 때</th><th></th></tr></thead>
         <tbody>${rows}</tbody></table></div>
         ${pages > 1 ? `<div class="toolbar" style="margin-top:8px">
           <button class="ghost sm" id="leRankPrev" ${LE_RANK_PAGE ? "" : "disabled"}>이전</button>
-          <span class="muted">${LE_RANK_PAGE + 1} / ${pages}쪽 (${fmt(LE_RANK_TOTAL)}명)</span>
+          <span class="muted">${LE_RANK_PAGE + 1} / ${pages}쪽 · ${fmt(LE_RANK_TOTAL)}명</span>
           <button class="ghost sm" id="leRankNext" ${LE_RANK_PAGE + 1 < pages ? "" : "disabled"}>다음</button></div>` : ""}`
       : '<div class="empty">아직 참여한 사람이 없습니다</div>'}`;
 }
@@ -4345,15 +4504,15 @@ async function openLiveRanking(id) {
 /** 결과 → 알림 문구. 서버 admin_live_event_exclude·admin_rank_exclude가 돌려주는 값이다. */
 const EXCLUDE_RESULT = {
   excluded: "순위에서 뺐습니다.",
-  revoked: "순위에서 뺐고, 아직 안 받은 보상을 회수했습니다.",
+  revoked: "순위에서 뺐고, 아직 안 받은 보상을 거둬들였습니다.",
   already_claimed: "순위에서 뺐지만 보상은 이미 받아 가서 되돌리지 못했습니다.",
   not_found: "이 기간에 그 회원의 줄이 없습니다.",
 };
-const EXCLUDE_HOW = "정산 전이면 순위에서 빠집니다. 정산 뒤 아직 안 받은 보상은 회수하고, 받은 보상은 되돌리지 못합니다. 뒷사람을 당겨 올리지 않습니다.";
+const EXCLUDE_HOW = "보상을 보내기 전이면 순위에서만 빠집니다. 보낸 뒤라면 아직 안 받은 보상은 거둬들이고, 이미 받아 간 보상은 되돌리지 못합니다. 아래 등수 사람을 한 칸씩 올려 주지는 않습니다.";
 
 async function excludeFromLiveEvent(profileId, name) {
-  if (!confirm(`${name || profileId.slice(0, 8)} 회원을 #${LE_OPEN} 이벤트에서 뺍니다.\n\n${EXCLUDE_HOW}\n\n계속할까요?`)) return;
-  const reason = askReasonRequired("이벤트 순위에서 제외");
+  if (!confirm(`${name || profileId.slice(0, 8)} 회원을 #${LE_OPEN} 이벤트 순위에서 뺍니다.\n\n${EXCLUDE_HOW}\n\n계속할까요?`)) return;
+  const reason = askReasonRequired("이벤트 순위에서 빼기");
   if (reason === null) return;
   await act(async () => {
     const r = await rpc("admin_live_event_exclude", { p_id: Number(LE_OPEN), p_profile_id: profileId, p_reason: reason });
@@ -4370,7 +4529,7 @@ async function openMember(id) {
 
 // ------------------------------------------------------------------ 랭킹 메뉴: 오늘 점수 · 오늘의 퍼즐 기록 · 숫자 (107)
 
-const RANK_VIEWS = [["today", "오늘 점수"], ["daily_time", "오늘의 퍼즐 기록"], ["number", "숫자"]];
+const RANK_VIEWS = [["today", "오늘 점수"], ["daily_time", "오늘의 퍼즐 기록"], ["number", "숫자 퍼즐"]];
 let RANK_VIEW = "today";
 /** 기록 랭킹 한 기간의 표. REC_PERIOD가 비면 지금 기간이다(서버가 정한다). */
 let REC_ROWS = [], REC_TOTAL = 0, REC_PAGE = 0, REC_PERIOD = "", REC_ERR = null;
@@ -4431,18 +4590,18 @@ function numberPeriodChoices() {
 /** 시험 계정 표. 랭킹 세 탭 맨 아래에 같은 것을 둔다. */
 function testAccountsSection() {
   if (TEST_ACCOUNTS === null) {
-    return `<h2>시험 계정</h2><div class="notice">시험 계정 조회 실패. sql/migrations/107_admin_records.sql을 실행하면 나옵니다.</div>`;
+    return `<h2>시험 계정</h2>${loadFail("시험 계정 목록을 불러오지 못했습니다.", "", "sql/migrations/107_admin_records.sql")}`;
   }
-  return `<h2>시험 계정 (${fmt(TEST_ACCOUNTS.length)}명)</h2>
-    <div class="muted" style="font-size:12.5px;margin-bottom:6px">시험 계정은 오늘 점수 · 기록전 · 숫자 랭킹과 이벤트 순위, 푸시의 순위 조건에서 빠집니다.
-      통계는 「시험 계정 포함」을 켜야 셉니다. 지정은 회원 목록의 「시험 계정」 버튼으로 합니다.</div>
+  return `<h2>시험 계정 · ${fmt(TEST_ACCOUNTS.length)}명</h2>
+    <div class="muted" style="font-size:12.5px;margin-bottom:6px">시험 계정은 오늘 점수, 기록전, 숫자 퍼즐 랭킹과 이벤트 순위에서 빠지고, 푸시를 순위 조건으로 보낼 때도 빠집니다.
+      차트에서는 「시험 계정도 세기」를 켜야 셉니다. 지정은 회원 목록의 「시험 계정으로」 버튼으로 합니다.</div>
     ${TEST_ACCOUNTS.length ? `<div class="table-scroll"><table>
-      <thead><tr><th>닉네임</th><th>사유</th><th>지정한 때</th><th></th></tr></thead>
+      <thead><tr><th>닉네임</th><th>까닭</th><th>지정한 때</th><th></th></tr></thead>
       <tbody>${TEST_ACCOUNTS.map((t) => `<tr>
         <td>${t.profile_id ? `<button class="plink" data-member="${esc(t.profile_id)}">${esc(t.username || String(t.profile_id).slice(0, 8))}</button>` : '<span class="muted">탈퇴</span>'}</td>
         <td class="long">${esc(t.reason || "")}</td>
         <td>${esc(fmtDateTime(t.created_at))}</td>
-        <td><button class="ghost sm" data-testoff="${esc(t.profile_id)}" data-name="${esc(t.username || "")}">해제</button></td>
+        <td><button class="ghost sm" data-testoff="${esc(t.profile_id)}" data-name="${esc(t.username || "")}">시험 계정 풀기</button></td>
       </tr>`).join("")}</tbody></table></div>` : '<div class="empty">시험 계정이 없습니다</div>'}`;
 }
 
@@ -4450,22 +4609,22 @@ function testAccountsSection() {
 async function setTestAccount(id, on, name = "") {
   const who = name || findPlayer(id)?.username || String(id).slice(0, 8);
   if (on) {
-    if (!confirm(`${who} 회원을 시험 계정으로 지정합니다.\n\n오늘 점수 · 기록전 · 숫자 랭킹과 이벤트 순위, 푸시의 순위 조건에서 빠집니다.\n계속할까요?`)) return;
+    if (!confirm(`${who} 회원을 시험 계정으로 지정합니다.\n\n오늘 점수, 기록전, 숫자 퍼즐 랭킹과 이벤트 순위에서 빠지고, 푸시를 순위 조건으로 보낼 때도 빠집니다.\n계속할까요?`)) return;
     const reason = askReasonRequired("시험 계정 지정");
     if (reason === null) return;
     await act(() => rpc("admin_set_test_account", { p_profile_id: id, p_on: true, p_reason: reason }), refresh);
   } else {
     if (!confirm(`${who} 회원의 시험 계정 지정을 풉니다. 다시 랭킹에 들어갑니다.`)) return;
-    const reason = askReason("시험 계정 해제");
+    const reason = askReason("시험 계정 풀기");
     if (reason === null) return;
     await act(() => rpc("admin_set_test_account", { p_profile_id: id, p_on: false, p_reason: reason }), refresh);
   }
 }
 
 /** 기록 랭킹 줄의 상태 이름. 서버 admin_play_reason_label과 같은 말(PLAY_LABEL_FALLBACK)이고 숫자 갈래 둘을 더한다. */
-const REC_STATUS = { ...PLAY_LABEL_FALLBACK, counted: "셈에 든 판 있음", rejected: "기록 확인 실패", late: "마감 뒤 도착" };
+const REC_STATUS = { ...PLAY_LABEL_FALLBACK, counted: "점수에 든 판 있음", rejected: "기록 확인 실패", late: "마감 뒤 도착" };
 /** 기록전 시작 방식(107 start_mode). */
-const START_MODE = { server: "서버 도장", offline: "오프라인 시작", late_stamp: "도장 늦게 도착" };
+const START_MODE = { server: "온라인에서 시작", offline: "인터넷 없이 시작", late_stamp: "시작 알림이 늦게 닿음" };
 
 /** 오늘의 퍼즐 기록 · 숫자 탭. */
 function recordRankingTab() {
@@ -4476,11 +4635,11 @@ function recordRankingTab() {
   const pick = kind === "daily_time"
     ? `<input type="date" id="recDate" value="${esc(REC_PERIOD || today)}" max="${today}">
        <button class="sm" id="recToday">오늘</button>`
-    : `<select id="recPeriod"><option value="" ${REC_PERIOD ? "" : "selected"}>지금 기간</option>${
+    : `<select id="recPeriod"><option value="" ${REC_PERIOD ? "" : "selected"}>지금 진행 중인 기간</option>${
         numberPeriodChoices().map((k) => `<option value="${k}" ${k === REC_PERIOD ? "selected" : ""}>${esc(numberPeriodLabel(k))}</option>`).join("")}</select>`;
   const how = kind === "daily_time"
-    ? "그날 오늘의 퍼즐 기록의 순위입니다. 기록이 짧은 순, 같으면 실수가 적은 순입니다. 매일 한국시간으로 마감합니다."
-    : `숫자 퍼즐 한 기간의 순위입니다. 기간 방식과 순위 기준은 업데이트 메뉴의 숫자 퍼즐 설정을 따릅니다.${per ? ` 지금 보는 기간: ${esc(numberPeriodLabel(per))}` : ""}`;
+    ? "그날 오늘의 퍼즐을 빨리 푼 순위입니다. 걸린 시간이 짧은 순이고, 같으면 실수가 적은 순입니다. 매일 한국시간 0시에 마감합니다."
+    : `숫자 퍼즐 한 기간의 순위입니다. 기간과 랭킹 점수 세는 법은 운영 → 업데이트·게임 설정의 숫자 퍼즐 칸을 따릅니다.${per ? ` 지금 보는 기간: ${esc(numberPeriodLabel(per))}` : ""}`;
   const rec = (r) => (kind === "daily_time" ? (r.value == null ? "—" : fmtDur(r.value)) : r.value == null ? "—" : fmt(r.value));
   const pages = Math.max(1, Math.ceil(REC_TOTAL / REC_SIZE));
   const rows = REC_ROWS.map((r) => `<tr>
@@ -4497,21 +4656,21 @@ function recordRankingTab() {
       <td>${esc(fmtDateTime(r.submitted_at))}</td>
       <td>${rewardText(r)}</td>
       <td class="c">${claimPill(r.claim_state)}</td>
-      <td>${r.profile_id && r.status !== "excluded" ? `<button class="danger sm" data-rec-exclude="${esc(r.profile_id)}" data-name="${esc(r.username || "")}">제외</button>` : ""}</td>
+      <td>${r.profile_id && r.status !== "excluded" ? `<button class="danger sm" data-rec-exclude="${esc(r.profile_id)}" data-name="${esc(r.username || "")}">순위에서 빼기</button>` : ""}</td>
     </tr>`).join("");
   return `
     <div class="notice">${how}
-      보상은 마감 뒤 정산되어 <b>우편함</b>으로 들어가고, 정산된 날부터 ${RANK_CLAIM_DAYS}일 안에 받습니다. 정산 전 줄의 보상은 지금 보상 표로 낸 예상입니다.</div>
+      랭킹이 마감되면 보상이 <b>우편함</b>으로 가고, 보낸 날부터 ${RANK_CLAIM_DAYS}일 안에 받아야 합니다. 아직 보상을 보내기 전인 줄의 「받을 보상」은 지금 보상표로 계산한 예상입니다.</div>
     <div class="toolbar">${pick}
       <div style="flex:1"></div>
-      <button class="ghost sm" id="recStats" title="차트 메뉴에서 이 기간의 원본 기록을 봅니다">통계 보기</button>
+      <button class="ghost sm" id="recStats" title="차트 메뉴에서 이 기간의 판 하나하나를 봅니다">차트로 보기</button>
     </div>
-    <h2>${esc(label)} 참가자 (${fmt(REC_TOTAL)}명)</h2>
-    ${REC_ERR ? `<div class="notice">랭킹 조회 실패: ${esc(REC_ERR.message)}<br>sql/migrations/107_admin_records.sql을 실행하면 나옵니다.</div>`
+    <h2>${esc(label)} 참가자 · ${fmt(REC_TOTAL)}명</h2>
+    ${REC_ERR ? loadFail("랭킹을 불러오지 못했습니다.", REC_ERR, "sql/migrations/107_admin_records.sql")
       : REC_ROWS.length ? `<div class="table-scroll"><table>
         <thead><tr><th class="num fit">등수</th><th>닉네임</th><th class="num">${kind === "daily_time" ? "기록" : "점수"}</th>
-          <th class="num">${kind === "daily_time" ? "실수" : "센 판 / 판"}</th><th class="c">상태</th><th>사유</th><th>깃발</th><th>기기</th>
-          ${kind === "daily_time" ? "<th>시작 방식</th>" : ""}<th>${kind === "daily_time" ? "올린 시각" : "마지막 갱신"}</th><th>받을 보상</th><th class="c">수령</th><th></th></tr></thead>
+          <th class="num">${kind === "daily_time" ? "실수" : "점수에 든 판 / 전체 판"}</th><th class="c">상태</th><th>빠진 까닭</th><th>주의 표시</th><th>기기 · 빌드</th>
+          ${kind === "daily_time" ? "<th>시작 방식</th>" : ""}<th>${kind === "daily_time" ? "올라온 시각" : "마지막으로 올라온 때"}</th><th>받을 보상</th><th class="c">받았나</th><th></th></tr></thead>
         <tbody>${rows}</tbody></table></div>
         ${pages > 1 ? `<div class="toolbar" style="margin-top:8px">
           <button class="ghost sm" id="recPrev" ${REC_PAGE ? "" : "disabled"}>이전</button>
@@ -4525,10 +4684,10 @@ function recordRankingTab() {
 
 /** 기록 랭킹 사유 코드의 이름. 107 admin_play_reason_label과 같은 말이다(관리자 제외·서버 확인 안 됨 등 순위 표에 나오는 것만). */
 const PLAY_REASON = {
-  admin: "관리자 제외", unverified: "서버 확인 안 된 기록", game_over: "뼈다귀 소진", offline_check: "기기 시간 확인 불가",
+  admin: "관리자가 뺌", unverified: "서버가 시간을 확인 못 함", game_over: "뼈다귀 다 씀", offline_check: "휴대폰 시각 확인 불가",
   closed: "마감 뒤 도착", unfinished: "마감 전에 못 끝냄", rejected: "기록 확인 실패", before_update: "업데이트 전에 본 퍼즐",
-  too_fast: "너무 빠름", too_slow: "6시간 초과", score_over: "점수 상한 초과", late: "늦게 도착", game_reset: "진행 초기화",
-  off: "기능 꺼짐", old_build: "옛 빌드", future: "미래 시각",
+  too_fast: "너무 빠름", too_slow: "너무 오래 걸림", score_over: "나올 수 없는 점수", late: "늦게 도착", game_reset: "게임 초기화",
+  off: "기능 꺼짐", old_build: "옛 버전 앱", future: "아직 안 온 기간",
 };
 
 async function excludeFromRecordRanking(profileId, name) {
@@ -4536,8 +4695,8 @@ async function excludeFromRecordRanking(profileId, name) {
   if (!per) return;
   const label = RANK_VIEW === "number" ? numberPeriodLabel(per) : per;
   if (!confirm(`${name || profileId.slice(0, 8)} 회원을 ${label} 랭킹에서 뺍니다.\n\n${EXCLUDE_HOW}` +
-               (RANK_VIEW === "number" ? "\n숫자는 이 기간에 새로 끝낸 판도 셈에서 빠집니다." : "") + "\n\n계속할까요?")) return;
-  const reason = askReasonRequired("랭킹에서 제외");
+               (RANK_VIEW === "number" ? "\n숫자 퍼즐은 이 기간에 앞으로 깨는 판도 점수에 넣지 않습니다." : "") + "\n\n계속할까요?")) return;
+  const reason = askReasonRequired("랭킹 순위에서 빼기");
   if (reason === null) return;
   await act(async () => {
     const r = await rpc("admin_rank_exclude", { p_kind: RANK_VIEW, p_period_key: per, p_profile_id: profileId, p_reason: reason });
@@ -4557,60 +4716,106 @@ function rankingView(err) {
 // app_config의 daily_record, level_mode, number_mode를 고친다. 서버 daily_record_cfg·number_mode_cfg는 기본값 위에 이 값을 덮으므로
 // 칸을 비우면 그 키를 빼서 서버 기본값으로 돌아간다. 화면에 없는 키는 그대로 둔다.
 
+// 숫자 퍼즐 「랭킹 점수 세는 법」의 서버 기본값(102 number_mode_cfg). 칸을 「기본값 쓰기」로 두었을 때 예시와
+// 「③일 때 더할 판 수」 흐리기가 이 값을 읽는다.
+const NUMBER_BASIS_DEFAULT = "per_size";
+
+// 「랭킹 점수 세는 법」 아래에 보이는 예. 한 주에 6×6을 800·900점 두 판, 7×7을 1,000점 한 판, 8×8을 1,200점 한 판 깬 사람이다.
+const NUMBER_BASIS_WEEK = "예시 한 주: 6×6을 800점과 900점 두 판, 7×7을 1,000점 한 판, 8×8을 1,200점 한 판 깬 사람";
+const NUMBER_BASIS_EXAMPLES = {
+  per_size: "6×6은 더 높은 900점만 셉니다. 900 + 1,000 + 1,200 = 3,100점",
+  sum: "깬 판을 모두 더합니다. 800 + 900 + 1,000 + 1,200 = 3,900점",
+  best_n: "판 수가 2라면 점수 높은 두 판만 더합니다. 1,200 + 1,000 = 2,200점",
+  day_best: "가장 높은 한 판만 셉니다. 1,200점",
+};
+
+// 칸마다 help는 늘 보이는 한 줄, tip은 「?」 배지에 넣는 긴 설명과 예다.
+const BUILD_TIP = "빌드 번호는 앱을 스토어에 올릴 때마다 하나씩 붙는 숫자입니다. 예: 1.5.1은 52. iOS와 AOS는 둘 다 적거나 둘 다 비워야 합니다.";
 const CFG_EDITORS = {
   daily_record: {
     title: "오늘의 퍼즐 기록전",
-    note: "기록전 켜기를 끄면 앱이 기록전을 열지 않습니다. 칸을 비우면 서버 기본값을 씁니다. 숫자는 ms(1000분의 1초)입니다.",
+    note: "오늘의 퍼즐을 누가 더 빨리 푸는지 겨루는 랭킹입니다. 어떤 기록을 받고 어떤 기록을 순위에 넣을지 정합니다. 칸을 비우면 기본값을 씁니다.",
+    tip: "시간 칸의 숫자는 1000분의 1초 단위입니다. 1000이 1초, 60000이 1분, 3600000이 1시간입니다. 칸 옆에 시간으로 바꿔 보여 줍니다.",
     fields: [
-      { k: "enabled", type: "bool", label: "기록전 켜기" },
-      { k: "offline_ok", type: "bool", label: "오프라인 기록 받기" },
-      { k: "rank_unverified", type: "bool", label: "서버 확인 안 된 기록도 순위에 넣기" },
-      { k: "min_build.ios", type: "int", label: "최소 빌드 iOS", help: "이보다 낮은 빌드의 기록은 받지 않습니다" },
-      { k: "min_build.android", type: "int", label: "최소 빌드 Android", help: "이보다 낮은 빌드의 기록은 받지 않습니다" },
-      { k: "max_ms", type: "int", ms: true, label: "가장 긴 기록", help: "이보다 오래 걸린 기록은 「너무 느림」으로 거절합니다" },
-      { k: "min_ms_per_dog", type: "int", ms: true, label: "강아지 한 마리당 최소 시간", help: "마리 수 × 이 값보다 빠르면 사람이 낼 수 없는 기록으로 보고 거절합니다" },
-      { k: "suspect_ms_per_dog", type: "int", ms: true, label: "의심 표시 기준(한 마리당)", help: "마리 수 × 이 값보다 빠르면 거절하지 않고 「빠름」 표시만 붙입니다. 순위 표에서 보고 직접 뺍니다" },
-      { k: "min_gap_ms", type: "int", ms: true, label: "강아지 놓는 최소 간격", help: "두 마리를 놓는 간격이 이보다 짧으면 매크로로 보고 거절합니다" },
-      { k: "slack_ms", type: "int", ms: true, label: "시계 오차 허용", help: "기기 시계와 서버 시계가 이만큼 어긋나도 봐줍니다. 더 어긋나면 거절합니다" },
-      { k: "stamp_fresh_ms", type: "int", ms: true, label: "시작 신호 인정 시간", help: "「시작」 요청이 이 안에 서버에 닿으면 앱이 잰 시작 시각을 인정합니다. 늦으면 오프라인 시작으로 봅니다" },
-      { k: "late_stamp_max_ms", type: "int", ms: true, label: "오프라인 시작 허용 차이", help: "오프라인으로 시작한 기록의 시작 시각과 서버 등록 시각이 이보다 벌어지면 거절합니다" },
-      { k: "online_grace_ms", type: "int", ms: true, label: "확인됨 판정 시간", help: "다 풀고 이 안에 서버에 올라오면 「확인됨」, 늦으면 「미확인」입니다" },
+      { k: "enabled", type: "bool", label: "기록전 켜기", help: "끄면 앱에서 기록전이 열리지 않습니다" },
+      { k: "offline_ok", type: "bool", label: "인터넷 없이 시작한 기록도 받기", help: "끄면 인터넷이 끊긴 채 시작한 기록은 랭킹에서 빠집니다" },
+      { k: "rank_unverified", type: "bool", label: "서버가 시간을 확인 못 한 기록도 순위에 넣기",
+        help: "끄면 이런 기록은 순위에서 빠집니다",
+        tip: "다 풀고 나서 늦게 올라와서, 서버가 걸린 시간을 직접 확인하지 못한 기록입니다. 인터넷이 잠깐 끊겼던 사람에게 흔합니다." },
+      { k: "min_build.ios", type: "int", label: "iOS 앱 최소 빌드 번호", help: "이 번호보다 낮은 앱의 기록은 받지 않습니다", tip: BUILD_TIP },
+      { k: "min_build.android", type: "int", label: "AOS 앱 최소 빌드 번호", help: "이 번호보다 낮은 앱의 기록은 받지 않습니다", tip: BUILD_TIP },
+      { k: "max_ms", type: "int", ms: true, label: "가장 오래 걸려도 되는 시간", help: "이보다 오래 걸린 기록은 받지 않습니다" },
+      { k: "min_ms_per_dog", type: "int", ms: true, label: "한 마리당 최소 시간",
+        help: "이보다 빨리 풀면 사람이 낼 수 없는 기록으로 보고 받지 않습니다",
+        tip: "판의 강아지 수 × 이 값이 기준입니다. 예: 600이고 강아지가 8마리면 4.8초보다 빠른 기록을 받지 않습니다." },
+      { k: "suspect_ms_per_dog", type: "int", ms: true, label: "의심 표시 기준 · 한 마리당",
+        help: "이보다 빠르면 받기는 하고 「빠름」 표시를 붙입니다",
+        tip: "판의 강아지 수 × 이 값이 기준입니다. 예: 1500이고 8마리면 12초보다 빠른 기록에 표시가 붙습니다. 랭킹 메뉴에서 보고 직접 순위에서 뺄 수 있습니다." },
+      { k: "min_gap_ms", type: "int", ms: true, label: "강아지를 놓는 최소 간격",
+        help: "두 마리를 놓은 간격이 이보다 짧으면 받지 않습니다",
+        tip: "사람 손으로는 그렇게 빨리 연달아 놓을 수 없어서, 자동 입력 프로그램을 쓴 것으로 봅니다." },
+      { k: "slack_ms", type: "int", ms: true, label: "휴대폰 시계 오차 봐주기",
+        help: "휴대폰 시계와 서버 시계가 이만큼 달라도 넘어갑니다",
+        tip: "이보다 더 다르면 기록을 받지 않습니다. 휴대폰 시계를 돌려 기록을 줄이는 것을 막습니다." },
+      { k: "stamp_fresh_ms", type: "int", ms: true, label: "시작 알림이 닿아야 하는 시간",
+        help: "늦으면 인터넷 없이 시작한 기록으로 봅니다",
+        tip: "판을 시작하면 앱이 서버에 알립니다. 이 시간 안에 닿으면 앱이 잰 시작 시각을 믿고, 늦게 닿으면 인터넷 없이 시작한 기록으로 다룹니다." },
+      { k: "late_stamp_max_ms", type: "int", ms: true, label: "인터넷 없이 시작했을 때 허용 차이",
+        help: "시작 시각이 이보다 벌어지면 받지 않습니다",
+        tip: "인터넷 없이 시작한 기록에서, 앱이 적은 시작 시각과 서버가 처음 알게 된 시각의 차이입니다." },
+      { k: "online_grace_ms", type: "int", ms: true, label: "다 풀고 올라오기까지 허용 시간",
+        help: "늦게 올라오면 서버가 확인 못 한 기록이 됩니다",
+        tip: "다 풀고 이 시간 안에 서버에 올라오면 서버가 걸린 시간을 직접 확인한 기록이 됩니다. 위의 「서버가 시간을 확인 못 한 기록도 순위에 넣기」와 함께 움직입니다." },
     ],
   },
   // 1.5.0. 앱이 coin_pct만 읽는다. 서버 함수는 이 키를 보지 않는다. 비율 위쪽 한도는 두지 않는다(100 넘게도 된다).
   level_mode: {
-    title: "레벨 판",
-    note: "레벨 판 코인은 점수/100(최소 4)에 이 비율을 곱합니다. 1.5.0 이상 앱에 적용, 1.4.4 이하는 그대로",
+    title: "레벨 판 코인",
+    note: "레벨 판을 깨면 받는 코인을 조절합니다. 1.5.0 이상 앱에만 적용되고, 1.4.4 이하 앱은 예전 그대로 받습니다. 칸을 비우면 기본값을 씁니다.",
     fields: [
-      { k: "coin_pct", type: "int", label: "판 코인 비율 (%)" },
+      { k: "coin_pct", type: "int", label: "판 클리어 코인 비율 (%)", help: "100이면 그대로, 50이면 절반입니다",
+        tip: "점수 ÷ 100이 기본 코인이고, 4개보다 적으면 4개입니다. 여기에 이 비율을 곱합니다. 예: 점수 1,000이면 기본 10개, 비율 50이면 5개입니다. 100보다 크게 넣어도 됩니다." },
     ],
   },
   number_mode: {
     title: "숫자 퍼즐",
-    note: "순위 기준을 기간 중간에 바꾸면 지금 순위가 바로 달라집니다. 기간이 막 바뀐 뒤에 바꾸세요. 칸을 비우면 서버 기본값을 씁니다.",
+    note: "숫자 퍼즐의 랭킹과 코인 설정입니다. 칸을 비우면 기본값을 씁니다. "
+      + "「주의」 랭킹 점수 세는 법을 기간 중간에 바꾸면 지금 순위가 바로 달라집니다. 새 기간이 막 시작했을 때 바꾸세요.",
     fields: [
-      { k: "enabled", type: "bool", label: "숫자 퍼즐 켜기" },
-      { k: "min_build.ios", type: "int", label: "최소 빌드 iOS" },
-      { k: "min_build.android", type: "int", label: "최소 빌드 Android" },
-      { k: "period", type: "select", label: "랭킹 기간", opts: [["week", "매주 (한국시간 월요일 0시 마감)"], ["day", "매일 (한국시간 0시 마감)"]],
-        help: "한 랭킹이 이어지는 기간입니다. 마감하면 순위대로 보상을 우편함으로 보냅니다" },
-      { k: "rank_basis", type: "select", label: "랭킹 점수 세는 법", opts: [["per_size", "판 크기마다 가장 잘한 판 하나씩 더하기"], ["sum", "깬 판 점수 모두 더하기"],
-                                                              ["best_n", "점수 높은 판 몇 개만 더하기"], ["day_best", "가장 잘한 판 하나만"]],
-        help: "기간 동안 깬 숫자 퍼즐 판으로 랭킹 점수를 만드는 방법입니다" },
-      { k: "best_n", type: "int", label: "더할 판 수", onlyIf: ["rank_basis", "best_n"],
-        help: "「점수 높은 판 몇 개만 더하기」일 때만 씁니다. 20이면 기간 중 점수 높은 20판만 더합니다" },
-      { k: "coin_pct", type: "int", label: "판 클리어 코인 비율 (%)", help: "숫자 퍼즐 판을 깨면 받는 코인에 곱합니다. 100이면 그대로, 50이면 절반입니다" },
-      { k: "late_grace_min", type: "int", label: "마감 뒤 받는 유예(분)", help: "기간이 끝난 뒤에도 이 시간 안에 올라온 판은 받습니다" },
-      { k: "min_ms_per_dog", type: "int", ms: true, label: "강아지 한 마리당 최소 시간", help: "판 크기 × 이 값보다 빨리 깬 판은 거절합니다" },
-      { k: "suspect_ms_per_dog", type: "int", ms: true, label: "의심 표시 기준(한 마리당)", help: "판 크기 × 이 값보다 빠르면 거절하지 않고 「빠름」 표시만 붙입니다" },
-      { k: "slack_ms", type: "int", ms: true, label: "시계 오차 허용", help: "기기 시계와 서버 시계가 이만큼 어긋나도 봐줍니다" },
+      { k: "enabled", type: "bool", label: "숫자 퍼즐 켜기", help: "끄면 앱 홈에서 숫자 퍼즐이 사라지고, 새로 깬 판은 랭킹에 들어가지 않습니다" },
+      { k: "min_build.ios", type: "int", label: "iOS 앱 최소 빌드 번호", help: "이 번호보다 낮은 앱에서 깬 판은 랭킹에 넣지 않습니다", tip: BUILD_TIP },
+      { k: "min_build.android", type: "int", label: "AOS 앱 최소 빌드 번호", help: "이 번호보다 낮은 앱에서 깬 판은 랭킹에 넣지 않습니다", tip: BUILD_TIP },
+      { k: "period", type: "select", label: "랭킹 기간", opts: [["week", "매주 · 한국시간 월요일 0시 마감"], ["day", "매일 · 한국시간 0시 마감"]],
+        help: "한 랭킹이 이어지는 기간입니다", tip: "기간이 끝나면 순위대로 보상을 우편함으로 보냅니다. 보상표는 랭킹 메뉴의 숫자 퍼즐 탭 아래에 있습니다." },
+      { k: "rank_basis", type: "select", label: "랭킹 점수 세는 법", def: NUMBER_BASIS_DEFAULT, examples: NUMBER_BASIS_EXAMPLES, exampleHead: NUMBER_BASIS_WEEK,
+        opts: [["per_size", "① 크기마다 최고점 하나씩"], ["sum", "② 전부 더하기"], ["best_n", "③ 상위 몇 판만 더하기"], ["day_best", "④ 최고점 한 판"]],
+        help: "기간 동안 깬 판의 점수를 어떻게 모아 랭킹 점수로 만들지 정합니다",
+        tip: "① 판 크기마다 가장 높은 점수 하나씩만 더합니다. 여러 크기를 고루 해야 유리합니다. "
+          + "② 깬 판을 모두 더합니다. 많이 할수록 유리합니다. "
+          + "③ 점수 높은 판을 정한 수만큼만 더합니다. 판 수는 아래 칸에서 정합니다. "
+          + "④ 가장 높은 한 판만 셉니다." },
+      { k: "best_n", type: "int", label: "③일 때 더할 판 수", onlyIf: ["rank_basis", "best_n"],
+        help: "「③ 상위 몇 판만 더하기」를 골랐을 때만 씁니다", tip: "예: 20이면 기간 중 점수가 높은 20판만 더합니다." },
+      { k: "coin_pct", type: "int", label: "판 클리어 코인 비율 (%)", help: "100이면 레벨 판과 같고, 50이면 절반입니다",
+        tip: "숫자 퍼즐 판을 깨면 받는 코인에 이 비율을 곱합니다." },
+      { k: "late_grace_min", type: "int", label: "마감 뒤 더 받아 주는 시간 (분)",
+        help: "기간이 끝난 뒤에도 이 시간 안에 올라온 판은 받습니다",
+        tip: "인터넷이 늦게 붙은 사람을 위한 여유입니다. 예: 10이면 마감 뒤 10분까지 올라온 판을 받습니다." },
+      { k: "min_ms_per_dog", type: "int", ms: true, label: "한 마리당 최소 시간",
+        help: "이보다 빨리 깬 판은 사람이 낼 수 없는 기록으로 보고 받지 않습니다",
+        tip: "판 크기 × 이 값이 기준입니다. 예: 600이고 6×6 판이면 3.6초보다 빨리 깬 판을 받지 않습니다." },
+      { k: "suspect_ms_per_dog", type: "int", ms: true, label: "의심 표시 기준 · 한 마리당",
+        help: "이보다 빨리 깨면 받기는 하고 「빠름」 표시를 붙입니다",
+        tip: "판 크기 × 이 값이 기준입니다. 예: 1500이고 6×6 판이면 9초보다 빨리 깬 판에 표시가 붙습니다." },
+      { k: "slack_ms", type: "int", ms: true, label: "휴대폰 시계 오차 봐주기", help: "휴대폰 시계와 서버 시계가 이만큼 달라도 넘어갑니다" },
     ],
   },
   // 110. 서버 mailbox_send_rank_push가 enabled가 참일 때만 보낸다. 다른 설정과 달리 기본이 꺼짐이다.
   mailbox_rank_push: {
     title: "랭킹 보상 도착 푸시",
-    note: "켜면 매일 한국시간 12시 정산 뒤, 새 랭킹 보상(오늘 점수, 기록전, 숫자, 이벤트)을 받은 사람에게 서비스 안내 「우편함 / 랭킹 보상이 도착했어요.」를 앱 언어로 보냅니다. "
-      + "한 사람에게 하루 한 통이고 같은 보상으로는 다시 보내지 않습니다. 1.5.0 이상 앱으로 들어온 적이 있고 광고성 정보 알림을 켠 사람에게만 닿습니다. 기본은 꺼짐입니다.",
+    note: "켜면 매일 한국시간 12시에 랭킹 보상을 나눠 준 뒤, 새로 보상을 받은 사람에게 「우편함 / 랭킹 보상이 도착했어요.」 알림을 보냅니다. 처음에는 꺼져 있습니다.",
+    tip: "오늘 점수, 기록전, 숫자 퍼즐, 이벤트 보상이 모두 해당하고, 광고가 아닌 서비스 안내로 각자의 앱 언어에 맞춰 나갑니다. "
+      + "한 사람에게 하루 한 통이고, 같은 보상으로 두 번 보내지 않습니다. 1.5.0 이상 앱을 쓴 적이 있고 광고성 정보 알림을 켠 사람에게만 갑니다.",
     fields: [
       { k: "enabled", type: "bool", label: "랭킹 보상 도착 푸시 켜기", def: false },
     ],
@@ -4637,23 +4842,45 @@ function cfgEditor(key) {
   const fields = ed.fields.map((f) => {
     const v = cfgGet(cur, f.k);
     const id = `cfg_${key}_${f.k.replace(".", "_")}`;
+    const help = f.help ? `<div class="muted" style="font-size:12px;margin:-2px 0 6px">${esc(f.help)}</div>` : "";
     if (f.type === "bool") {
       // 서버 기본값이 참인 칸은 값이 없으면 켠 것으로 보인다. 기본이 꺼짐인 칸은 def: false로 적는다(110).
-      return `<label class="switch" style="margin:4px 8px 4px 0"><input type="checkbox" id="${id}" ${(v ?? f.def) === false ? "" : "checked"}><span>${esc(f.label)}</span></label>`;
+      return `<label class="switch" style="margin:4px 8px 4px 0"><input type="checkbox" id="${id}" ${(v ?? f.def) === false ? "" : "checked"}><span>${esc(f.label)}</span>${infoTip(f.tip)}</label>${help}`;
     }
+    // 「기본값 쓰기」 옆에 기본값이 무엇인지 적는다. 서버 기본값을 아는 칸(def)만.
+    const defName = f.def != null ? f.opts?.find(([x]) => x === f.def)?.[1] : null;
     const input = f.type === "select"
-      ? `<select id="${id}"><option value="">서버 기본값</option>${f.opts.map(([x, l]) =>
+      ? `<select id="${id}"${f.examples ? ` data-cfgex="${key}:${f.k}"` : ""}><option value="">${defName ? `기본값 쓰기 · ${esc(defName)}` : "기본값 쓰기"}</option>${f.opts.map(([x, l]) =>
           `<option value="${x}" ${String(v) === x ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>`
-      : `<input type="number" id="${id}" value="${v == null ? "" : esc(String(v))}" placeholder="서버 기본값" style="width:130px"${f.ms ? ` data-mstext="${id}_ms"` : ""}${f.onlyIf ? ` data-onlyif="cfg_${key}_${f.onlyIf[0]}" data-onlyval="${f.onlyIf[1]}"` : ""}>`;
+      : `<input type="number" id="${id}" value="${v == null ? "" : esc(String(v))}" placeholder="비우면 기본값" style="width:130px"${f.ms ? ` data-mstext="${id}_ms"` : ""}${f.onlyIf ? ` data-onlyif="cfg_${key}_${f.onlyIf[0]}" data-onlyval="${f.onlyIf[1]}" data-onlydef="${esc(CFG_EDITORS[key].fields.find((x) => x.k === f.onlyIf[0])?.def ?? "")}"` : ""}>`;
     // 단위가 ms인 칸은 옆에 「= 6시간」처럼 바꿔 보인다. 입력할 때마다 다시 쓴다.
     const conv = f.ms ? `<span class="muted" id="${id}_ms" style="min-width:70px">${v == null ? "" : "= " + esc(msText(v))}</span>` : "";
-    const help = f.help ? `<div class="muted" style="font-size:12px;margin:-2px 0 6px">${esc(f.help)}</div>` : "";
-    return `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:4px 0 0"><span style="min-width:min(260px,45vw)">${esc(f.label)}${f.ms ? ' <span class="muted" style="font-size:11px">(ms)</span>' : ""}</span>${input}${conv}</div>${help}`;
+    // 고른 값에 따라 바뀌는 예(숫자 퍼즐 「랭킹 점수 세는 법」). 처음 그릴 때도 지금 값으로 채운다.
+    const ex = f.examples ? `<div class="notice" style="font-size:12.5px;margin:0 0 8px">${f.exampleHead ? `<div class="muted" style="font-size:12px">${esc(f.exampleHead)}</div>` : ""}<div id="${id}_ex">${esc(cfgExample(f, v))}</div></div>` : "";
+    const unit = f.ms ? ' <span class="muted" style="font-size:11px">1000 = 1초</span>' : "";
+    return `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:4px 0 0"><span style="min-width:min(260px,45vw)">${esc(f.label)}${infoTip(f.tip)}${unit}</span>${input}${conv}</div>${help}${ex}`;
   }).join("");
-  return `<h2>${esc(ed.title)}</h2>
+  return `<h2>${esc(ed.title)}${infoTip(ed.tip)}</h2>
     <div class="notice">${esc(ed.note)}</div>
     <div class="toolbar" style="display:block">${fields}
       <div style="margin-top:8px"><button class="sm" data-cfgsave="${key}">저장</button></div></div>`;
+}
+
+/** 선택 칸 아래의 예. 빈 값(기본값 쓰기)은 기본값의 예를 보인다. */
+function cfgExample(f, v) {
+  const k = v || f.def;
+  const name = f.opts.find(([x]) => x === k)?.[1] ?? "";
+  const text = f.examples[k];
+  if (!text) return "";
+  return `${v ? "" : "기본값인 "}${name}: ${text}`;
+}
+
+/** 저장 확인 창에 보일 값. 빈 칸은 기본값, 켬·끔과 고른 이름은 화면 그대로 적는다. */
+function cfgShow(f, v) {
+  if (v === undefined) return "기본값";
+  if (f.type === "bool") return v ? "켬" : "끔";
+  if (f.type === "select") return f.opts.find(([x]) => x === v)?.[1] ?? String(v);
+  return f.ms ? `${fmt(v)} = ${msText(v)}` : fmt(v);
 }
 
 /** 화면 값을 읽어 지금 설정 위에 덮는다. 빈 칸은 키를 뺀다. */
@@ -4667,7 +4894,7 @@ function readCfgEditor(key) {
     if (f.type === "bool") v = el.checked;
     else if (el.value === "") v = undefined;
     else v = f.type === "int" ? Number(el.value) : el.value;
-    if (f.type === "int" && v !== undefined && !(Number.isInteger(v) && v >= 0)) throw new Error(`${f.label}: 0 이상의 정수여야 합니다`);
+    if (f.type === "int" && v !== undefined && !(Number.isInteger(v) && v >= 0)) throw new Error(`「${f.label}」에는 0 이상의 정수를 넣어 주세요. 소수점과 음수는 안 됩니다`);
     if (b) {
       out[a] = { ...(out[a] && typeof out[a] === "object" ? out[a] : {}) };
       if (v === undefined) delete out[a][b]; else out[a][b] = v;
@@ -4678,7 +4905,7 @@ function readCfgEditor(key) {
   // 서버는 기본값 위에 맨 위 키만 덮는다(daily_record_cfg·number_mode_cfg의 ||). min_build를 반쪽만 쓰면
   // 다른 쪽 기본값까지 사라지므로 둘을 함께 적거나 함께 비우게 한다.
   if (out.min_build && Object.keys(out.min_build).length !== 2) {
-    throw new Error("최소 빌드는 iOS와 Android를 함께 적거나 함께 비우세요. 서버가 min_build를 통째로 덮습니다");
+    throw new Error("iOS와 AOS 앱 최소 빌드 번호는 둘 다 적거나 둘 다 비워 주세요. 한쪽만 적으면 비운 쪽은 기본값 대신 아무 검사도 하지 않게 됩니다");
   }
   return out;
 }
@@ -4686,7 +4913,9 @@ function readCfgEditor(key) {
 async function saveCfgEditor(key) {
   let value;
   try { value = readCfgEditor(key); } catch (e) { alert(e.message); return; }
-  if (!confirm(`${CFG_EDITORS[key].title} 설정을 저장합니다. 앱은 다음 신호부터 따릅니다.\n\n${JSON.stringify(value, null, 1)}\n\n저장할까요?`)) return;
+  const ed = CFG_EDITORS[key];
+  const lines = ed.fields.map((f) => `· ${f.label}: ${cfgShow(f, cfgGet(value, f.k))}`).join("\n");
+  if (!confirm(`「${ed.title}」 설정을 저장합니다. 앱은 다음에 서버 설정을 읽을 때부터 따릅니다.\n\n${lines}\n\n저장할까요?`)) return;
   await act(() => rpc("admin_set_config", { p_key: key, p_value: value }), refresh);
 }
 
@@ -4705,7 +4934,7 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
 
   $("#app").innerHTML = `
     <div class="head">
-      <h1>🐾 DogPuzzle 관리자</h1>
+      <h1>DogPuzzle 관리자</h1>
       ${navBar()}
       <div class="spacer"></div>
       ${alertBell()}
@@ -4716,38 +4945,38 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     ${warn ? `<div class="notice">${esc(warn)}</div>` : ""}
     <div class="cards">
       <div class="card"><div class="label">전체 회원</div><div class="value">${fmt(S.members)}</div></div>
-      <div class="card"><div class="label">오늘 플레이</div><div class="value">${fmt(S.today_players)}</div></div>
-      <div class="card"><div class="label">오늘 최고점</div><div class="value">${Number(S.today_players) > 0 ? fmt(S.today_best) : "—"}</div></div>
-      <div class="card"><div class="label">누적 최고점</div><div class="value">${Number(S.members) > 0 ? fmt(S.total_best) : "—"}</div></div>
-      <div class="card"><div class="label">응원해 주신 분</div><div class="value">${fmt(S.supporters)}</div></div>
-      <div class="card"><div class="label">미수령 보상</div><div class="value">${fmt(S.unclaimed_rewards)}</div></div>
+      <div class="card"><div class="label">오늘 점수를 낸 사람</div><div class="value">${fmt(S.today_players)}</div></div>
+      <div class="card"><div class="label">오늘 최고 점수</div><div class="value">${Number(S.today_players) > 0 ? fmt(S.today_best) : "—"}</div></div>
+      <div class="card"><div class="label">누적 최고 점수</div><div class="value">${Number(S.members) > 0 ? fmt(S.total_best) : "—"}</div></div>
+      <div class="card"><div class="label">응원 상품을 산 사람</div><div class="value">${fmt(S.supporters)}</div></div>
+      <div class="card"><div class="label">아직 안 받아 간 보상</div><div class="value">${fmt(S.unclaimed_rewards)}</div></div>
     </div>
 
     ${TAB === "players" ? `
       <div class="toolbar">
-        <input type="search" id="q" placeholder="닉네임 또는 id 검색" value="${esc(QUERY)}">
+        <input type="search" id="q" placeholder="닉네임이나 회원 ID 앞부분으로 찾기" value="${esc(QUERY)}">
         ${PLAYER_FILTER ? `<span class="pill today" title="차트에서 누른 조건입니다">${esc(PLAYER_FILTER.label)}</span>
-          <button class="ghost sm" id="clearFilter">조건 해제</button>` : ""}
+          <button class="ghost sm" id="clearFilter">조건 풀고 전체 보기</button>` : ""}
         <select id="sort">
           <option value="total">누적 점수순</option>
           <option value="level">레벨 높은순</option>
           <option value="daily">오늘 점수순</option>
           <option value="coins">코인 많은순</option>
-          <option value="vs_wins">대전 승수순</option>
-          <option value="coop_wins">협동 승수순</option>
-          <option value="played">마지막 플레이순</option>
-          <option value="created">가입 최신순</option>
+          <option value="vs_wins">대전 많이 이긴 순</option>
+          <option value="coop_wins">협동 많이 이긴 순</option>
+          <option value="played">마지막으로 한 날 순</option>
+          <option value="created">가입한 때 순</option>
           <option value="username">닉네임순</option>
         </select>
-        <button class="sm" id="sortDir" title="오름차순과 내림차순을 바꿉니다">${DESC ? "내림차순 ↓" : "오름차순 ↑"}</button>
-        <span class="muted" style="font-size:12.5px">기준 ${today} (한국시간)</span>
+        <button class="sm" id="sortDir" title="큰 것부터 볼지 작은 것부터 볼지 바꿉니다">${DESC ? "큰 것부터 ↓" : "작은 것부터 ↑"}</button>
+        <span class="muted" style="font-size:12.5px">오늘은 한국시간 ${today}</span>
         <div style="flex:1"></div>
-        <button class="sm" id="grantAll">전체 보상 지급</button>
-        <button class="sm" id="pushSelected" title="체크한 회원에게 푸시 발송 창을 엽니다">선택 회원에게 푸시${SELECTED.size ? ` (${SELECTED.size})` : ""}</button>
-        <button class="danger sm" id="delSelected">선택 삭제${SELECTED.size ? ` (${SELECTED.size})` : ""}</button>
-        <button class="danger sm" id="resetAll">전체 점수 초기화</button>
-        <button class="danger sm" id="resetAllGames">전체 게임 초기화</button>
-        <button class="ghost sm" id="cancelResets">초기화 요청 취소</button>
+        <button class="sm" id="grantAll">모든 회원에게 보상 주기</button>
+        <button class="sm" id="pushSelected" title="체크한 회원에게 보낼 푸시 창을 엽니다">체크한 회원에게 푸시${SELECTED.size ? ` (${SELECTED.size})` : ""}</button>
+        <button class="danger sm" id="delSelected">체크한 회원 삭제${SELECTED.size ? ` (${SELECTED.size})` : ""}</button>
+        <button class="danger sm" id="resetAll" title="모든 회원의 점수나 대전 기록을 지웁니다">전체 점수 초기화</button>
+        <button class="danger sm" id="resetAllGames" title="모든 회원의 레벨, 코인, 아이템을 처음으로 돌립니다">전체 게임 초기화</button>
+        <button class="ghost sm" id="cancelResets" title="아직 앱을 안 켜서 적용 안 된 게임 초기화 요청을 거둡니다">게임 초기화 요청 거두기</button>
       </div>
       <div id="ptable">${playersTable()}</div>` : ""}
     ${TAB === "charts" ? chartsView(statsErr) : ""}
@@ -4769,10 +4998,10 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
   bindBell();
   const orphan = $("#cleanupOrphans");
   if (orphan) orphan.onclick = async () => {
-    if (!confirm("프로필 없이 24시간 넘게 남아 있는 익명 계정을 지웁니다.\n\n되돌릴 수 없습니다.")) return;
+    if (!confirm("회원 정보가 만들어지지 않은 채 24시간 넘게 남은 빈 계정을 지웁니다.\n\n되돌릴 수 없습니다.")) return;
     await act(async () => {
       const n = await rpc("admin_cleanup_orphan_users", { p_older_than_hours: 24 });
-      alert(`${n}개 계정을 정리했습니다`);
+      alert(`빈 계정 ${n}개를 지웠습니다`);
     }, refresh);
   };
   $("#logout").onclick = async () => { await sb.auth.signOut(); renderLogin(); };
@@ -4840,16 +5069,16 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
   if (TAB === "versus") {
     if ($("#purgeRooms")) {
       $("#purgeRooms").onclick = async () => {
-        if (!confirm("빈 방을 삭제하고, 30분 넘게 소식 없는 방을 닫습니다.\n\n진행 중인 방은 건드리지 않습니다.")) return;
+        if (!confirm("사람이 없는 방은 지우고, 30분 넘게 아무 움직임이 없는 방은 닫습니다.\n\n대전 중인 방은 건드리지 않습니다.")) return;
         await act(async () => {
           const n = await rpc("admin_purge_stale_rooms", { p_minutes: 30 });
-          alert(`${n}개를 정리했습니다`);
+          alert(`방 ${n}개를 정리했습니다`);
         }, refresh);
       };
     }
     document.querySelectorAll("[data-report-ok]").forEach((b) => {
       b.onclick = async () => {
-        const note = askReason("신고 확인 처리");
+        const note = askReason("신고를 문제없음으로 처리");
         if (note === null) return;
         await act(() => rpc("admin_resolve_report", {
           p_id: Number(b.dataset.reportOk), p_note: note, p_rename: false,
@@ -4858,7 +5087,7 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     });
     document.querySelectorAll("[data-report-rename]").forEach((b) => {
       b.onclick = async () => {
-        if (!confirm("이 회원의 닉네임을 임의값으로 바꿉니다.\n\n본인은 무료로 다시 정할 수 있습니다.")) return;
+        if (!confirm("신고당한 회원의 닉네임을 임의 이름으로 바꿉니다.\n\n본인은 코인 없이 다시 정할 수 있습니다.")) return;
         const note = askReason("닉네임 강제 변경");
         if (note === null) return;
         await act(() => rpc("admin_resolve_report", {
@@ -5003,15 +5232,21 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     if ($("#saveAnomaly")) $("#saveAnomaly").onclick = saveAnomalyThreshold;
     if ($("#saveApiUrl")) $("#saveApiUrl").onclick = saveApiUrl;
     document.querySelectorAll("[data-cfgsave]").forEach((b) => { b.onclick = () => saveCfgEditor(b.dataset.cfgsave); });
-    // 다른 선택에서만 쓰는 칸은 흐리게 한다(숫자 퍼즐 「더할 판 수」). 서버 기본값도 같이 따진다.
+    // 다른 선택에서만 쓰는 칸은 흐리게 한다(숫자 퍼즐 「③일 때 더할 판 수」). 「기본값 쓰기」면 서버 기본값으로 따진다.
     document.querySelectorAll("[data-onlyif]").forEach((el) => {
       const src = $("#" + el.dataset.onlyif);
       const sync = () => {
-        const cur = src.value || cfgGet(CONFIG?.number_mode || {}, "rank_basis") || "per_size";
+        const cur = src.value || el.dataset.onlydef;
         const on = cur === el.dataset.onlyval;
         el.disabled = !on; el.closest("div").style.opacity = on ? "1" : "0.45";
       };
       src.addEventListener("change", sync); sync();
+    });
+    // 고른 값에 따라 아래 예를 바꾼다(숫자 퍼즐 「랭킹 점수 세는 법」).
+    document.querySelectorAll("[data-cfgex]").forEach((el) => {
+      const [key, k] = el.dataset.cfgex.split(":");
+      const f = CFG_EDITORS[key].fields.find((x) => x.k === k);
+      el.addEventListener("change", () => { $("#" + el.id + "_ex").textContent = cfgExample(f, el.value); });
     });
     document.querySelectorAll("[data-mstext]").forEach((el) => {
       el.oninput = () => { const t = msText(el.value); $("#" + el.dataset.mstext).textContent = t ? "= " + t : ""; };
@@ -5155,8 +5390,8 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
  *  검색으로 걸러 놓고 전체 선택을 눌렀는데 안 보이는 사람까지 잡히면 사고가 난다. */
 function updatePickButtons() {
   const n = SELECTED.size ? ` (${SELECTED.size})` : "";
-  if ($("#delSelected")) $("#delSelected").textContent = `선택 삭제${n}`;
-  if ($("#pushSelected")) $("#pushSelected").textContent = `선택 회원에게 푸시${n}`;
+  if ($("#delSelected")) $("#delSelected").textContent = `체크한 회원 삭제${n}`;
+  if ($("#pushSelected")) $("#pushSelected").textContent = `체크한 회원에게 푸시${n}`;
 }
 
 function bindPicks() {
@@ -5257,12 +5492,12 @@ async function boot() {
   await loadAlerts();
 
   let warn = "";
-  if (perr) warn = "회원 조회 실패: " + perr.message;
-  else if (sumErr) warn = "요약 조회 실패: " + sumErr.message + " (092_admin_summary.sql을 실행했는지 확인하세요)";
+  if (perr) warn = "회원 목록을 불러오지 못했습니다. " + plainError(perr.message);
+  else if (sumErr) warn = "맨 위 요약 숫자를 불러오지 못했습니다. " + plainError(sumErr.message) + " · 개발 담당에게 전할 단서: 092_admin_summary.sql";
   else if (!SUMMARY) {
     // 관리자가 아니면 서버가 null을 돌려준다.
-    warn = "조회 결과가 비어 있습니다. 이 계정이 admins 테이블에 등록됐는지 확인하세요 " +
-           "(supabase_admin_access.sql 4번 항목).";
+    warn = "받아 온 내용이 비어 있습니다. 이 계정이 관리자로 등록되지 않았을 수 있습니다. " +
+           "개발 담당에게 전할 단서: admins 표, supabase_admin_access.sql 4번 항목";
   }
   render(warn, eerr, serr, nerr, perr2, aerr, vserr, cfgerr, sverr, pusherr, rkerr);
 }
