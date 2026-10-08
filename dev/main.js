@@ -4592,11 +4592,14 @@ const CFG_EDITORS = {
       { k: "enabled", type: "bool", label: "숫자 퍼즐 켜기" },
       { k: "min_build.ios", type: "int", label: "최소 빌드 iOS" },
       { k: "min_build.android", type: "int", label: "최소 빌드 Android" },
-      { k: "period", type: "select", label: "기간", opts: [["week", "주간 · 한국시간 월요일 마감"], ["day", "하루"]] },
-      { k: "rank_basis", type: "select", label: "순위 기준", opts: [["per_size", "판 크기별 최고 점수 합"], ["sum", "기간 점수 합"],
-                                                              ["best_n", "최고 n판 합"], ["day_best", "최고 한 판"]] },
-      { k: "best_n", type: "int", label: "최고 n판 합일 때 n" },
-      { k: "coin_pct", type: "int", label: "판 코인 비율 (%)" },
+      { k: "period", type: "select", label: "랭킹 기간", opts: [["week", "매주 (한국시간 월요일 0시 마감)"], ["day", "매일 (한국시간 0시 마감)"]],
+        help: "한 랭킹이 이어지는 기간입니다. 마감하면 순위대로 보상을 우편함으로 보냅니다" },
+      { k: "rank_basis", type: "select", label: "랭킹 점수 세는 법", opts: [["per_size", "판 크기마다 가장 잘한 판 하나씩 더하기"], ["sum", "깬 판 점수 모두 더하기"],
+                                                              ["best_n", "점수 높은 판 몇 개만 더하기"], ["day_best", "가장 잘한 판 하나만"]],
+        help: "기간 동안 깬 숫자 퍼즐 판으로 랭킹 점수를 만드는 방법입니다" },
+      { k: "best_n", type: "int", label: "더할 판 수", onlyIf: ["rank_basis", "best_n"],
+        help: "「점수 높은 판 몇 개만 더하기」일 때만 씁니다. 20이면 기간 중 점수 높은 20판만 더합니다" },
+      { k: "coin_pct", type: "int", label: "판 클리어 코인 비율 (%)", help: "숫자 퍼즐 판을 깨면 받는 코인에 곱합니다. 100이면 그대로, 50이면 절반입니다" },
       { k: "late_grace_min", type: "int", label: "마감 뒤 받는 유예(분)", help: "기간이 끝난 뒤에도 이 시간 안에 올라온 판은 받습니다" },
       { k: "min_ms_per_dog", type: "int", ms: true, label: "강아지 한 마리당 최소 시간", help: "판 크기 × 이 값보다 빨리 깬 판은 거절합니다" },
       { k: "suspect_ms_per_dog", type: "int", ms: true, label: "의심 표시 기준(한 마리당)", help: "판 크기 × 이 값보다 빠르면 거절하지 않고 「빠름」 표시만 붙입니다" },
@@ -4641,7 +4644,7 @@ function cfgEditor(key) {
     const input = f.type === "select"
       ? `<select id="${id}"><option value="">서버 기본값</option>${f.opts.map(([x, l]) =>
           `<option value="${x}" ${String(v) === x ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>`
-      : `<input type="number" id="${id}" value="${v == null ? "" : esc(String(v))}" placeholder="서버 기본값" style="width:130px"${f.ms ? ` data-mstext="${id}_ms"` : ""}>`;
+      : `<input type="number" id="${id}" value="${v == null ? "" : esc(String(v))}" placeholder="서버 기본값" style="width:130px"${f.ms ? ` data-mstext="${id}_ms"` : ""}${f.onlyIf ? ` data-onlyif="cfg_${key}_${f.onlyIf[0]}" data-onlyval="${f.onlyIf[1]}"` : ""}>`;
     // 단위가 ms인 칸은 옆에 「= 6시간」처럼 바꿔 보인다. 입력할 때마다 다시 쓴다.
     const conv = f.ms ? `<span class="muted" id="${id}_ms" style="min-width:70px">${v == null ? "" : "= " + esc(msText(v))}</span>` : "";
     const help = f.help ? `<div class="muted" style="font-size:12px;margin:-2px 0 6px">${esc(f.help)}</div>` : "";
@@ -5000,6 +5003,16 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     if ($("#saveAnomaly")) $("#saveAnomaly").onclick = saveAnomalyThreshold;
     if ($("#saveApiUrl")) $("#saveApiUrl").onclick = saveApiUrl;
     document.querySelectorAll("[data-cfgsave]").forEach((b) => { b.onclick = () => saveCfgEditor(b.dataset.cfgsave); });
+    // 다른 선택에서만 쓰는 칸은 흐리게 한다(숫자 퍼즐 「더할 판 수」). 서버 기본값도 같이 따진다.
+    document.querySelectorAll("[data-onlyif]").forEach((el) => {
+      const src = $("#" + el.dataset.onlyif);
+      const sync = () => {
+        const cur = src.value || cfgGet(CONFIG?.number_mode || {}, "rank_basis") || "per_size";
+        const on = cur === el.dataset.onlyval;
+        el.disabled = !on; el.closest("div").style.opacity = on ? "1" : "0.45";
+      };
+      src.addEventListener("change", sync); sync();
+    });
     document.querySelectorAll("[data-mstext]").forEach((el) => {
       el.oninput = () => { const t = msText(el.value); $("#" + el.dataset.mstext).textContent = t ? "= " + t : ""; };
     });
