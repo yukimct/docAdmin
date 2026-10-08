@@ -67,7 +67,7 @@
   .dl{font-size:.62em;font-weight:700;margin-left:4px;color:var(--dim);
       vertical-align:middle;white-space:nowrap}
   .head{display:flex;align-items:center;gap:var(--gap);margin-bottom:var(--gap);
-        flex-wrap:wrap;position:sticky;top:0;z-index:20;background:var(--bg);
+        flex-wrap:wrap;position:sticky;top:var(--env-h, 0px);z-index:20;background:var(--bg);
         padding:clamp(10px,1.8vw,16px) 0 clamp(9px,1.4vw,13px);
         border-bottom:1px solid var(--line)}
   .head .spacer{flex:1}
@@ -296,7 +296,7 @@
 
   /* ---------------------------------------------------------------- 조각 */
   /* 보상 안의 하위 탭 — 상단 메뉴(.nav)와 헷갈리지 않게 작고 납작하게 둔다. */
-  .subtabs{display:flex;gap:6px;margin:0 0 10px}
+  .subtabs{display:flex;gap:6px;margin:0 0 10px;flex-wrap:wrap}
   .subtabs button{background:var(--surface);color:var(--dim);
     border:1px solid var(--line-strong);border-radius:999px;padding:5px 12px;font-size:13px}
   .subtabs button:hover{color:var(--ink)}
@@ -451,6 +451,69 @@
   /* 휴대폰은 배지 자리에 띄우면 화면 밖으로 잘린다. 화면 아래쪽에 띠로 띄운다. */
   @media (max-width:720px){
     #tipBubble{left:12px !important;right:12px;bottom:12px;top:auto !important;width:auto;max-width:none;font-size:14px}
+  }
+
+  /* ---------------------------------------------------------------- 접는 칸 · 더 보기 · 0 숨기기
+     화면이 너무 길다는 요청(2026-10-08). 덩어리마다 머리 줄을 눌러 접고 펴고, 긴 표는 30줄씩 보이고,
+     값이 전부 0인 줄·칸·카드는 숨긴다. 만드는 곳은 main.js sec() · moreRows() · pruneZeros()다. */
+  details.sec{border-top:1px solid var(--line);margin-top:clamp(10px,1.6vw,16px)}
+  details.sec > summary{display:flex;align-items:center;gap:8px;flex-wrap:wrap;cursor:pointer;list-style:none;
+                        padding:clamp(10px,1.6vw,14px) 0 8px;user-select:none}
+  details.sec > summary::-webkit-details-marker{display:none}
+  /* 접힘 표시는 글자가 아니라 꺾쇠 그림이다. 펴면 아래를 본다. */
+  details.sec > summary::before{content:"";flex:0 0 auto;width:7px;height:7px;margin:0 4px 0 2px;
+                                border-right:2px solid var(--dim);border-bottom:2px solid var(--dim);
+                                transform:rotate(-45deg);transition:transform .15s}
+  details.sec[open] > summary::before{transform:rotate(45deg)}
+  details.sec > summary:hover h2,details.sec > summary:hover h3{color:var(--ink)}
+  details.sec > summary h2,details.sec > summary h3{margin:0;padding:0;border:0}
+  details.sec > summary .sec-note{font-size:12px;color:var(--dim);font-weight:600}
+  details.sec[open] > summary .sec-note{display:none}
+  details.sec > .sec-body{padding-bottom:6px}
+  details.sec.sub{border-top:1px dashed var(--line)}
+  /* 더 보기. 숨긴 줄은 그려 두고 가리기만 한다. 버튼을 다시 걸 필요가 없다. */
+  tr[data-mr-hide]{display:none}
+  .more-bar{display:flex;align-items:center;gap:10px;margin:8px 0 4px;flex-wrap:wrap}
+  /* 0뿐이라 숨긴 줄·칸·카드 */
+  [data-zh]{display:none !important}
+  /* 저장 버튼 줄. 설정이 길어도 화면 아래에 붙어 있게 한다. 자기 덩어리 안에서만 붙는다. */
+  .save-bar{position:sticky;bottom:0;z-index:6;background:var(--surface);
+            border-top:1px solid var(--line);padding:8px 0;margin-top:8px}
+  .toolbar.save-bar{border:1px solid var(--line);padding:calc(var(--pad-y) * .85) var(--pad-x)}
+  /* 운영 화면 오른쪽 아래 「개발 서버로 가기」 버튼에 저장 버튼이 가리지 않게 비운다. */
+  .env-btn .save-bar{padding-right:150px}
+  /* 업데이트·게임 설정의 칸 고르기, 차트·랭킹의 보기 고르기는 굴려도 머리 바로 아래에 남긴다.
+     폰은 머리가 두세 줄이라 이것까지 붙이면 화면이 반쯤 가려져 넓은 화면에서만 붙인다. */
+  @media (min-width:721px){
+    .subtabs.stick{position:sticky;top:calc(var(--env-h, 0px) + var(--head-h, 0px));z-index:15;
+                   background:var(--bg);padding:8px 0;margin-bottom:6px}
+  }
+  /* 회원 줄의 「관리」 메뉴. 표는 가로로 굴러가는 상자 안이라 메뉴를 그 안에 두면 잘린다.
+     body 끝에 하나만 두고 버튼 자리로 옮겨 띄운다. */
+  #rowMenu{position:fixed;z-index:60;display:none;min-width:190px;padding:6px;
+           background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+           box-shadow:0 10px 28px rgba(0,0,0,.18)}
+  #rowMenu.show{display:block}
+  #rowMenu .rm-head{font-size:12px;color:var(--dim);padding:4px 10px 6px;font-weight:700}
+  #rowMenu button{display:block;width:100%;text-align:left;background:transparent;color:var(--ink);border:0;
+                  border-radius:calc(var(--r) * .6);padding:8px 10px;font-size:var(--fs-sm);font-weight:600;min-height:0}
+  #rowMenu button:hover{background:var(--bg);filter:none}
+  #rowMenu button.danger{color:var(--danger)}
+  #rowMenu hr{border:0;border-top:1px solid var(--line);margin:4px 0}
+  @media (max-width:720px){
+    #rowMenu{left:12px !important;right:12px;top:auto !important;bottom:12px;max-height:70vh;overflow:auto}
+    #rowMenu button{padding:12px 10px;font-size:15px}
+  }
+  button .caret{opacity:.6;font-size:10px;margin-left:4px}
+  /* 회원 목록은 칸이 15개라 1440px 화면에서도 가로로 밀렸다(2026-10-08 측정 1,751px). 안여백을 줄이고,
+     머리글과 날짜·결제 칸은 줄을 감게 해서 1440px 안에 들어오게 한다. 닉네임 옆 알약도 이름 아래로 내려간다. */
+  table.members th,table.members td{padding-left:9px;padding-right:9px}
+  /* 줄 감기는 넓은 화면에서만 한다. 폰은 어차피 표를 옆으로 미는데, 감으면 줄 높이만 세 배가 됐다(측정 147px). */
+  @media (min-width:721px){
+    table.members th{white-space:normal;word-break:keep-all;vertical-align:bottom;line-height:1.35}
+    table.members td.wrap{white-space:normal;word-break:keep-all;min-width:5.5em}
+    table.members td.pin{white-space:normal;min-width:7em}
+    table.members td.pin .pill{white-space:nowrap;margin:2px 4px 2px 0}
   }
 
   /* ================================================================ 좁은 화면

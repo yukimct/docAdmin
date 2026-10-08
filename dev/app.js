@@ -48,9 +48,15 @@ const markEnv = () => {
     bar.append(label, go);
     document.body.prepend(bar);
     document.title = "[개발] " + document.title;
+    // 띠도 위에 붙어 있어서 그 아래에 붙는 머리(.head)가 띠에 가렸다. 띠 높이를 CSS에 알려 머리를 그만큼 내린다.
+    const syncH = () => document.documentElement.style.setProperty("--env-h", bar.offsetHeight + "px");
+    syncH();
+    if (window.ResizeObserver) new ResizeObserver(syncH).observe(bar);
   } else {
     go.style.cssText = "position:fixed;right:12px;bottom:12px;z-index:9999;background:#ede9fe;color:#5b21b6;border:1px solid #c4b5fd;border-radius:999px;padding:6px 12px;font-weight:700;font-size:12px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.12)";
     document.body.append(go);
+    // 저장 버튼 줄이 이 버튼에 가리지 않게 오른쪽을 비우는 표시(index.html .env-btn .save-bar).
+    document.body.classList.add("env-btn");
   }
 };
 // 모듈은 문서를 다 읽은 뒤에 돌 수도 있어서 두 경우를 다 받는다.

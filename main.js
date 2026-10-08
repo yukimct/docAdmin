@@ -172,6 +172,129 @@ document.addEventListener("pointerout", (e) => {
 document.addEventListener("scroll", hideTip, true);
 upgradeTips();
 
+// ------------------------------------------------------------------ 접는 칸 · 더 보기 · 0 숨기기 (2026-10-08)
+// 화면이 너무 길다는 요청으로 넣었다. 서버에 묻는 것은 하나도 바꾸지 않고 그리는 방식만 바꾼다.
+
+/** 기기에 적어 두는 화면 상태. 사생활 보호 창 등에서는 localStorage가 던지므로 늘 감싸고, 못 읽으면 기본값으로 그린다. */
+function loadStore(key, def) {
+  try { const v = JSON.parse(localStorage.getItem(key) || "null"); return v ?? def; } catch { return def; }
+}
+function saveStore(key, v) {
+  try { localStorage.setItem(key, JSON.stringify(v)); } catch { /* 못 적어도 이번 화면은 그대로 쓴다 */ }
+}
+
+/** 접는 칸이 열려 있는지(칸 이름 → 참·거짓). 적어 둔 적이 없는 칸은 sec()의 open 기본값을 따른다. */
+const SEC_STORE = "dogadm.sections";
+const SEC_OPEN = loadStore(SEC_STORE, {});
+
+/**
+ * 머리 줄을 눌러 접고 펴는 덩어리. id는 화면마다 겹치지 않는 이름이고, 열고 닫은 상태를 이 이름으로 기억한다.
+ * 접어도 안의 버튼·입력칸은 그대로 그려 두므로 버튼 배선과 저장 함수는 달라지지 않는다.
+ * note는 접혀 있을 때만 제목 옆에 보이는 짧은 글이다(예: 「3건」).
+ */
+function sec(id, title, body, { open = false, note = "", sub = false } = {}) {
+  const isOpen = id in SEC_OPEN ? SEC_OPEN[id] : open;
+  const head = sub ? `<h3 class="sub">${title}</h3>` : `<h2>${title}</h2>`;
+  return `<details class="sec${sub ? " sub" : ""}" data-sec="${esc(id)}"${isOpen ? " open" : ""}>`
+    + `<summary>${head}${note ? `<span class="sec-note">${note}</span>` : ""}</summary><div class="sec-body">${body}</div></details>`;
+}
+// toggle은 위로 전달되지 않아서 붙잡기 단계(capture)로 받는다. 화면을 다시 그려도 문서에 한 번만 건다.
+document.addEventListener("toggle", (e) => {
+  const d = e.target;
+  if (!(d instanceof HTMLDetailsElement) || !d.dataset.sec) return;
+  SEC_OPEN[d.dataset.sec] = d.open;
+  saveStore(SEC_STORE, SEC_OPEN);
+}, true);
+
+/** 긴 표는 처음에 30줄만 보이고 「더 보기」마다 30줄씩 더 보인다. 서버에서 받는 줄 수는 그대로다. */
+const MORE_STEP = 30;
+/** 표 이름 → 지금 보이는 줄 수. 버튼을 누른 뒤 화면을 다시 그려도 펼친 만큼 남긴다. 새로고침하면 처음으로. */
+const MORE_SHOWN = {};
+
+/** 줄 묶음(한 항목에 tr이 여럿일 수 있다)마다 번호를 달고, 보일 수를 넘는 것은 가린다. */
+function moreRows(key, items) {
+  const n = MORE_SHOWN[key] ?? MORE_STEP;
+  const k = esc(key);
+  return items.map((h, i) => h.replace(/<tr(?=[\s>])/g,
+    `<tr data-mr="${k}" data-mri="${i}"${i >= n ? " data-mr-hide" : ""}`)).join("");
+}
+function moreBarText(n, total) {
+  return [`더 보기 · ${fmt(Math.min(MORE_STEP, total - n))}줄 더`, `${fmt(Math.min(n, total))} / ${fmt(total)}줄 보는 중`];
+}
+/** 표 아래 「더 보기」 줄. 다 보이면 그리지 않는다. */
+function moreBar(key, total) {
+  const n = MORE_SHOWN[key] ?? MORE_STEP;
+  if (total <= n) return "";
+  const [b, s] = moreBarText(n, total);
+  return `<div class="more-bar"><button class="ghost sm" type="button" data-more="${esc(key)}" data-total="${total}">${b}</button>`
+    + `<span class="muted" style="font-size:12.5px">${s}</span></div>`;
+}
+document.addEventListener("click", (e) => {
+  const b = e.target.closest?.("[data-more]");
+  if (!b) return;
+  const key = b.dataset.more, total = Number(b.dataset.total) || 0;
+  const n = (MORE_SHOWN[key] ?? MORE_STEP) + MORE_STEP;
+  MORE_SHOWN[key] = n;
+  document.querySelectorAll("tr[data-mr]").forEach((tr) => {
+    if (tr.dataset.mr === key) tr.toggleAttribute("data-mr-hide", Number(tr.dataset.mri) >= n);
+  });
+  const bar = b.closest(".more-bar");
+  if (n >= total) bar.remove();
+  else { const [bt, st] = moreBarText(n, total); b.textContent = bt; bar.querySelector("span").textContent = st; }
+  syncPickAll();
+});
+
+/** 0이라 알려 주는 것이 없는 값인가. 1~9가 하나도 없으면 0이거나 값이 없다는 표시다. */
+const zeroish = (t) => !/[1-9]/.test(String(t));
+const EMPTY_LINE = '<div class="empty">아직 기록이 없어요</div>';
+
+/**
+ * 값이 전부 0인 것을 숨긴다(사용자 요청, 2026-10-08). 그린 뒤에 화면을 훑는다.
+ *   표: <table data-z="rows cols">. rows는 숫자 칸(td.num)이 모두 0인 줄을, cols는 모든 줄이 0인 숫자 칸을 숨긴다.
+ *       지금 세우는 기준 칸(th.on)과 data-keep을 단 머리글은 남긴다. 줄이 다 숨으면 표 대신 「아직 기록이 없어요」 한 줄.
+ *   카드: <div class="card" data-z>. 값이 0이면 숨긴다. 한 줄의 카드가 다 숨으면 「아직 기록이 없어요」 한 줄.
+ * data-z를 단 것만 본다. 오늘 숫자처럼 0이 뜻이 있는 카드에는 달지 않았다.
+ */
+function pruneZeros(root = document) {
+  root.querySelectorAll("table[data-z]").forEach((t) => {
+    const mode = t.dataset.z;
+    const heads = [...t.querySelectorAll(":scope > thead > tr > th")];
+    const rows = [...t.querySelectorAll(":scope > tbody > tr")];
+    if (mode.includes("rows")) {
+      rows.forEach((tr) => {
+        const nums = [...tr.children].filter((td) => td.matches("td.num"));
+        if (nums.length && nums.every((td) => zeroish(td.textContent))) tr.setAttribute("data-zh", "");
+      });
+    }
+    if (mode.includes("cols")) {
+      const full = rows.filter((tr) => !tr.hasAttribute("data-zh") && tr.children.length === heads.length);
+      heads.forEach((th, c) => {
+        if (!th.classList.contains("num") || th.classList.contains("on") || th.hasAttribute("data-keep")) return;
+        if (!full.length || !full.every((tr) => zeroish(tr.children[c].textContent))) return;
+        th.setAttribute("data-zh", "");
+        full.forEach((tr) => tr.children[c].setAttribute("data-zh", ""));
+      });
+    }
+    if (rows.length && rows.every((tr) => tr.hasAttribute("data-zh"))) {
+      (t.closest(".table-scroll") || t).outerHTML = EMPTY_LINE;
+    }
+  });
+  root.querySelectorAll(".card[data-z]").forEach((c) => {
+    if (zeroish(c.querySelector(".value")?.textContent ?? "")) c.setAttribute("data-zh", "");
+  });
+  root.querySelectorAll(".cards").forEach((g) => {
+    const cs = [...g.children];
+    if (cs.length && cs.every((c) => c.hasAttribute("data-zh"))) g.outerHTML = EMPTY_LINE;
+  });
+}
+
+/** 머리(.head) 높이를 CSS에 알린다. 붙는 하위 탭(.subtabs.stick)이 머리 바로 아래에 붙는다. */
+function syncHeadH() {
+  const h = document.querySelector(".head");
+  if (h) document.documentElement.style.setProperty("--head-h", h.offsetHeight + "px");
+}
+window.addEventListener("resize", syncHeadH);
+
 // ------------------------------------------------------------------ 로그인
 function renderLogin(msg) {
   $("#app").innerHTML = `
@@ -438,7 +561,8 @@ function pushDailyTable() {
       <td class="num">${d.failed ? `<span class="pill heart">${fmt(d.failed)}</span>` : "0"}</td>
       <td class="num">${pct(d.sent, d.sent + d.failed)}</td>
       <td class="num">${fmt(d.opens)}</td><td class="num">${pct(d.opens, d.sent)}</td></tr>`;
-  return `<div class="table-scroll"><table>
+  // 줄이 다 0이면 줄을, 칸이 다 0이면 칸을 숨긴다(pruneZeros).
+  return `<div class="table-scroll"><table data-z="rows cols">
     <thead><tr><th>날짜</th><th class="num">보낸 푸시</th><th class="num">닿은 기기</th>
       <th class="num">못 닿은 기기</th><th class="num">닿은 비율</th>
       <th class="num">눌러서 연 수</th><th class="num">연 비율</th></tr></thead>
@@ -497,6 +621,9 @@ function pushHoursView() {
  * 포인터를 올렸을 때 쓸 값은 data-lc에 JSON으로 실어 둔다. 짚는 코드는 아래 lcShow다.
  */
 function lineChart(labels, series, height = 160) {
+  // 보는 기간 내내 0인 선은 그리지 않는다(사용자 요청, 2026-10-08). 남는 선이 없으면 한 줄로 알린다.
+  series = series.filter((s) => s.values.some((v) => Number(v) !== 0 && v != null));
+  if (!series.length || !labels.length) return EMPTY_LINE;
   const W = 720, H = height, PAD = { t: 10, b: 6 };
   const ih = H - PAD.t - PAD.b;
   const n = labels.length;
@@ -684,6 +811,9 @@ document.addEventListener("pointercancel", lcHide);
 
 /** 가로 막대 — 구간별 인원처럼 항목이 몇 개 안 될 때. */
 function barChart(rows) {
+  // 0인 막대는 숨긴다(사용자 요청, 2026-10-08). 다 0이면 한 줄로 알린다.
+  rows = rows.filter((r) => Number(r.players) !== 0);
+  if (!rows.length) return EMPTY_LINE;
   const max = Math.max(1, ...rows.map((r) => r.players));
   // filter가 있는 줄은 누르면 그 회원들을 회원 목록에서 본다(098). 조건 값은 서버가 준 것을 그대로 싣는다.
   const pick = (r) => r.filter ? ` clickable" data-chartfilter="${esc(JSON.stringify(r.filter))}"`
@@ -754,8 +884,13 @@ function delta(now, before) {
   return `<span class="dl">${diff > 0 ? "▲" : "▼"}${Math.abs(pct)}%</span>`;
 }
 
+/** 「오늘 앱을 켠 사람」과 「오늘 판을 깬 사람」은 이름이 비슷해 헷갈렸다(2026-10-08). 두 카드가 같은 설명을 나눠 쓴다. */
+const TIP_APP_OPEN = "한국시간 오늘 앱을 한 번이라도 켠 사람 수입니다. 판을 하나도 안 깼어도 셉니다. 맨 위 「오늘 판을 깬 사람」은 오늘 판을 하나 이상 깨서 오늘 점수가 생긴 사람만 셉니다. 두 숫자는 기록하는 곳이 달라 정확히 포개지지 않습니다.";
+const TIP_BOARD_CLEAR = "한국시간 오늘 판을 하나 이상 깨서 오늘 점수가 0보다 큰 사람 수입니다. 앱만 켜고 판을 안 깬 사람은 세지 않습니다. 앱을 켠 사람 수는 차트 메뉴 맨 위 「오늘 앱을 켠 사람」에 있습니다.";
+
 // 차트 맨 위 카드의 설명 배지. 카드 이름으로 찾는다.
 const KPI_TIPS = {
+  "오늘 앱을 켠 사람": TIP_APP_OPEN,
   "다음 날 다시 온 비율": "가입한 다음 날에도 앱을 켠 사람의 비율입니다. 다음 날이 다 지난 가입일 중 가장 최근 날로 셉니다.",
   "오늘 늘어난 코인 · 번 것 − 쓴 것": "오늘 회원들이 번 코인에서 쓴 코인을 뺀 값입니다. 플러스면 코인이 쌓이고, 마이너스면 줄고 있습니다.",
   "쓴 코인 ÷ 번 코인 · 30일": "1에 가까울수록 번 만큼 씁니다. 0.5면 번 코인의 절반만 쓰고 나머지는 쌓인다는 뜻입니다.",
@@ -792,22 +927,23 @@ function chartsTab(err) {
   //   경제 — 코인이 도는가, 쌓이기만 하는가
   //   진행 — 어디까지 가고 어디서 그만두는가
   // 모든 창은 **30일로 맞췄다**(경제 건강 카드만 14일이었다).
+  // 덩어리 셋을 접는 칸으로 둔다(2026-10-08). 「사람」만 처음에 펴 둔다.
   return `
     ${kpiRow()}
-    <h2>사람</h2>
+    ${sec("charts.people", "사람", `
     <h3 class="sub">새로 가입한 사람 · 앱을 켠 사람 · 최근 30일</h3>
     ${lineChart(days, [
       { name: "새로 가입", color: "#17b3a8", values: STATS.map((r) => Number(r.signups)) },
       { name: "앱을 켠 사람", color: "#7aa2f7", values: STATS.map((r) => Number(r.active)) },
     ])}
     <h3 class="sub">다시 온 사람 · 가입한 날 기준</h3>
-    ${retentionTable()}
+    ${retentionTable()}`, { open: true })}
 
-    <h2>경제</h2>
+    ${sec("charts.economy", "경제", `
     ${ECON ? `
     <div class="cards">
-      <div class="card"><div class="label">번 코인 · 30일</div><div class="value">${fmt(ECON.earned)}</div></div>
-      <div class="card"><div class="label">쓴 코인 · 30일</div><div class="value">${fmt(ECON.spent)}</div></div>
+      <div class="card" data-z><div class="label">번 코인 · 30일</div><div class="value">${fmt(ECON.earned)}</div></div>
+      <div class="card" data-z><div class="label">쓴 코인 · 30일</div><div class="value">${fmt(ECON.spent)}</div></div>
       <div class="card"><div class="label">쓴 코인 ÷ 번 코인${infoTip(KPI_TIPS["쓴 코인 ÷ 번 코인 · 30일"])}</div>
         <div class="value" style="${sinkLow() ? "color:var(--danger)" : ""}">${sinkRatio() ?? "—"}</div></div>
     </div>
@@ -826,9 +962,9 @@ function chartsTab(err) {
           filter: r.sink_key ? { sink: r.sink_key, days: SINK_DAYS } : null,
           filterLabel: `최근 ${SINK_DAYS}일 「${r.sink}」에 코인을 쓴 회원`,
         })))
-      : `<div class="empty">아직 코인을 쓴 기록이 없습니다</div>`}
+      : `<div class="empty">아직 코인을 쓴 기록이 없습니다</div>`}`)}
 
-    <h2>진행</h2>
+    ${sec("charts.progress", "진행", `
     <h3 class="sub">레벨마다 도착한 사람 · 어디서 그만두는지</h3>
     <div class="muted" style="margin-bottom:6px">그 레벨까지 온 사람 수입니다. 오늘 깬 판까지 셉니다.</div>
     ${FUNNEL.length
@@ -844,7 +980,7 @@ function chartsTab(err) {
     <h3 class="sub">오늘 점수가 어느 구간에 몰려 있나 · 한국시간 오늘</h3>
     <div class="muted" style="margin-bottom:6px">오늘 점수를 낸 사람만 셉니다. 0점인 날은 기록이 없습니다.</div>
     ${DAILY_BUCKETS.some((r) => Number(r.players) > 0) ? barChart(scoreRows(DAILY_BUCKETS, "daily", "오늘 점수"))
-                           : `<div class="empty">오늘 점수를 낸 회원이 아직 없습니다</div>`}`;
+                           : `<div class="empty">오늘 점수를 낸 회원이 아직 없습니다</div>`}`)}`;
 }
 
 /** 점수 분포 막대. 0명인 구간은 숨기고(사용자 요청), 누르면 그 구간 회원을 본다.
@@ -878,7 +1014,8 @@ function retentionTable() {
     ? `${pct(Number(r[k]), Number(r.cohort))}
         <span class="muted">(${fmt(r[k])})</span>`
     : `<span class="muted" title="${n === 1 ? "다음 날이" : `${n}일째가`} 아직 안 지났습니다">—</span>`);
-  return `<div class="table-scroll"><table style="min-width:460px">
+  // 가입한 사람이 0인 날은 줄째 숨긴다(pruneZeros).
+  return `<div class="table-scroll"><table style="min-width:460px" data-z="rows">
     <thead><tr><th>가입한 날</th><th class="num">가입한 사람</th>
       <th class="num">다음 날 다시 온 비율</th><th class="num">7일째 다시 온 비율</th></tr></thead>
     <tbody>${RETENTION.map((r) => `<tr>
@@ -955,14 +1092,14 @@ function purchasesTab(err) {
     <div class="table-scroll"><table>
       <thead><tr><th>시각</th><th>회원</th><th>상품</th><th class="num">코인</th>
         <th class="num">금액</th><th>기기</th></tr></thead>
-      <tbody>${PAY_LEDGER.map((r) => `<tr>
+      <tbody>${moreRows("ledger", PAY_LEDGER.map((r) => `<tr>
         <td class="muted">${new Date(r.created_at).toLocaleString("ko-KR")}</td>
         <td>${esc(r.username || (r.profile_id || "").slice(0, 8) || "(삭제됨)")}</td>
         <td>${productName(r.product_id)}</td>
         <td class="num">${r.coins ? fmt(r.coins) : "—"}</td>
         <td class="num">${money(r.amount, r.currency)}</td>
         <td class="muted">${esc(PLATFORM_NAMES[r.store] || r.store)}</td>
-      </tr>`).join("")}</tbody></table></div>`;
+      </tr>`))}</tbody></table></div>${moreBar("ledger", PAY_LEDGER.length)}`;
 }
 
 // 공지가 앱에 보이는 방식(099). 작성 창 안내와 목록 위 안내가 같은 문장을 읽는다.
@@ -1059,7 +1196,7 @@ function pushTab(err) {
     ${!PUSHES.length ? `<div class="empty">보낸 푸시가 없습니다</div>` : `
     <div class="table-scroll"><table>
       <thead><tr><th>만든 때</th><th>제목</th><th>본문</th><th>받을 사람</th><th>나갈 시각</th><th>결과</th><th class="num">눌러서 연 수</th><th>관리</th></tr></thead>
-      <tbody>${PUSHES.map((m) => `<tr>
+      <tbody>${moreRows("push", PUSHES.map((m) => `<tr>
           <td class="muted">${when(m.created_at)}</td>
           <td>${PUSH_SOURCES[m.source] ? `<span class="pill warn" title="서버가 저절로 보낸 푸시입니다. 우편함에 따로 들어가지 않습니다">${PUSH_SOURCES[m.source]}</span> ` : ""}${m.kind === "notice" ? '<span class="pill">서비스 안내</span> ' : ""}${esc(m.title)}</td>
           <td class="muted long" style="max-width:320px">${esc(m.body)}${
@@ -1072,7 +1209,7 @@ function pushTab(err) {
           <td style="white-space:nowrap">${m.sent_at ? "" : `<button class="sm" data-editpush="${m.id}">고치기</button>
               <button class="danger sm" data-cancelpush="${m.id}">보내지 않기</button>`}
             <button class="ghost sm" data-copypush="${m.id}" title="받을 사람과 문구를 그대로 채운 새 보내기 창을 엽니다">같은 내용으로 새로</button></td>
-        </tr>`).join("")}</tbody></table></div>`}`;
+        </tr>`))}</tbody></table></div>${moreBar("push", PUSHES.length)}`}`;
 }
 
 // ------------------------------------------------------------------ 동작
@@ -2066,6 +2203,15 @@ async function loadConfig() {
  * ⚠️ **랭킹 목록은 100명까지만 내려간다.** 100등 넘게 주면 지급은 되지만
  * 앱 목록에서는 그 줄이 안 보인다.
  */
+/** 접힌 보상표 머리 옆에 붙는 짧은 요약. 「10등까지 · 1등 코인 1,000」. */
+function rewardNote(key) {
+  const cfg = CONFIG?.[key] && typeof CONFIG[key] === "object" ? CONFIG[key] : {};
+  const tiers = Array.isArray(cfg.tiers) ? cfg.tiers : [];
+  if (cfg.enabled === false) return "보상 꺼짐";
+  if (!tiers.length) return "기본 보상표";
+  return `${fmt(tiers[tiers.length - 1].to)}등까지 · 1등 코인 ${fmt(tiers[0].coins)}`;
+}
+
 function rankRewardEditor(key = "rank_rewards", label = "오늘 점수") {
   const cfg = CONFIG?.[key] && typeof CONFIG[key] === "object" ? CONFIG[key] : {};
   const tiers = Array.isArray(cfg.tiers) ? cfg.tiers : [];
@@ -2100,7 +2246,7 @@ function rankRewardEditor(key = "rank_rewards", label = "오늘 점수") {
       </tr></thead>
       <tbody class="tier-body">${body}</tbody>
     </table></div>
-    <div class="toolbar">
+    <div class="toolbar save-bar">
       <button class="sm tier-add">줄 추가</button>
       <div style="flex:1"></div>
       <button class="sm tier-save">저장</button>
@@ -2184,13 +2330,20 @@ function updateTab(err) {
       <td class="num"><input type="number" id="latest_${p}" value="${g("latest_version", p)}" style="width:90px"></td>
       <td><input type="text" id="url_${p}" value="${esc(url(p))}" placeholder="앱 스토어 페이지 주소" style="width:100%"></td>
     </tr>`;
-  return `
+  // 칸이 길어 하위 탭으로 나눴다(2026-10-08). 여섯 칸을 다 그려 두고 고른 칸만 보인다.
+  // 저장 버튼과 입력칸이 늘 문서에 있어서 저장 함수(saveVersions 등)와 배선은 예전 그대로다.
+  // 칸을 옮겨도 아직 저장하지 않은 입력이 사라지지 않는다.
+  const pane = (id, html) => `<div class="upd-pane" data-upd="${id}"${UPD_VIEW === id ? "" : " hidden"}>${html}</div>`;
+  const tabs = `<div class="subtabs stick">${UPD_VIEWS.map(([k, label]) =>
+    `<button type="button" class="${UPD_VIEW === k ? "on" : ""}" data-updview="${k}">${label}</button>`).join("")}</div>`;
+  return tabs + pane("ver", `
     <h2>앱 업데이트 요구</h2>
     <div class="notice">
       <b>업데이트 강제는 되돌리기 어렵습니다.</b>
       「꼭 있어야 하는 최소 빌드」를 지금 스토어에 나간 앱보다 높게 넣으면 <b>모든 사람이 앱을 못 씁니다.</b>
       새 버전이 스토어 심사를 통과해 내려받을 수 있게 된 뒤에 올리세요. 0이면 검사하지 않습니다.
     </div>
+    <div>
     <div class="table-scroll"><table style="min-width:640px">
       <thead><tr>
         <th>기기</th><th class="num">꼭 있어야 하는 최소 빌드${infoTip("이 번호보다 낮은 앱은 업데이트하기 전까지 쓸 수 없습니다. 0이면 검사하지 않습니다.")}</th>
@@ -2199,14 +2352,10 @@ function updateTab(err) {
       <tbody>${row("android", "AOS")}${row("ios", "iOS")}</tbody>
     </table></div>
     <div class="muted" style="font-size:12.5px;margin-top:6px">숫자는 빌드 번호입니다. 예: 1.5.1은 52${infoTip("빌드 번호는 앱을 스토어에 올릴 때마다 하나씩 붙는 숫자입니다. 사람이 읽는 1.5.1 같은 버전과 따로 셉니다.")}</div>
-    <div class="toolbar"><button class="sm" id="saveVersions">저장</button></div>
+    <div class="toolbar save-bar"><button class="sm" id="saveVersions">저장</button></div>
+    </div>
     <div class="muted" style="font-size:12.5px;margin-bottom:var(--gap)">1.5.0을 낼 때 할 일: 새 앱이 충분히 퍼지면 최소 빌드를 올려 1.4.4에 남은 오늘의 퍼즐 도구 사용 길을 닫습니다.
       이벤트 번호가 여섯 자리가 되기 전에도 올립니다.</div>
-
-    ${cfgEditor("daily_record")}
-    ${cfgEditor("level_mode")}
-    ${cfgEditor("number_mode")}
-    ${cfgEditor("mailbox_rank_push")}
 
     <h2>점검 모드</h2>
     ${maintenanceBanner()}
@@ -2240,8 +2389,12 @@ function updateTab(err) {
     <div class="muted" style="margin-top:-6px;font-size:12px">
       예약을 넣으면 그 시간 동안 앱이 알아서 점검 상태가 됩니다. 위 스위치를 켤 필요는 없습니다.
       <b>시각을 넣은 뒤 저장을 눌러야</b> 반영됩니다.
-    </div>
-
+    </div>`)
+    + pane("daily", cfgEditor("daily_record"))
+    + pane("number", cfgEditor("number_mode"))
+    + pane("level", cfgEditor("level_mode"))
+    + pane("notify", cfgEditor("mailbox_rank_push"))
+    + pane("etc", `
     <h2>서버 주소 옮기기</h2>
     <div class="notice">
       <b>평소에는 비워 두세요.</b> 서버를 다른 곳으로 옮길 때만 씁니다. 값을 넣으면 앱이 <b>다음에 켤 때부터</b> 그 주소로 접속합니다.
@@ -2259,8 +2412,14 @@ function updateTab(err) {
       <span class="muted">한 사람이 오늘 번 코인이 이 값 이상이면 「이상 징후」에 올립니다. 예: 3000이면 하루 3,000코인 이상 번 사람</span>
       <input type="number" id="anomalyTh" value="${Number(CONFIG?.anomaly_threshold ?? 3000)}" style="width:110px">
       <button class="sm" id="saveAnomaly">저장</button>
-    </div>`;
+    </div>`);
 }
+
+/** 업데이트·게임 설정의 하위 탭. 고른 칸은 기기에 적어 두고 다음에 열 때 그 칸부터 보인다. */
+const UPD_VIEWS = [["ver", "버전·점검"], ["daily", "기록전"], ["number", "숫자 퍼즐"], ["level", "레벨 판·코인"],
+                   ["notify", "알림"], ["etc", "기타"]];
+const UPD_STORE = "dogadm.updateView";
+let UPD_VIEW = (() => { const v = loadStore(UPD_STORE, "ver"); return UPD_VIEWS.some(([k]) => k === v) ? v : "ver"; })();
 
 /** 지금 점검이 걸려 있는지 한눈에. 스위치 하나만 보고는 "켠 건지 껐는지"를
  *  매번 다시 읽어야 했다(사용자 지적: "풀렸는지 안 풀렸는지 알 수가 없어").
@@ -2302,7 +2461,7 @@ function grantsTable() {
     : g.kind === "daily_time" ? fmtDur(g.record_value) : g.kind === "event" ? `${fmt(g.record_value)}판` : fmt(g.record_value);
   return `<div class="table-scroll"><table>
     <thead><tr><th>보상 보낸 날</th><th>랭킹</th><th>기간</th><th class="c fit">등수</th><th>닉네임</th><th class="num">기록</th><th>보상</th><th class="c">받았나</th></tr></thead>
-    <tbody>${GRANTS.map((g) => `<tr>
+    <tbody>${moreRows("grants", GRANTS.map((g) => `<tr>
       <td class="muted">${esc(fmtDate(g.created_at))}</td>
       <td>${esc(GRANT_KIND[g.kind] || g.kind)}</td>
       <td>${esc(g.kind === "event" ? `#${g.period_key} ${g.event_name || ""}` : g.kind === "number" ? numberPeriodLabel(g.period_key) : g.period_key)}</td>
@@ -2313,7 +2472,7 @@ function grantsTable() {
       <td class="c">${g.claimed_at ? `<span class="muted">받음 ${esc(fmtDate(g.claimed_at))}</span>`
         : g.claim_until && new Date(g.claim_until).getTime() <= now ? '<span class="pill heart" style="margin-left:0">기한 지남</span>'
         : `<span class="pill warn" style="margin-left:0">우편함에 있음</span>${g.claim_until ? `<div class="muted" style="font-size:11px">${esc(fmtDateTime(g.claim_until))}까지</div>` : ""}`}</td>
-    </tr>`).join("")}</tbody></table></div>`;
+    </tr>`))}</tbody></table></div>${moreBar("grants", GRANTS.length)}`;
 }
 /** 오늘 랭킹 화면. 077이 있어야 채워진다. */
 let RANKING = [], RANK_STATS = [], RANK_TOTAL = 0;
@@ -2357,7 +2516,7 @@ function rankingTab(err) {
 
   const days = RANK_STATS.map((r) => String(r.day).slice(5, 10));
   const charts = RANK_STATS.length ? `
-    <h3 class="sub">날마다 점수를 낸 사람</h3>
+    <h3 class="sub" style="margin-top:4px">날마다 점수를 낸 사람</h3>
     ${lineChart(days, [
       { name: "점수를 낸 사람", color: "#7aa2f7", values: RANK_STATS.map((r) => Number(r.players)) },
     ])}
@@ -2375,7 +2534,7 @@ function rankingTab(err) {
         <th class="num">누적 점수</th><th class="num">코인</th>
         <th>보상</th><th class="c fit">받았나</th>
       </tr></thead>
-      <tbody>${RANKING.map((r) => `<tr>
+      <tbody>${moreRows(`rank.today|${RANK_DATE}|${RANK_PAGE}`, RANKING.map((r) => `<tr>
         <td class="num fit">${r.rank}</td>
         <td>${esc(r.username || "— (탈퇴)")}
           ${r.supporter ? '<span class="pill heart">응원</span>' : ""}</td>
@@ -2389,7 +2548,7 @@ function rankingTab(err) {
         <td class="c fit">${r.reward_coins == null ? '<span class="muted">—</span>'
             : r.claimed ? '<span class="muted">받아 감</span>'
                         : '<span class="pill heart" title="아직 안 받았거나, 받을 기한이 지나 사라졌습니다">안 받음</span>'}</td>
-      </tr>`).join("")}</tbody></table></div>`
+      </tr>`))}</tbody></table></div>${moreBar(`rank.today|${RANK_DATE}|${RANK_PAGE}`, RANKING.length)}`
     : (RANK_SINCE && day < RANK_SINCE)
       ? `<div class="empty">${day}은 <b>기록을 남기기 전</b>입니다.
          날짜별 기록은 ${RANK_SINCE}부터 있습니다</div>`
@@ -2426,11 +2585,8 @@ function rankingTab(err) {
       <span class="muted">보는 날짜 ${day} · 한국시간</span>
     </div>
     ${cards}
-    ${charts}
-    <h2>점수를 낸 사람 · ${fmt(RANK_TOTAL)}명</h2>
-    ${paging}
-    ${rows}
-    ${paging}`;
+    ${sec("rank.today.charts", "날마다 점수를 낸 사람 · 최고 · 평균 · 최근 14일", charts)}
+    ${sec("rank.today.list", `점수를 낸 사람 · ${fmt(RANK_TOTAL)}명`, `${paging}${rows}${paging}`, { open: true })}`;
 }
 
 /**
@@ -2497,11 +2653,11 @@ function serverTab(err) {
       : `<div class="notice">빠진 파일이 없습니다. 서버가 최신입니다.</div>`}`
     : `<div class="empty">서버가 이 정보를 아직 주지 않습니다. 개발 담당에게 전할 단서: 052</div>`;
 
-  const audit = COIN_AUDIT.length ? `<div class="table-scroll"><table style="min-width:720px">
+  const audit = COIN_AUDIT.length ? `<div class="table-scroll"><table style="min-width:720px" data-z="cols">
       <thead><tr><th>닉네임</th><th class="num">앱이 알린 잔액</th><th class="num">기록으로 계산한 잔액</th>
         <th class="num">차이</th><th class="num">번 코인</th><th class="num">쓴 코인</th>
         <th class="num">받은 보상</th><th>가입한 날</th></tr></thead>
-      <tbody>${COIN_AUDIT.map((r) => `<tr>
+      <tbody>${moreRows("srv.audit", COIN_AUDIT.map((r) => `<tr>
         <td>${esc(r.username || "—")}</td>
         <td class="num">${fmt(r.actual)}</td>
         <td class="num">${fmt(r.expected)}</td>
@@ -2510,7 +2666,7 @@ function serverTab(err) {
         <td class="num">${fmt(r.spent)}</td>
         <td class="num">${fmt(r.granted)}</td>
         <td class="muted">${fmtDate(r.created_at)}</td>
-      </tr>`).join("")}</tbody></table></div>`
+      </tr>`))}</tbody></table></div>${moreBar("srv.audit", COIN_AUDIT.length)}`
     : `<div class="empty">잔액 차이가 큰 계정이 없습니다</div>`;
 
   // 065: 10등까지, 코인·아이템·수령 여부. 107 admin_rank_grants가 없는 서버에서만 쓰는 옛 표다.
@@ -2540,12 +2696,13 @@ function serverTab(err) {
       </tr>`).join("")}</tbody></table></div>`
     : `<div class="empty">만든 코드가 없습니다</div>`;
 
+  // 덩어리마다 접는 칸(2026-10-08). 맨 위 서버 업데이트 상태만 처음에 펴 둔다.
   return `
-    <h2>서버 업데이트 상태</h2>
+    ${sec("server.migrations", "서버 업데이트 상태", `
     <div class="muted" style="margin-bottom:6px">서버 구조를 바꾸는 파일이 몇 개 적용됐는지 봅니다. 빠진 파일이 있으면 개발 담당에게 알려 주세요.</div>
-    ${mig}
+    ${mig}`, { open: true, note: SRV ? `${fmt(SRV.applied)} / ${fmt(SRV.total)}` : "" })}
 
-    <h2>코인 잔액 맞춰 보기</h2>
+    ${sec("server.coinAudit", "코인 잔액 맞춰 보기", `
     <div class="muted" style="margin-bottom:6px">
       운영 → <b>이상 징후</b>에 같은 표가 다른 항목과 함께 있습니다.</div>
     <div class="notice">
@@ -2554,28 +2711,25 @@ function serverTab(err) {
       올라오거나 기기를 옮긴 직후에도 차이가 날 수 있어서 판단은 사람이 합니다.
       코인 기록은 30일만 남기므로 <b>가입한 지 오래된 계정일수록 차이가 크게 나옵니다.</b>
     </div>
-    ${audit}
+    ${audit}`, { note: `${fmt(COIN_AUDIT.length)}건` })}
 
-    <h2>랭킹 보상 설정</h2>
-    <div class="muted">랭킹 메뉴로 옮겼습니다. 오늘 점수, 오늘의 퍼즐 기록, 숫자 퍼즐 탭 아래에 각각 있습니다.</div>
-
-    <h2>최근에 나간 랭킹 보상</h2>
+    ${sec("server.grants", "최근에 나간 랭킹 보상", `
+    <div class="muted" style="font-size:12.5px;margin-bottom:6px">랭킹 보상 설정은 랭킹 메뉴로 옮겼습니다. 오늘 점수, 오늘의 퍼즐 기록, 숫자 퍼즐 탭 아래에 각각 있습니다.</div>
     <div class="toolbar">
       <select id="winnerDays">
         ${[7, 14, 30, 90].map((d) =>
           `<option value="${d}" ${d === WINNER_DAYS ? "selected" : ""}>최근 ${d}일</option>`).join("")}
       </select>
     </div>
-    ${GRANTS ? grantsTable() : winners}
+    ${GRANTS ? grantsTable() : winners}`)}
 
-    <h2>기기 옮기기 코드 · 최근 50건</h2>
-    ${transfers}
+    ${sec("server.transfers", "기기 옮기기 코드 · 최근 50건", transfers, { note: `${fmt(TRANSFERS.length)}건` })}
 
-    <h2>정리</h2>
+    ${sec("server.cleanup", "정리", `
     <div class="toolbar">
       <span class="muted">회원 정보가 만들어지지 않은 채 24시간 넘게 남은 빈 계정을 지웁니다. 남겨 두면 한 달 이용자 수가 부풀려집니다</span>
       <button class="danger sm" id="cleanupOrphans">빈 계정 정리</button>
-    </div>`;
+    </div>`)}`;
 }
 
 /** 지금 봐야 할 것들. 054의 admin_alerts가 개수만 세어 준다. */
@@ -2880,17 +3034,17 @@ function anomalyTab() {
       </tr>`).join("")}</tbody></table></div>`
     : `<div class="empty">오늘 ${fmt(th)}코인 넘게 번 계정이 없습니다</div>`;
 
-  const audit = COIN_AUDIT.length ? `<div class="table-scroll"><table style="min-width:640px">
+  const audit = COIN_AUDIT.length ? `<div class="table-scroll"><table style="min-width:640px" data-z="cols">
       <thead><tr><th>닉네임</th><th class="num">앱이 알린 잔액</th><th class="num">기록으로 계산한 잔액</th>
         <th class="num">차이</th><th class="num">번 코인</th><th class="num">쓴 코인</th></tr></thead>
-      <tbody>${COIN_AUDIT.map((r) => `<tr>
+      <tbody>${moreRows("anom.audit", COIN_AUDIT.map((r) => `<tr>
         <td>${esc(r.username || "—")}</td>
         <td class="num">${fmt(r.actual)}</td>
         <td class="num">${fmt(r.expected)}</td>
         <td class="num" style="color:var(--danger);font-weight:800">+${fmt(r.gap)}</td>
         <td class="num">${fmt(r.earned)}</td>
         <td class="num">${fmt(r.spent)}</td>
-      </tr>`).join("")}</tbody></table></div>`
+      </tr>`))}</tbody></table></div>${moreBar("anom.audit", COIN_AUDIT.length)}`
     : `<div class="empty">잔액이 어긋난 계정이 없습니다</div>`;
 
   return `
@@ -2900,13 +3054,13 @@ function anomalyTab() {
       ${card("처리 안 한 신고", openReports, "versus")}
       ${card("버려진 대전 방", stale, "versus")}
     </div>
-    <h2>오늘 코인을 ${fmt(th)}개 이상 번 계정</h2>
-    <div class="muted" style="margin-bottom:6px">기준 숫자는 운영 → 업데이트·게임 설정 맨 아래 「코인 급증 기준」에서 바꿉니다.</div>
-    ${anomalies}
-    <h2>잔액이 안 맞는 계정 · 막지 않고 보여 주기만</h2>
+    ${sec("anomaly.coins", `오늘 코인을 ${fmt(th)}개 이상 번 계정`, `
+    <div class="muted" style="margin-bottom:6px">기준 숫자는 운영 → 업데이트·게임 설정의 「기타」 칸 「코인 급증 기준」에서 바꿉니다.</div>
+    ${anomalies}`, { open: true, note: `${fmt(ANOMALIES.length)}건` })}
+    ${sec("anomaly.audit", "잔액이 안 맞는 계정 · 막지 않고 보여 주기만", `
     <div class="muted" style="margin-bottom:6px">
       앱이 알린 잔액이 기록으로 계산한 잔액보다 2,000 넘게 많은 계정입니다. 휴대폰 시계를 돌렸거나 결제를 취소한 경우가 섞였을 수 있습니다.</div>
-    ${audit}`;
+    ${audit}`, { note: `${fmt(COIN_AUDIT.length)}건` })}`;
 }
 
 /**
@@ -3092,8 +3246,8 @@ function versusTab(err) {
     ${roomsTable}
     ${reportsTable}
     <div class="cards">
-      <div class="card"><div class="label">30일 동안 한 판 수</div><div class="value">${fmt(totalMatches)}</div></div>
-      <div class="card"><div class="label">대전에 참여한 회원</div><div class="value">${fmt(VS_PLAYERS.length)}</div></div>
+      <div class="card" data-z><div class="label">30일 동안 한 판 수</div><div class="value">${fmt(totalMatches)}</div></div>
+      <div class="card" data-z><div class="label">대전에 참여한 회원</div><div class="value">${fmt(VS_PLAYERS.length)}</div></div>
     </div>
     <h2>날마다 판 수 · 참여한 사람 · 비긴 판</h2>
     ${versusDailyChart()}
@@ -3148,7 +3302,7 @@ function versusModesSection() {
   const chart = barChart(VS_MODES.map((r) => ({
     bucket: modeLabel(r.mode), players: Number(r.matches),
   })));
-  const table = `<div class="table-scroll"><table style="min-width:520px">
+  const table = `<div class="table-scroll"><table style="min-width:520px" data-z="rows cols">
     <thead><tr>
       <th>대전 방식</th><th class="num">판 수</th><th class="num">참여한 사람</th>
       <th class="num">비긴 판</th><th class="num">중간에 나간 판</th><th class="num">평균 시간</th>
@@ -3175,7 +3329,7 @@ function versusModesSection() {
  *  표 전체가 "undefined"로 덮인다. */
 function versusPlayersTable() {
   if (!VS_PLAYERS.length) return `<div class="empty">기록이 아직 없습니다</div>`;
-  return `<div class="table-scroll"><table style="min-width:820px">
+  return `<div class="table-scroll"><table style="min-width:820px" data-z="cols">
     <thead><tr>
       <th>닉네임</th><th class="num">판 수</th>
       <th class="num">이김</th><th class="num">짐</th><th class="num">비김</th>
@@ -3184,7 +3338,7 @@ function versusPlayersTable() {
       <th class="num">평균 등수</th><th class="num">끝까지 못 푼 판</th>
       <th class="num">가장 빠른 기록</th><th>마지막으로 한 날</th>
     </tr></thead>
-    <tbody>${VS_PLAYERS.map((r) => `<tr>
+    <tbody>${moreRows("vs.players", VS_PLAYERS.map((r) => `<tr>
       <td>${esc(r.username || "—")}</td>
       <td class="num">${fmt(r.played)}</td>
       <td class="num">${fmt(r.wins ?? r.firsts)}</td>
@@ -3197,7 +3351,7 @@ function versusPlayersTable() {
       <td class="num">${fmt(r.dnf)}</td>
       <td class="num">${r.best_ms ? (r.best_ms / 1000).toFixed(1) + "초" : "—"}</td>
       <td>${fmtDate(r.last_played)}</td>
-    </tr>`).join("")}</tbody></table></div>`;
+    </tr>`))}</tbody></table></div>${moreBar("vs.players", VS_PLAYERS.length)}`;
 }
 
 /**
@@ -3222,9 +3376,12 @@ function playersTable() {
     (p.username || "").toLowerCase().includes(q) ||
     (p.id || "").toLowerCase().startsWith(q)) : PLAYERS;
   if (!list.length) return `<div class="empty">해당하는 회원이 없습니다</div>`;
-  return `<div class="table-scroll"><table>
+  // 30줄씩 보이고(더 보기), 이 쪽에서 전부 0이거나 빈 숫자 칸은 숨긴다(2026-10-08).
+  // 쪽·기준·찾기·조건이 바뀌면 다른 목록이라 다시 30줄부터 보인다.
+  const key = `players|${PLAYER_PAGE}|${SORT}|${DESC}|${QUERY}|${PLAYER_FILTER ? PLAYER_FILTER.label : ""}`;
+  return `<div class="table-scroll"><table class="members" data-z="cols">
     <thead><tr>
-      <th class="nopin" style="width:34px"><input type="checkbox" id="pickAll"></th>
+      <th class="nopin" style="width:34px"><input type="checkbox" id="pickAll" title="지금 보이는 줄만 고릅니다"></th>
       <th class="num fit">#</th>
       ${th("username", "닉네임", "pin")}
       ${th("level", "레벨", "num")}
@@ -3239,7 +3396,7 @@ function playersTable() {
       ${th("created", "가입한 때")}
       <th class="c fit">푸시${infoTip("「받음」은 광고성 정보 알림을 켠 지 2년이 안 됐고, 알림 받을 휴대폰이 서버에 등록된 회원입니다. 이런 회원에게만 푸시가 닿습니다.")}</th>
       <th>관리</th>
-    </tr></thead><tbody>${list.map((p, i) => {
+    </tr></thead><tbody>${moreRows(key, list.map((p, i) => {
       const played = p.daily_date === today && (p.daily_score || 0) > 0;
       return `<tr>
         <td class="nopin"><input type="checkbox" data-pick="${p.id}" ${SELECTED.has(p.id) ? "checked" : ""}></td>
@@ -3259,34 +3416,28 @@ function playersTable() {
         <td class="num">${p.coop_played == null ? '<span class="muted">—</span>'
           : Number(p.coop_played) === 0 ? '<span class="muted">0</span>'
           : `${fmt(p.coop_wins)} / ${fmt(p.coop_played)}판`}</td>
-        <td class="num">${(() => {
+        <td class="num wrap">${(() => {
           const t = PAY_TOTALS[p.id];
-          return t ? `${money(t.revenue, t.currency)} <span class="muted">· ${t.orders}건</span>`
+          return t ? `${money(t.revenue, t.currency)} <span class="muted" style="white-space:nowrap">· ${t.orders}건</span>`
                    : '<span class="muted">—</span>';
         })()}</td>
         <td class="fit">${appVersionCell(p.id)}</td>
-        <td class="muted">${fmtDate(p.daily_date)}
+        <td class="muted wrap">${fmtDate(p.daily_date)}
           ${p.coins_at ? `<div class="muted" style="font-size:11px">마지막 접속 ${
             // daily_date와 같은 날이면 시:분만, 다른 날이면 날짜까지 적는다.
             fmtDate(p.coins_at) === fmtDate(p.daily_date) ? fmtTime(p.coins_at)
                                                           : fmtDateTime(p.coins_at)}</div>` : ""}</td>
-        <td class="muted">${fmtDateTime(p.created_at)}</td>
+        <td class="muted wrap">${fmtDateTime(p.created_at)}</td>
         <td class="c fit">${REACH === null ? '<span class="muted" title="푸시를 받을 수 있는 회원 목록을 못 읽었습니다">?</span>'
           : REACH[p.id] ? `<span class="pill today" title="알림 켠 날 ${esc(fmtDate(REACH[p.id].consented_at))} · 휴대폰 ${REACH[p.id].devices}대">받음</span>`
                           : '<span class="muted" title="광고성 알림을 켜지 않았거나, 켠 지 2년이 지났거나, 알림 받을 휴대폰이 등록되어 있지 않습니다">—</span>'}</td>
-        <td><div class="actions">
-          <button class="ghost sm" data-act="name" data-id="${p.id}">닉네임 바꾸기</button>
-          <button class="ghost sm" data-act="score" data-id="${p.id}">점수 고치기</button>
-          <button class="ghost sm" data-act="heart" data-id="${p.id}" title="이름 옆 응원 배지를 켜고 끕니다">응원 배지</button>
-          <button class="ghost sm" data-act="gift" data-id="${p.id}">보상 주기</button>
-          <button class="ghost sm" data-act="zero" data-id="${p.id}" title="오늘 점수와 누적 점수를 0으로 만듭니다">점수 0으로</button>
-          <button class="ghost sm" data-act="wipe" data-id="${p.id}" title="레벨, 코인, 아이템을 처음 상태로 돌립니다. 그 사람이 다음에 앱을 켤 때 적용됩니다">게임 초기화</button>
+        <td class="fit"><div class="actions" style="flex-wrap:nowrap">
           <button class="ghost sm" data-act="log" data-id="${p.id}">${OPEN_MEMBER === p.id ? "기록 접기" : "기록 보기"}</button>
-          <button class="ghost sm" data-act="testacct" data-id="${p.id}" title="시험 계정은 랭킹과 이벤트 순위에서 빠집니다">${TEST_SET.has(String(p.id)) ? "시험 계정 풀기" : "시험 계정으로"}</button>
-          <button class="danger sm" data-act="del" data-id="${p.id}">계정 삭제</button>
+          <button class="ghost sm" data-rowmenu="${p.id}" aria-haspopup="menu" aria-expanded="false"
+                  title="닉네임, 점수, 보상, 초기화, 삭제 같은 관리 작업">관리<span class="caret">▾</span></button>
         </div></td>
       </tr>` + (OPEN_MEMBER === p.id ? memberEventsRow() : "");
-    }).join("")}</tbody></table></div>` + playersPaging();
+    }))}</tbody></table></div>` + moreBar(key, list.length) + playersPaging();
 }
 
 /**
@@ -3332,7 +3483,7 @@ function memberEventsRow() {
            <td class="muted">${esc(PLATFORM_NAMES[e.platform] || e.platform || "")}</td>
          </tr>`).join("")}</tbody></table></div>`
     : `<div class="muted" style="font-size:12.5px">앱이 보낸 사용 기록이 없습니다</div>`);
-  return `<tr><td colspan="10" style="white-space:normal">${inner}</td></tr>`;
+  return `<tr><td colspan="15" style="white-space:normal">${inner}</td></tr>`;
 }
 
 // 앱이 보내는 사용 기록 이름(SupabaseManager.logEvent). 모르는 이름은 그대로 보인다.
@@ -3361,14 +3512,15 @@ function eventsTable(err) {
   if (!EVENTS.length) return `<div class="empty">아직 쌓인 앱 사용 기록이 없습니다. 앱이 기록을 보내기 시작하면 여기에 나타납니다.</div>`;
   const byDay = {};
   for (const e of EVENTS) (byDay[e.day] ??= []).push(e);
-  return Object.entries(byDay).map(([day, list]) => `
-    <h2>${day}</h2>
+  // 14일치가 한 화면에 늘어서 길었다(2026-10-08). 날마다 접는 칸이고 가장 최근 날만 펴 둔다.
+  // 칸 이름은 날짜가 아니라 위에서 몇 번째인지로 지어 기억이 날마다 쌓이지 않게 한다.
+  return Object.entries(byDay).map(([day, list], i) => sec(`events.day${i}`, esc(day), `
     <div class="table-scroll"><table style="min-width:420px">
       <thead><tr><th>한 일</th><th class="num">횟수</th><th class="num">사람 수</th></tr></thead>
       <tbody>${list.map((e) => `<tr>
         <td>${eventName(e.name)}</td><td class="num">${fmt(e.count)}</td><td class="num">${fmt(e.users)}</td>
       </tr>`).join("")}</tbody>
-    </table></div>`).join("");
+    </table></div>`, { open: i === 0, note: `${fmt(list.length)}가지` })).join("");
 }
 
 // 관리 기록의 작업 이름(admin_actions.action). 서버 admin_log를 부르는 곳의 이름과 짝이다. 모르는 이름은 그대로 보인다.
@@ -3415,12 +3567,12 @@ function auditTable(err) {
   </div>
   <div class="table-scroll"><table>
     <thead><tr><th>시각</th><th>한 일</th><th>대상 회원 ID</th><th>내용</th></tr></thead>
-    <tbody>${rows.map((a) => `<tr>
+    <tbody>${moreRows(`audit|${AUDIT_KIND}|${AUDIT_Q}`, rows.map((a) => `<tr>
       <td class="muted">${new Date(a.created_at).toLocaleString("ko-KR")}</td>
       <td>${esc(AUDIT_NAMES[a.action] || a.action)}</td>
       <td class="muted">${esc((a.target_id || "").slice(0, 8))}</td>
       <td class="muted long" style="max-width:520px">${auditDetail(a.detail)}</td>
-    </tr>`).join("")}</tbody></table></div>`;
+    </tr>`))}</tbody></table></div>${moreBar(`audit|${AUDIT_KIND}|${AUDIT_Q}`, rows.length)}`;
 }
 
 /**
@@ -4040,6 +4192,8 @@ function dayBars(days, height = 170) {
   const ih = H - PAD.t - PAD.b;
   const n = days.length;
   if (!n) return '<div class="empty">이 기간에 기록이 없습니다</div>';
+  // 기간 내내 0이면 빈 축 대신 한 줄로 알린다(2026-10-08). 날짜 축은 줄이지 않는다. 빠진 날이 있으면 흐름이 틀려 보인다.
+  if (days.every((d) => !(Number(d.participants) || 0) && (d.bars || []).every((b) => !(Number(b.n) || 0)))) return EMPTY_LINE;
   const first = days[0].bars || [];
   const total = (d) => Number(d.bars?.[0]?.n) || 0;
   const parts = (d) => (d.bars || []).slice(1);
@@ -4086,10 +4240,12 @@ function dayBars(days, height = 170) {
   }).join("");
 
   // 말풍선 줄: 참여자, 전체, 갈래. 짚는 점은 참여자 선 하나뿐이라 lc-pt도 하나다(lcShow는 점 k에 series[k]를 쓴다).
+  // 갈래 중 기간 내내 0인 것은 범례와 말풍선에서 뺀다. 참여자(0번)는 짚는 점과 짝이라 남긴다.
   const series = [
     { name: "참여자", color: PLAY_COLORS.participants, values: days.map(ppl) },
     { name: first[0]?.label ?? "전체", color: "var(--line-strong)", values: days.map(total) },
-    ...first.slice(1).map((b, k) => ({ name: b.label, color: color(b.key, k), values: days.map((d) => Number(d.bars?.[k + 1]?.n) || 0) })),
+    ...first.slice(1).map((b, k) => ({ name: b.label, color: color(b.key, k), values: days.map((d) => Number(d.bars?.[k + 1]?.n) || 0) }))
+      .filter((s) => s.values.some((v) => v)),
   ];
   const rows = series.map((s) =>
     `<div class="lc-row"><i style="background:${s.color}"></i><span>${esc(s.name)}</span><b></b></div>`).join("");
@@ -4122,13 +4278,15 @@ function playDayTable(days) {
   const heads = (days[0].bars || []).map((b) => `<th class="num">${esc(b.label)}</th>`).join("");
   const body = [...days].reverse().map((d) => `<tr><td>${esc(d.day)}</td><td class="num">${fmt(d.participants)}</td>${
     (d.bars || []).map((b) => `<td class="num">${playLink(b, `${lcShortDate(d.day)} ${b.label}`)}</td>`).join("")}</tr>`).join("");
-  return `<div class="table-scroll" style="margin-top:8px;max-height:320px;overflow-y:auto"><table>
+  return `<div class="table-scroll" style="margin-top:8px;max-height:320px;overflow-y:auto"><table data-z="rows cols">
     <thead><tr><th>날짜</th><th class="num">참여자</th>${heads}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
 /** 가로 막대 묶음. 막대를 누르면 원본 표를 그 갈래로 거른다. */
 function playBars(list, prefix = "") {
-  if (!list?.length) return '<div class="empty">아직 없습니다</div>';
+  // 0인 막대는 숨긴다(2026-10-08). 다 0이거나 없으면 한 줄로 알린다.
+  list = (list || []).filter((b) => Number(b?.n) || 0);
+  if (!list.length) return EMPTY_LINE;
   const max = Math.max(1, ...list.map((b) => Number(b.n) || 0));
   return `<div class="bars">${list.map((b) => {
     const v = Number(b.n) || 0, label = prefix ? `${prefix}: ${b.label}` : b.label;
@@ -4143,6 +4301,8 @@ function playBars(list, prefix = "") {
 /** 시간대(한국시간 시작 시각) 24칸. 칸을 누르면 그 시간에 시작한 기록만 거른다. */
 function playHours(list) {
   if (!list?.length) return "";
+  // 24칸은 시각 축이라 0인 칸도 남긴다. 다 0일 때만 한 줄로 알린다.
+  if (list.every((b) => !(Number(b.n) || 0))) return EMPTY_LINE;
   const max = Math.max(1, ...list.map((b) => Number(b.n) || 0));
   return `<div class="hour-bars">${list.map((b) => {
     const v = Number(b.n) || 0;
@@ -4157,7 +4317,7 @@ function playMistakeTable(rows, sizeLabel = (s) => `${s}×${s}`) {
   if (!rows?.length) return "";
   const heads = (rows[0].buckets || []).map((b) => `<th class="num">실수 ${esc(b.label)}</th>`).join("");
   const extra = "boards" in rows[0];
-  return `<div class="table-scroll"><table>
+  return `<div class="table-scroll"><table data-z="rows cols">
     <thead><tr><th>판 크기</th>${extra ? '<th class="num">판 수</th><th class="num">판마다 실수</th>' : ""}${heads}</tr></thead>
     <tbody>${rows.map((r) => `<tr><td>${esc(sizeLabel(r.size))}</td>${extra
       ? `<td class="num">${fmt(r.boards)}</td><td class="num">${r.avg_misses == null ? "—" : esc(String(r.avg_misses))}</td>` : ""}${
@@ -4178,7 +4338,8 @@ function playCards(cards, names = {}) {
     const bar = c && typeof c === "object" && "filter" in c;
     const label = names[k] || (bar ? c.label : k);
     const value = bar ? fmt(c.n) : c == null ? "—" : fmt(Number(c));
-    return `<div class="card${bar && Number(c.n) ? " click" : ""}"${bar && Number(c.n) ? playAttr(c, label) : ""}>
+    // 0이거나 값이 없는 카드는 숨긴다(pruneZeros). 다 숨으면 「아직 기록이 없어요」 한 줄.
+    return `<div class="card${bar && Number(c.n) ? " click" : ""}" data-z${bar && Number(c.n) ? playAttr(c, label) : ""}>
       <div class="label">${esc(label)}</div><div class="value">${value}</div></div>`;
   }).join("")}</div>`;
 }
@@ -4227,6 +4388,7 @@ function playRowsTable(labels) {
   const cell = (c) => (String(c).startsWith("<td") ? `${c}</td>` : `<td>${c}</td>`);
   const head = cols.head.map((h) => (Array.isArray(h) ? `<th class="${h[1]}">${h[0]}</th>` : `<th>${h}</th>`)).join("");
   const pages = Math.max(1, Math.ceil(PLAY_TOTAL / PLAY_SIZE));
+  const playKey = `play|${CHART_VIEW}|${PLAY_EVENT}|${PLAY_DAYS}|${PLAY_PAGE}|${PLAY_FILTER ? JSON.stringify(PLAY_FILTER.arg) : ""}`;
   const chip = PLAY_FILTER
     ? `<span class="pill today" style="margin-left:0">${esc(PLAY_FILTER.label)}</span><button class="ghost sm" id="playClear">조건 풀기</button>`
     : '<span class="muted" style="font-size:12.5px">위의 막대나 숫자를 누르면 그에 해당하는 판만 여기에 거릅니다</span>';
@@ -4238,7 +4400,7 @@ function playRowsTable(labels) {
     </div>
     ${PLAY_ROWS_ERR ? loadFail("판 하나하나의 기록을 불러오지 못했습니다.", PLAY_ROWS_ERR, "sql/migrations/107_admin_records.sql")
       : PLAY_ROWS.length ? `<div class="table-scroll"><table><thead><tr>${head}</tr></thead>
-        <tbody>${PLAY_ROWS.map((r) => `<tr>${cols.row(r).map(cell).join("")}</tr>`).join("")}</tbody></table></div>
+        <tbody>${moreRows(playKey, PLAY_ROWS.map((r) => `<tr>${cols.row(r).map(cell).join("")}</tr>`))}</tbody></table></div>${moreBar(playKey, PLAY_ROWS.length)}
         ${pages > 1 ? `<div class="toolbar" style="margin-top:8px">
           <button class="ghost sm" id="playPrev" ${PLAY_PAGE ? "" : "disabled"}>이전</button>
           <span class="muted">${PLAY_PAGE + 1} / ${pages}쪽</span>
@@ -4279,7 +4441,7 @@ function playTab() {
       ${playBars([...(R.placed?.bars || []).map((b) => ({ ...b, label: `${b.label}마리` })), R.placed?.unknown].filter(Boolean), "놓은 강아지")}
       <h3 class="sub">끝난 까닭</h3>${playBars(R.end_reasons, "끝난 까닭")}
       <h3 class="sub">걸린 시간 · 성공한 기록만</h3>${playBars(R.time?.buckets, "걸린 시간")}
-      ${(R.time?.by_weekday || []).length ? `<div class="table-scroll" style="margin-top:8px"><table>
+      ${(R.time?.by_weekday || []).length ? `<div class="table-scroll" style="margin-top:8px"><table data-z="rows">
         <thead><tr><th>요일</th><th class="num">성공</th><th class="num">빠른 쪽 25%${infoTip("성공한 사람 중 빠른 쪽 4분의 1이 이 시간 안에 들어옵니다.")}</th><th class="num">가운데${infoTip("성공한 사람을 시간 순으로 세웠을 때 가운데 사람의 시간입니다.")}</th><th class="num">느린 쪽 25%${infoTip("성공한 사람의 4분의 3이 이 시간 안에 들어옵니다. 이보다 느린 사람이 4분의 1입니다.")}</th></tr></thead>
         <tbody>${R.time.by_weekday.map((w) => `<tr><td>${LC_WEEK[w.weekday]}</td><td class="num">${playLink(w.bar, `${LC_WEEK[w.weekday]}요일 성공`)}</td>
           <td class="num">${w.p25 == null ? "—" : fmtDur(w.p25)}</td><td class="num">${w.p50 == null ? "—" : fmtDur(w.p50)}</td>
@@ -4296,7 +4458,7 @@ function playTab() {
       ${dayBars(R.daily || [])}${playDayTable(R.daily || [])}
       <div class="muted" style="font-size:12px;margin-top:6px">「끝나지 않음」은 시작했다는 알림만 온 판입니다. 숫자 퍼즐은 날이 지나도 이어 풀 수 있어서 그만둔 것으로 보지 않습니다.</div>
       <h3 class="sub">판 크기마다 성공한 비율</h3>
-      ${(R.sizes || []).length ? `<div class="table-scroll"><table>
+      ${(R.sizes || []).length ? `<div class="table-scroll"><table data-z="rows">
         <thead><tr><th>판 크기</th><th class="num">전체</th><th class="num">성공</th><th class="num">성공 비율</th></tr></thead>
         <tbody>${R.sizes.map((z) => `<tr><td>${esc(z.all?.label ?? z.size)}</td><td class="num">${playLink(z.all, `${z.all?.label} 전체`)}</td>
           <td class="num">${playLink(z.cleared, `${z.cleared?.label} 성공`)}</td><td class="num">${pct(Number(z.cleared?.n) || 0, Number(z.all?.n) || 0)}</td></tr>`).join("")}</tbody></table></div>` : ""}
@@ -4329,12 +4491,24 @@ function playTab() {
       <h3 class="sub">받지 않은 까닭 · 인터넷 없이 · 주의 표시</h3>${playBars(R.exclusions, "받지 않음 · 주의 표시")}
       <h3 class="sub">몇 시에 시작했나</h3>${playHours(R.hours)}`;
   }
-  return head + body + playRowsTable(labels);
+  return head + subSecs(`play.${CHART_VIEW}`, body) + playRowsTable(labels);
+}
+
+/**
+ * 보기 하나의 작은 제목(h3.sub)마다 접는 칸으로 나눈다(2026-10-08). 첫 제목 앞(카드)은 그대로 두고,
+ * 첫 칸(날마다 그래프)만 펴 둔다. 칸 이름은 보기와 순서로 짓는다.
+ */
+function subSecs(prefix, html) {
+  const parts = html.split('<h3 class="sub">');
+  return parts[0] + parts.slice(1).map((p, i) => {
+    const cut = p.indexOf("</h3>");
+    return sec(`${prefix}.${i}`, p.slice(0, cut), p.slice(cut + 5), { sub: true, open: i === 0 });
+  }).join("");
 }
 
 /** 차트 메뉴. 맨 위 하위 탭으로 지금 차트(전체)와 새 보기 셋을 오간다. */
 function chartsView(statsErr) {
-  const tabs = `<div class="subtabs">${CHART_VIEWS.map(([k, label]) =>
+  const tabs = `<div class="subtabs stick">${CHART_VIEWS.map(([k, label]) =>
     `<button class="${CHART_VIEW === k ? "on" : ""}" data-chartview="${k}">${label}</button>`).join("")}</div>`;
   return tabs + (CHART_VIEW === "all" ? chartsTab(statsErr) : playTab());
 }
@@ -4391,7 +4565,8 @@ function liveRankingBox() {
         : `<span class="muted" style="font-size:12.5px">${LE_RANK_REFRESH_MS / 1000}초마다 순위 표만 새로 받습니다. 마지막으로 받은 때 ${esc(fmtTime(new Date(LE_RANK_AT).toISOString()))}</span>`)
     : "";
   const pages = Math.max(1, Math.ceil(LE_RANK_TOTAL / LE_RANK_SIZE));
-  const rows = LE_RANK.map((r) => {
+  const leKey = `lerank|${LE_OPEN}|${LE_RANK_PAGE}`;
+  const rows = moreRows(leKey, LE_RANK.map((r) => {
     const x = r.extra || {};
     return `<tr>
       <td class="num fit">${r.rank == null ? '<span class="muted">—</span>' : r.rank}</td>
@@ -4410,12 +4585,12 @@ function liveRankingBox() {
       <td>${esc(fmtDateTime(r.achieved_at))}</td>
       <td>${r.profile_id && !r.excluded_at ? `<button class="danger sm" data-le-exclude="${esc(r.profile_id)}" data-name="${esc(r.username || "")}">순위에서 빼기</button>` : ""}</td>
     </tr>`;
-  }).join("");
+  }));
   return `<h2>#${e.id} ${esc(e.name_ko)} 순위</h2>
     <div class="cards">
-      <div class="card"><div class="label">참여한 사람</div><div class="value">${fmt(e.participants)}</div></div>
-      <div class="card"><div class="label">순위에 든 사람</div><div class="value">${fmt(e.ranked)}</div></div>
-      <div class="card"><div class="label">산책 횟수</div><div class="value">${fmt(e.runs)}</div></div>
+      <div class="card" data-z><div class="label">참여한 사람</div><div class="value">${fmt(e.participants)}</div></div>
+      <div class="card" data-z><div class="label">순위에 든 사람</div><div class="value">${fmt(e.ranked)}</div></div>
+      <div class="card" data-z><div class="label">산책 횟수</div><div class="value">${fmt(e.runs)}</div></div>
       <div class="card"><div class="label">${e.settled_at ? "보낸 보상 · 받아 감" : "보상"}</div><div class="value">${e.settled_at ? `${fmt(e.grants)} · ${fmt(e.claimed)}` : "보내기 전"}</div></div>
       ${live ? `<div class="card"><div class="label">끝날 때까지</div><div class="value">${fmtSpan(new Date(e.effective_end) - Date.now())}</div></div>` : ""}
     </div>
@@ -4424,10 +4599,10 @@ function liveRankingBox() {
       <button class="ghost sm" id="leRankClose">순위 접기</button></div>
     <div class="muted" style="font-size:12px;margin-bottom:6px">등수가 없는 줄은 한 판도 못 걸었거나, 순위에서 뺐거나, 시험 계정입니다. 보상은 이벤트가 끝나면 우편함으로 가고, 보낸 날부터 ${RANK_CLAIM_DAYS}일 안에 받아야 합니다.</div>
     ${LE_RANK_ERR ? loadFail("순위를 불러오지 못했습니다.", LE_RANK_ERR, "sql/migrations/103_live_events.sql")
-      : LE_RANK.length ? `<div class="table-scroll"><table>
+      : LE_RANK.length ? `<div class="table-scroll"><table data-z="cols">
         <thead><tr><th class="num fit">등수</th><th>닉네임</th><th class="num">걸은 판 수</th><th class="num">보탠 뼈${infoTip("산책 중 쉼터에서 사거나 이어 걷기로 더 받은 뼈다귀 수입니다. 걸은 판 수가 같으면 이 값이 적은 사람이 앞입니다.")}</th><th class="num">이어 걷기</th>
           <th class="num">산책 시간</th><th class="num">산책 횟수</th><th>주의 표시</th><th>순위에서 뺌</th><th>보상</th><th class="c">받았나</th><th>기기 · 빌드</th><th>기록 낸 때</th><th></th></tr></thead>
-        <tbody>${rows}</tbody></table></div>
+        <tbody>${rows}</tbody></table></div>${moreBar(leKey, LE_RANK.length)}
         ${pages > 1 ? `<div class="toolbar" style="margin-top:8px">
           <button class="ghost sm" id="leRankPrev" ${LE_RANK_PAGE ? "" : "disabled"}>이전</button>
           <span class="muted">${LE_RANK_PAGE + 1} / ${pages}쪽 · ${fmt(LE_RANK_TOTAL)}명</span>
@@ -4440,6 +4615,7 @@ function redrawLiveRanking() {
   const box = $("#leRankBox");
   if (!box) return;
   box.innerHTML = liveRankingBox();
+  pruneZeros(box);
   bindLiveRanking();
 }
 
@@ -4590,9 +4766,9 @@ function numberPeriodChoices() {
 /** 시험 계정 표. 랭킹 세 탭 맨 아래에 같은 것을 둔다. */
 function testAccountsSection() {
   if (TEST_ACCOUNTS === null) {
-    return `<h2>시험 계정</h2>${loadFail("시험 계정 목록을 불러오지 못했습니다.", "", "sql/migrations/107_admin_records.sql")}`;
+    return sec("rank.tests", "시험 계정", loadFail("시험 계정 목록을 불러오지 못했습니다.", "", "sql/migrations/107_admin_records.sql"));
   }
-  return `<h2>시험 계정 · ${fmt(TEST_ACCOUNTS.length)}명</h2>
+  return sec("rank.tests", `시험 계정 · ${fmt(TEST_ACCOUNTS.length)}명`, `
     <div class="muted" style="font-size:12.5px;margin-bottom:6px">시험 계정은 오늘 점수, 기록전, 숫자 퍼즐 랭킹과 이벤트 순위에서 빠지고, 푸시를 순위 조건으로 보낼 때도 빠집니다.
       차트에서는 「시험 계정도 세기」를 켜야 셉니다. 지정은 회원 목록의 「시험 계정으로」 버튼으로 합니다.</div>
     ${TEST_ACCOUNTS.length ? `<div class="table-scroll"><table>
@@ -4602,7 +4778,7 @@ function testAccountsSection() {
         <td class="long">${esc(t.reason || "")}</td>
         <td>${esc(fmtDateTime(t.created_at))}</td>
         <td><button class="ghost sm" data-testoff="${esc(t.profile_id)}" data-name="${esc(t.username || "")}">시험 계정 풀기</button></td>
-      </tr>`).join("")}</tbody></table></div>` : '<div class="empty">시험 계정이 없습니다</div>'}`;
+      </tr>`).join("")}</tbody></table></div>` : '<div class="empty">시험 계정이 없습니다</div>'}`);
 }
 
 /** 시험 계정 지정·해제. 지정은 사유가 필수다(서버 admin_set_test_account). */
@@ -4642,7 +4818,8 @@ function recordRankingTab() {
     : `숫자 퍼즐 한 기간의 순위입니다. 기간과 랭킹 점수 세는 법은 운영 → 업데이트·게임 설정의 숫자 퍼즐 칸을 따릅니다.${per ? ` 지금 보는 기간: ${esc(numberPeriodLabel(per))}` : ""}`;
   const rec = (r) => (kind === "daily_time" ? (r.value == null ? "—" : fmtDur(r.value)) : r.value == null ? "—" : fmt(r.value));
   const pages = Math.max(1, Math.ceil(REC_TOTAL / REC_SIZE));
-  const rows = REC_ROWS.map((r) => `<tr>
+  const recKey = `rank.rec|${kind}|${REC_PERIOD}|${REC_PAGE}`;
+  const rows = moreRows(recKey, REC_ROWS.map((r) => `<tr>
       <td class="num fit">${r.rank == null ? '<span class="muted">—</span>' : r.rank}</td>
       <td>${r.profile_id ? `<button class="plink" data-member="${esc(r.profile_id)}">${esc(r.username || String(r.profile_id).slice(0, 8))}</button>` : '<span class="muted">탈퇴</span>'}${
         r.test_account ? '<span class="pill dim">시험 계정</span>' : ""}</td>
@@ -4657,7 +4834,7 @@ function recordRankingTab() {
       <td>${rewardText(r)}</td>
       <td class="c">${claimPill(r.claim_state)}</td>
       <td>${r.profile_id && r.status !== "excluded" ? `<button class="danger sm" data-rec-exclude="${esc(r.profile_id)}" data-name="${esc(r.username || "")}">순위에서 빼기</button>` : ""}</td>
-    </tr>`).join("");
+    </tr>`));
   return `
     <div class="notice">${how}
       랭킹이 마감되면 보상이 <b>우편함</b>으로 가고, 보낸 날부터 ${RANK_CLAIM_DAYS}일 안에 받아야 합니다. 아직 보상을 보내기 전인 줄의 「받을 보상」은 지금 보상표로 계산한 예상입니다.</div>
@@ -4665,20 +4842,19 @@ function recordRankingTab() {
       <div style="flex:1"></div>
       <button class="ghost sm" id="recStats" title="차트 메뉴에서 이 기간의 판 하나하나를 봅니다">차트로 보기</button>
     </div>
-    <h2>${esc(label)} 참가자 · ${fmt(REC_TOTAL)}명</h2>
+    ${sec(`rank.${kind}.list`, `${esc(label)} 참가자 · ${fmt(REC_TOTAL)}명`, `
     ${REC_ERR ? loadFail("랭킹을 불러오지 못했습니다.", REC_ERR, "sql/migrations/107_admin_records.sql")
       : REC_ROWS.length ? `<div class="table-scroll"><table>
         <thead><tr><th class="num fit">등수</th><th>닉네임</th><th class="num">${kind === "daily_time" ? "기록" : "점수"}</th>
           <th class="num">${kind === "daily_time" ? "실수" : "점수에 든 판 / 전체 판"}</th><th class="c">상태</th><th>빠진 까닭</th><th>주의 표시</th><th>기기 · 빌드</th>
           ${kind === "daily_time" ? "<th>시작 방식</th>" : ""}<th>${kind === "daily_time" ? "올라온 시각" : "마지막으로 올라온 때"}</th><th>받을 보상</th><th class="c">받았나</th><th></th></tr></thead>
-        <tbody>${rows}</tbody></table></div>
+        <tbody>${rows}</tbody></table></div>${moreBar(recKey, REC_ROWS.length)}
         ${pages > 1 ? `<div class="toolbar" style="margin-top:8px">
           <button class="ghost sm" id="recPrev" ${REC_PAGE ? "" : "disabled"}>이전</button>
           <span class="muted">${REC_PAGE + 1} / ${pages}쪽</span>
           <button class="ghost sm" id="recNext" ${REC_PAGE + 1 < pages ? "" : "disabled"}>다음</button></div>` : ""}`
-      : '<div class="empty">이 기간에 기록이 없습니다</div>'}
-    <h2>${esc(label)} 보상</h2>
-    ${rankRewardEditor(`rank_rewards_${kind}`, label)}
+      : '<div class="empty">이 기간에 기록이 없습니다</div>'}`, { open: true })}
+    ${sec(`rank.${kind}.reward`, `${esc(label)} 보상`, rankRewardEditor(`rank_rewards_${kind}`, label), { note: rewardNote(`rank_rewards_${kind}`) })}
     ${testAccountsSection()}`;
 }
 
@@ -4706,10 +4882,11 @@ async function excludeFromRecordRanking(profileId, name) {
 
 /** 랭킹 메뉴. 맨 위 하위 탭으로 오늘 점수와 기록 랭킹 둘을 오간다. */
 function rankingView(err) {
-  const tabs = `<div class="subtabs">${RANK_VIEWS.map(([k, label]) =>
+  const tabs = `<div class="subtabs stick">${RANK_VIEWS.map(([k, label]) =>
     `<button class="${RANK_VIEW === k ? "on" : ""}" data-rankview="${k}">${label}</button>`).join("")}</div>`;
   if (RANK_VIEW !== "today") return tabs + recordRankingTab();
-  return tabs + rankingTab(err) + `<h2>오늘 점수 보상</h2>${rankRewardEditor("rank_rewards", "오늘 점수")}` + testAccountsSection();
+  return tabs + rankingTab(err) + sec("rank.today.reward", "오늘 점수 보상", rankRewardEditor("rank_rewards", "오늘 점수"),
+    { note: rewardNote("rank_rewards") }) + testAccountsSection();
 }
 
 // ------------------------------------------------------------------ 설정: 오늘의 퍼즐 기록전 · 숫자 퍼즐 (101·102)
@@ -4863,7 +5040,7 @@ function cfgEditor(key) {
   return `<h2>${esc(ed.title)}${infoTip(ed.tip)}</h2>
     <div class="notice">${esc(ed.note)}</div>
     <div class="toolbar" style="display:block">${fields}
-      <div style="margin-top:8px"><button class="sm" data-cfgsave="${key}">저장</button></div></div>`;
+      <div class="save-bar"><button class="sm" data-cfgsave="${key}">저장</button></div></div>`;
 }
 
 /** 선택 칸 아래의 예. 빈 값(기본값 쓰기)은 기본값의 예를 보인다. */
@@ -4945,11 +5122,11 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     ${warn ? `<div class="notice">${esc(warn)}</div>` : ""}
     <div class="cards">
       <div class="card"><div class="label">전체 회원</div><div class="value">${fmt(S.members)}</div></div>
-      <div class="card"><div class="label">오늘 점수를 낸 사람</div><div class="value">${fmt(S.today_players)}</div></div>
+      <div class="card"><div class="label">오늘 판을 깬 사람${infoTip(TIP_BOARD_CLEAR)}</div><div class="value">${fmt(S.today_players)}</div></div>
       <div class="card"><div class="label">오늘 최고 점수</div><div class="value">${Number(S.today_players) > 0 ? fmt(S.today_best) : "—"}</div></div>
       <div class="card"><div class="label">누적 최고 점수</div><div class="value">${Number(S.members) > 0 ? fmt(S.total_best) : "—"}</div></div>
-      <div class="card"><div class="label">응원 상품을 산 사람</div><div class="value">${fmt(S.supporters)}</div></div>
-      <div class="card"><div class="label">아직 안 받아 간 보상</div><div class="value">${fmt(S.unclaimed_rewards)}</div></div>
+      <div class="card" data-z><div class="label">응원 상품을 산 사람</div><div class="value">${fmt(S.supporters)}</div></div>
+      <div class="card" data-z><div class="label">아직 안 받아 간 보상</div><div class="value">${fmt(S.unclaimed_rewards)}</div></div>
     </div>
 
     ${TAB === "players" ? `
@@ -4994,6 +5171,10 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     ${TAB === "audit" ? auditTable(auditErr) : ""}
     ${TAB === "server" ? serverTab(serverErr) : ""}`;
 
+  // 0뿐인 줄·칸·카드를 숨기고, 붙는 하위 탭이 머리 아래에 오게 머리 높이를 알린다(2026-10-08).
+  pruneZeros($("#app"));
+  syncHeadH();
+  closeRowMenu();
   $("#refresh").onclick = refresh;
   bindBell();
   const orphan = $("#cleanupOrphans");
@@ -5226,6 +5407,15 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
   }
 
   if (TAB === "update" && $("#saveVersions")) {
+    // 하위 탭은 그리기를 다시 하지 않고 보이는 칸만 바꾼다. 입력하던 값이 남는다.
+    document.querySelectorAll("[data-updview]").forEach((b) => {
+      b.onclick = () => {
+        UPD_VIEW = b.dataset.updview;
+        saveStore(UPD_STORE, UPD_VIEW);
+        document.querySelectorAll("[data-updview]").forEach((x) => x.classList.toggle("on", x === b));
+        document.querySelectorAll(".upd-pane").forEach((p) => { p.hidden = p.dataset.upd !== UPD_VIEW; });
+      };
+    });
     $("#saveVersions").onclick = saveVersions;
     if ($("#saveMaint")) $("#saveMaint").onclick = saveMaintenance;
     if ($("#saveMaintSched")) $("#saveMaintSched").onclick = saveMaintenance;
@@ -5394,22 +5584,29 @@ function updatePickButtons() {
   if ($("#pushSelected")) $("#pushSelected").textContent = `체크한 회원에게 푸시${n}`;
 }
 
+/** 지금 눈에 보이는 줄의 체크박스. 「더 보기」로 가린 줄은 빼야 안 보이는 회원이 같이 골라지지 않는다. */
+const visiblePicks = () => [...document.querySelectorAll("[data-pick]")].filter((b) => !b.closest("tr[data-mr-hide]"));
+function syncPickAll() {
+  const all = $("#pickAll");
+  if (!all) return;
+  const boxes = visiblePicks();
+  all.checked = boxes.length > 0 && boxes.every((x) => x.checked);
+}
+
 function bindPicks() {
-  const boxes = [...document.querySelectorAll("[data-pick]")];
-  boxes.forEach((b) => {
+  document.querySelectorAll("[data-pick]").forEach((b) => {
     b.onchange = () => {
       if (b.checked) SELECTED.add(b.dataset.pick);
       else SELECTED.delete(b.dataset.pick);
       updatePickButtons();
-      const all = $("#pickAll");
-      if (all) all.checked = boxes.length > 0 && boxes.every((x) => x.checked);
+      syncPickAll();
     };
   });
   const all = $("#pickAll");
   if (all) {
-    all.checked = boxes.length > 0 && boxes.every((x) => x.checked);
+    syncPickAll();
     all.onchange = () => {
-      boxes.forEach((b) => {
+      visiblePicks().forEach((b) => {
         b.checked = all.checked;
         if (all.checked) SELECTED.add(b.dataset.pick);
         else SELECTED.delete(b.dataset.pick);
@@ -5419,16 +5616,79 @@ function bindPicks() {
   }
 }
 
+const ROW_HANDLERS = {
+  name: editName, score: editScores, heart: toggleSupporter, gift: openGrant,
+  zero: resetScores, wipe: requestGameReset, del: removePlayer, log: toggleMember,
+  testacct: (id) => setTestAccount(id, !TEST_SET.has(String(id))),
+};
+
 function bindRowActions() {
-  const handlers = {
-    name: editName, score: editScores, heart: toggleSupporter, gift: openGrant,
-    zero: resetScores, wipe: requestGameReset, del: removePlayer, log: toggleMember,
-    testacct: (id) => setTestAccount(id, !TEST_SET.has(String(id))),
-  };
   document.querySelectorAll("[data-act]").forEach((b) => {
-    b.onclick = () => handlers[b.dataset.act](b.dataset.id);
+    b.onclick = () => ROW_HANDLERS[b.dataset.act](b.dataset.id);
   });
 }
+
+// ------------------------------------------------------------------ 회원 줄의 「관리」 메뉴 (2026-10-08)
+// 버튼 아홉 개가 줄마다 늘어서 1568px 화면에서도 표가 76px 넘쳤다. 「기록 보기」만 남기고 나머지는 메뉴로 모았다.
+// 표는 가로로 굴러가는 상자 안이라 메뉴를 그 안에 두면 잘린다. body 끝에 하나만 두고 버튼 자리로 옮겨 띄운다.
+// 폰에서는 화면 아래 띠로 띄운다(index.html #rowMenu).
+
+/** [작업, 이름, 설명, 위험한가]. 설명은 메뉴에 마우스를 올리면 보인다. */
+function rowMenuItems(id) {
+  const test = TEST_SET.has(String(id));
+  return [
+    ["name", "닉네임 바꾸기", ""],
+    ["score", "점수 고치기", ""],
+    ["heart", "응원 배지", "이름 옆 응원 배지를 켜고 끕니다"],
+    ["gift", "보상 주기", ""],
+    ["testacct", test ? "시험 계정 풀기" : "시험 계정으로", "시험 계정은 랭킹과 이벤트 순위에서 빠집니다"],
+    null,
+    ["zero", "점수 0으로", "오늘 점수와 누적 점수를 0으로 만듭니다", true],
+    ["wipe", "게임 초기화", "레벨, 코인, 아이템을 처음 상태로 돌립니다. 그 사람이 다음에 앱을 켤 때 적용됩니다", true],
+    ["del", "계정 삭제", "", true],
+  ];
+}
+
+let ROW_MENU_FOR = null;
+function closeRowMenu() {
+  const m = document.getElementById("rowMenu");
+  if (m) m.classList.remove("show");
+  document.querySelectorAll("[data-rowmenu][aria-expanded=true]").forEach((b) => b.setAttribute("aria-expanded", "false"));
+  ROW_MENU_FOR = null;
+}
+function openRowMenu(btn) {
+  const id = btn.dataset.rowmenu;
+  let m = document.getElementById("rowMenu");
+  if (!m) { m = document.createElement("div"); m.id = "rowMenu"; m.setAttribute("role", "menu"); document.body.append(m); }
+  const who = findPlayer(id)?.username || id.slice(0, 8);
+  m.innerHTML = `<div class="rm-head">${esc(who)}</div>` + rowMenuItems(id).map((x) => (x
+    ? `<button type="button" role="menuitem" class="${x[3] ? "danger" : ""}" data-menuact="${x[0]}"${x[2] ? ` title="${esc(x[2])}"` : ""}>${esc(x[1])}</button>`
+    : "<hr>")).join("");
+  m.querySelectorAll("[data-menuact]").forEach((b) => {
+    b.onclick = (e) => { e.stopPropagation(); closeRowMenu(); ROW_HANDLERS[b.dataset.menuact](id); };
+  });
+  m.classList.add("show");
+  ROW_MENU_FOR = id;
+  btn.setAttribute("aria-expanded", "true");
+  // 버튼 바로 아래, 오른쪽 끝을 맞춘다. 아래가 모자라면 위로 띄운다. 폰은 CSS가 아래 띠로 고정한다.
+  const r = btn.getBoundingClientRect(), w = m.offsetWidth, h = m.offsetHeight;
+  m.style.left = `${Math.max(8, Math.min(r.right - w, window.innerWidth - 8 - w))}px`;
+  m.style.top = `${r.bottom + 4 + h > window.innerHeight - 8 && r.top - 4 - h > 8 ? r.top - 4 - h : r.bottom + 4}px`;
+  m.querySelector("button")?.focus({ preventScroll: true });
+}
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest?.("[data-rowmenu]");
+  if (btn) {
+    e.stopPropagation();
+    if (ROW_MENU_FOR === btn.dataset.rowmenu) closeRowMenu(); else openRowMenu(btn);
+    return;
+  }
+  if (!e.target.closest?.("#rowMenu")) closeRowMenu();
+});
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && ROW_MENU_FOR) closeRowMenu(); });
+// 넓은 화면의 메뉴는 버튼 자리에 붙어 있어서 화면을 굴리면 떨어진다. 굴리면 닫는다. 폰의 아래 띠는 그대로 둔다.
+document.addEventListener("scroll", () => { if (ROW_MENU_FOR && !matchMedia("(max-width:720px)").matches) closeRowMenu(); }, true);
+window.addEventListener("resize", () => { if (ROW_MENU_FOR) closeRowMenu(); });
 
 // **await를 빠뜨리면 안 된다.** act(fn, refresh)가 `await done?.()`로 이걸 기다리는데,
 // boot()를 안 기다리면 화면을 다시 그리기도 전에 호출한 쪽이 이어서 돈다. 토글에서
