@@ -4565,16 +4565,16 @@ const CFG_EDITORS = {
       { k: "enabled", type: "bool", label: "기록전 켜기" },
       { k: "offline_ok", type: "bool", label: "오프라인 기록 받기" },
       { k: "rank_unverified", type: "bool", label: "서버 확인 안 된 기록도 순위에 넣기" },
-      { k: "min_build.ios", type: "int", label: "최소 빌드 iOS" },
-      { k: "min_build.android", type: "int", label: "최소 빌드 Android" },
-      { k: "max_ms", type: "int", label: "max_ms · 넘으면 6시간 초과로 거절" },
-      { k: "min_ms_per_dog", type: "int", label: "min_ms_per_dog" },
-      { k: "suspect_ms_per_dog", type: "int", label: "suspect_ms_per_dog" },
-      { k: "min_gap_ms", type: "int", label: "min_gap_ms" },
-      { k: "slack_ms", type: "int", label: "slack_ms" },
-      { k: "stamp_fresh_ms", type: "int", label: "stamp_fresh_ms" },
-      { k: "late_stamp_max_ms", type: "int", label: "late_stamp_max_ms" },
-      { k: "online_grace_ms", type: "int", label: "online_grace_ms" },
+      { k: "min_build.ios", type: "int", label: "최소 빌드 iOS", help: "이보다 낮은 빌드의 기록은 받지 않습니다" },
+      { k: "min_build.android", type: "int", label: "최소 빌드 Android", help: "이보다 낮은 빌드의 기록은 받지 않습니다" },
+      { k: "max_ms", type: "int", ms: true, label: "가장 긴 기록", help: "이보다 오래 걸린 기록은 「너무 느림」으로 거절합니다" },
+      { k: "min_ms_per_dog", type: "int", ms: true, label: "강아지 한 마리당 최소 시간", help: "마리 수 × 이 값보다 빠르면 사람이 낼 수 없는 기록으로 보고 거절합니다" },
+      { k: "suspect_ms_per_dog", type: "int", ms: true, label: "의심 표시 기준(한 마리당)", help: "마리 수 × 이 값보다 빠르면 거절하지 않고 「빠름」 표시만 붙입니다. 순위 표에서 보고 직접 뺍니다" },
+      { k: "min_gap_ms", type: "int", ms: true, label: "강아지 놓는 최소 간격", help: "두 마리를 놓는 간격이 이보다 짧으면 매크로로 보고 거절합니다" },
+      { k: "slack_ms", type: "int", ms: true, label: "시계 오차 허용", help: "기기 시계와 서버 시계가 이만큼 어긋나도 봐줍니다. 더 어긋나면 거절합니다" },
+      { k: "stamp_fresh_ms", type: "int", ms: true, label: "시작 신호 인정 시간", help: "「시작」 요청이 이 안에 서버에 닿으면 앱이 잰 시작 시각을 인정합니다. 늦으면 오프라인 시작으로 봅니다" },
+      { k: "late_stamp_max_ms", type: "int", ms: true, label: "오프라인 시작 허용 차이", help: "오프라인으로 시작한 기록의 시작 시각과 서버 등록 시각이 이보다 벌어지면 거절합니다" },
+      { k: "online_grace_ms", type: "int", ms: true, label: "확인됨 판정 시간", help: "다 풀고 이 안에 서버에 올라오면 「확인됨」, 늦으면 「미확인」입니다" },
     ],
   },
   // 1.5.0. 앱이 coin_pct만 읽는다. 서버 함수는 이 키를 보지 않는다. 비율 위쪽 한도는 두지 않는다(100 넘게도 된다).
@@ -4597,10 +4597,10 @@ const CFG_EDITORS = {
                                                               ["best_n", "최고 n판 합"], ["day_best", "최고 한 판"]] },
       { k: "best_n", type: "int", label: "최고 n판 합일 때 n" },
       { k: "coin_pct", type: "int", label: "판 코인 비율 (%)" },
-      { k: "late_grace_min", type: "int", label: "late_grace_min · 마감 뒤 받는 유예(분)" },
-      { k: "min_ms_per_dog", type: "int", label: "min_ms_per_dog" },
-      { k: "suspect_ms_per_dog", type: "int", label: "suspect_ms_per_dog" },
-      { k: "slack_ms", type: "int", label: "slack_ms" },
+      { k: "late_grace_min", type: "int", label: "마감 뒤 받는 유예(분)", help: "기간이 끝난 뒤에도 이 시간 안에 올라온 판은 받습니다" },
+      { k: "min_ms_per_dog", type: "int", ms: true, label: "강아지 한 마리당 최소 시간", help: "판 크기 × 이 값보다 빨리 깬 판은 거절합니다" },
+      { k: "suspect_ms_per_dog", type: "int", ms: true, label: "의심 표시 기준(한 마리당)", help: "판 크기 × 이 값보다 빠르면 거절하지 않고 「빠름」 표시만 붙입니다" },
+      { k: "slack_ms", type: "int", ms: true, label: "시계 오차 허용", help: "기기 시계와 서버 시계가 이만큼 어긋나도 봐줍니다" },
     ],
   },
   // 110. 서버 mailbox_send_rank_push가 enabled가 참일 때만 보낸다. 다른 설정과 달리 기본이 꺼짐이다.
@@ -4613,6 +4613,18 @@ const CFG_EDITORS = {
     ],
   },
 };
+
+/** ms를 사람이 읽는 길이로. 6시간, 2분, 1.5초처럼. 값이 비었거나 숫자가 아니면 빈 글자. */
+function msText(v) {
+  const n = Number(v);
+  if (v === "" || v == null || !Number.isFinite(n) || n < 0) return "";
+  if (n < 1000) return `${n / 1000}초`;
+  const sec = n / 1000;
+  if (sec < 60) return `${Math.round(sec * 10) / 10}초`;
+  const min = sec / 60;
+  if (min < 60) return `${Math.round(min * 10) / 10}분`;
+  return `${Math.round(min / 6) / 10}시간`;
+}
 
 const cfgGet = (obj, path) => path.split(".").reduce((o, k) => (o && typeof o === "object" ? o[k] : undefined), obj);
 
@@ -4629,8 +4641,11 @@ function cfgEditor(key) {
     const input = f.type === "select"
       ? `<select id="${id}"><option value="">서버 기본값</option>${f.opts.map(([x, l]) =>
           `<option value="${x}" ${String(v) === x ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>`
-      : `<input type="number" id="${id}" value="${v == null ? "" : esc(String(v))}" placeholder="서버 기본값" style="width:130px">`;
-    return `<div style="display:flex;gap:8px;align-items:center;margin:4px 0"><span style="min-width:min(260px,45vw)">${esc(f.label)}</span>${input}</div>`;
+      : `<input type="number" id="${id}" value="${v == null ? "" : esc(String(v))}" placeholder="서버 기본값" style="width:130px"${f.ms ? ` data-mstext="${id}_ms"` : ""}>`;
+    // 단위가 ms인 칸은 옆에 「= 6시간」처럼 바꿔 보인다. 입력할 때마다 다시 쓴다.
+    const conv = f.ms ? `<span class="muted" id="${id}_ms" style="min-width:70px">${v == null ? "" : "= " + esc(msText(v))}</span>` : "";
+    const help = f.help ? `<div class="muted" style="font-size:12px;margin:-2px 0 6px">${esc(f.help)}</div>` : "";
+    return `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:4px 0 0"><span style="min-width:min(260px,45vw)">${esc(f.label)}${f.ms ? ' <span class="muted" style="font-size:11px">(ms)</span>' : ""}</span>${input}${conv}</div>${help}`;
   }).join("");
   return `<h2>${esc(ed.title)}</h2>
     <div class="notice">${esc(ed.note)}</div>
@@ -4985,6 +5000,9 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     if ($("#saveAnomaly")) $("#saveAnomaly").onclick = saveAnomalyThreshold;
     if ($("#saveApiUrl")) $("#saveApiUrl").onclick = saveApiUrl;
     document.querySelectorAll("[data-cfgsave]").forEach((b) => { b.onclick = () => saveCfgEditor(b.dataset.cfgsave); });
+    document.querySelectorAll("[data-mstext]").forEach((el) => {
+      el.oninput = () => { const t = msText(el.value); $("#" + el.dataset.mstext).textContent = t ? "= " + t : ""; };
+    });
   }
 
   if (TAB === "audit") {
