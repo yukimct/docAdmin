@@ -1446,6 +1446,231 @@ function openEventWhen(id) {
   };
 }
 
+// ------------------------------------------------------------------ 다른 언어 칸 · 자동 번역 (113)
+// 공지, 푸시, 선물 메모, 점검 문구, 이벤트 이름의 한국어 원문 칸 아래에 언어마다 칸을 둔다.
+// 언어 목록은 서버가 정한다(app_config.languages, 없으면 supported_langs()). 여기에는 이름표만 적는다.
+
+/** 언어 코드 → [그 언어로 쓴 이름, 한국어 이름]. 여기 없는 코드가 서버 목록에 오면 브라우저의 Intl로 이름을 만든다. */
+const LANG_LABELS = {
+  ko: ["한국어", "한국어"], en: ["English", "영어"], ja: ["日本語", "일본어"],
+  zh: ["简体中文", "중국어 간체"], zh_hant: ["繁體中文", "중국어 번체"], es: ["Español", "스페인어"],
+  pt: ["Português", "포르투갈어"], de: ["Deutsch", "독일어"], fr: ["Français", "프랑스어"],
+  id: ["Bahasa Indonesia", "인도네시아어"], th: ["ไทย", "태국어"], vi: ["Tiếng Việt", "베트남어"],
+  it: ["Italiano", "이탈리아어"], tr: ["Türkçe", "튀르키예어"],
+};
+/** 113 전 서버의 언어. 언어 목록을 못 받으면 이벤트 이름 창과 푸시 「앱 언어」 조건만 이것으로 그리고, 번역 칸은 숨긴다. */
+const LEGACY_LANGS = ["ko", "en", "ja", "zh"];
+/** 서버가 준 지원 언어. null이면 113 전 서버다(번역 칸을 받는 함수가 없다). */
+let LANGS = null;
+const uiLangs = () => LANGS || LEGACY_LANGS;
+/** 앱 언어 코드 → 브라우저 언어 태그. 번체만 모양이 다르다. */
+const bcp47 = (code) => (code === "zh_hant" ? "zh-Hant" : String(code).replace("_", "-"));
+function langPair(code) {
+  if (LANG_LABELS[code]) return LANG_LABELS[code];
+  const tag = bcp47(code);
+  let own = code, ko = code;
+  try { own = new Intl.DisplayNames([tag], { type: "language" }).of(tag) || code; } catch { /* 모르는 태그면 코드 그대로 */ }
+  try { ko = new Intl.DisplayNames(["ko"], { type: "language" }).of(tag) || code; } catch { /* 위와 같다 */ }
+  return [own, ko];
+}
+/** 그 언어로 쓴 이름. 푸시 미리보기의 언어별 수와 발송 목록의 조건 설명이 쓴다. */
+const langName = (code) => langPair(code)[0];
+/** 「English · 영어」. 한국어는 한 번만 쓴다. */
+const langFull = (code) => { const [own, ko] = langPair(code); return own === ko ? own : `${own} · ${ko}`; };
+
+/** 이벤트 이름 글자 수 상한. 서버 live_event_name_max(113)와 같아야 한다. 한중일 20자, 나머지 30자. */
+const leNameMax = (lang) => (["ko", "ja", "zh", "zh_hant"].includes(lang) ? 20 : 30);
+/** 서버처럼 글자 수를 센다(char_length). 이모지 하나가 두 칸으로 세지지 않게 코드 포인트로 센다. */
+const charLen = (s) => [...String(s ?? "")].length;
+
+/** 자동 번역이 되는 브라우저인가. 데스크톱 Chrome 138부터 있다. */
+const CAN_TRANSLATE = typeof self !== "undefined" && "Translator" in self;
+/** 언어 → 만들어 둔 번역기. 창을 닫았다 열어도 다시 쓴다(내려받기를 또 하지 않는다). */
+const TRANSLATORS = new Map();
+const NO_TRANSLATE_TIP = "데스크톱 Chrome 138 이상에서 자동 번역을 쓸 수 있어요. 칸은 직접 채워도 됩니다";
+
+/** 줄마다 번역한다. 통째로 넘기면 줄바꿈이 사라질 수 있어 줄을 나눠 보내고 다시 붙인다. 빈 줄은 그대로 둔다. */
+async function translateLines(tr, text) {
+  const out = [];
+  for (const line of String(text).split("\n")) out.push(line.trim() ? await tr.translate(line) : line);
+  return out.join("\n");
+}
+
+/**
+ * 원문(한국어) 칸 아래에 붙는 「다른 언어」 접는 칸. host는 비어 있는 div이고 열 때마다 새로 그린다.
+ * - id: 접힘 상태를 기억할 이름(sec()와 같은 SEC_OPEN에 적힌다)
+ * - fields: [{ k, label, src, multi, rows, max }]. k는 서버 texts 안의 필드 이름(title, body, name),
+ *   src는 그 필드의 한국어 원문 칸 선택자, max(lang)가 있으면 칸 옆에 글자 수를 보이고 넘으면 errors()에 넣는다.
+ * - langs: 그릴 언어(ko는 빼고 그린다). 비면(113 전 서버) 아무것도 그리지 않는다.
+ * - emptyTip: 비운 칸이 앱에서 어떻게 보이는지 설명(? 배지).
+ * 돌려주는 것: values() → {언어: {k: 값}} 빈 값은 뺀다 / fill(같은 모양) / errors() → [문장] / setDisabled(참거짓)
+ */
+function i18nBlock(host, { id, fields, langs = LANGS, emptyTip = "", onInput = null }) {
+  const targets = (langs || []).filter((l) => l !== "ko");
+  if (!host || !targets.length) {
+    if (host) host.innerHTML = "";
+    return { values: () => ({}), fill() {}, errors: () => [], setDisabled() {}, on: false };
+  }
+  const many = fields.length > 1;
+  const rowHtml = (l) => `<div class="i18n-lang" data-i18n-row="${esc(l)}">
+      <div class="i18n-name">${esc(langPair(l)[0])}${langPair(l)[0] === langPair(l)[1] ? "" : `<small>${esc(langPair(l)[1])}</small>`}
+        <span class="i18n-st" data-i18n-st="${esc(l)}"></span></div>
+      <div>${fields.map((f) => {
+        const attrs = `data-i18n-l="${esc(l)}" data-i18n-k="${esc(f.k)}" lang="${esc(bcp47(l))}" aria-label="${esc(`${langFull(l)} ${f.label}`)}"`;
+        const input = f.multi ? `<textarea rows="${f.rows || 2}" ${attrs}></textarea>` : `<input type="text" ${attrs}>`;
+        return `<div class="i18n-f">${many ? `<span class="i18n-fl">${esc(f.label)}</span>` : ""}${input}${
+          f.max ? `<span class="i18n-count" data-i18n-count="${esc(l)}|${esc(f.k)}"></span>` : ""}</div>`;
+      }).join("")}</div></div>`;
+  const tools = CAN_TRANSLATE
+    ? `<button class="sm" type="button" data-i18n-go>자동 번역</button>
+       <select data-i18n-mode style="display:none" aria-label="이미 채운 칸은">
+         <option value="empty">빈 칸만 채우기</option><option value="all">채운 칸도 새로 번역</option></select>
+       <span class="muted i18n-prog" data-i18n-prog></span>`
+    : `<span class="muted" style="font-size:12.5px">이 브라우저에서는 자동 번역을 쓸 수 없습니다${infoTip(NO_TRANSLATE_TIP)}</span>`;
+  const isOpen = id in SEC_OPEN ? SEC_OPEN[id] : false;
+  host.innerHTML = `<details class="sec sub i18n" data-sec="${esc(id)}"${isOpen ? " open" : ""}>
+      <summary><h3 class="sub">다른 언어</h3>${infoTip(emptyTip)}<span class="sec-note" data-i18n-note></span></summary>
+      <div class="sec-body">
+        <div class="i18n-tools">${tools}</div>
+        <div class="muted i18n-msg" data-i18n-msg></div>
+        ${targets.map(rowHtml).join("")}
+      </div></details>`;
+  const q = (s) => host.querySelector(s);
+  const field = (l, k) => host.querySelector(`[data-i18n-l="${CSS.escape(l)}"][data-i18n-k="${CSS.escape(k)}"]`);
+  const all = () => [...host.querySelectorAll("[data-i18n-l]")];
+  const srcText = (f) => (document.querySelector(f.src)?.value || "").trim();
+  const msg = (t) => { q("[data-i18n-msg]").textContent = t; };
+  // why는 브라우저가 준 오류 글이다. 마우스를 올리면 보인다(원인을 개발 담당에게 전할 때 쓴다).
+  const mark = (l, t, why = "") => { const el = q(`[data-i18n-st="${CSS.escape(l)}"]`); if (el) { el.textContent = t; el.title = why; } };
+
+  // 접혀 있을 때 제목 옆 한 줄, 글자 수, 「빈 칸만 채우기」 고르기(채운 칸이 하나라도 있을 때만 보인다)를 맞춘다.
+  const sync = () => {
+    const filled = targets.filter((l) => fields.some((f) => field(l, f.k).value.trim())).length;
+    q("[data-i18n-note]").textContent = filled ? `${filled}개 언어 채움` : "비어 있음";
+    for (const f of fields) {
+      if (!f.max) continue;
+      for (const l of targets) {
+        const n = charLen(field(l, f.k).value.trim()), max = f.max(l);
+        const el = q(`[data-i18n-count="${CSS.escape(l)}|${CSS.escape(f.k)}"]`);
+        el.textContent = `${n} / ${max}자`;
+        el.classList.toggle("over", n > max);
+      }
+    }
+    const mode = q("[data-i18n-mode]");
+    if (mode) mode.style.display = all().some((el) => el.value.trim()) ? "" : "none";
+  };
+  all().forEach((el) => el.addEventListener("input", () => { sync(); onInput?.(); }));
+
+  const go = q("[data-i18n-go]");
+  if (go) go.onclick = async () => {
+    const src = Object.fromEntries(fields.map((f) => [f.k, srcText(f)]));
+    if (!Object.values(src).some(Boolean)) { msg("한국어 원문을 먼저 적어 주세요."); return; }
+    const onlyEmpty = q("[data-i18n-mode]").value !== "all";
+    const wants = (l, f) => src[f.k] && (!onlyEmpty || !field(l, f.k).value.trim());
+    const need = targets.filter((l) => fields.some((f) => wants(l, f)));
+    if (!need.length) { msg("빈 칸이 없습니다. 채운 칸도 바꾸려면 옆에서 「채운 칸도 새로 번역」을 고르세요."); return; }
+    go.disabled = true;
+    targets.forEach((l) => mark(l, ""));
+    msg("");
+    const prog = q("[data-i18n-prog]");
+    try {
+      // 「주의」 번역기 만들기(create)는 내려받기가 필요하면 누른 직후(사용자 동작 안)에만 된다.
+      // 그래서 언어마다 기다리지 않고, 될지 한꺼번에 물은 다음 곧바로 전부 만들기 시작한다. 번역은 그 뒤에 하나씩 한다.
+      const avail = await Promise.all(need.map((l) => (TRANSLATORS.has(l) ? "available"
+        : Translator.availability({ sourceLanguage: "ko", targetLanguage: bcp47(l) }).catch(() => "unavailable"))));
+      const dl = {};   // 내려받는 언어 → 0~1
+      const showDl = () => {
+        const xs = Object.entries(dl).filter(([, p]) => p < 1);
+        prog.textContent = xs.length ? `번역 자료 내려받는 중 · ${xs.map(([l, p]) => `${langName(l)} ${Math.round(p * 100)}%`).join(", ")}` : "";
+      };
+      const makers = need.map((l, i) => {
+        if (TRANSLATORS.has(l)) return Promise.resolve(TRANSLATORS.get(l));
+        if (avail[i] === "unavailable") return Promise.resolve(null);
+        if (avail[i] !== "available") dl[l] = 0;
+        return Translator.create({
+          sourceLanguage: "ko", targetLanguage: bcp47(l),
+          monitor(m) { m.addEventListener("downloadprogress", (e) => { dl[l] = e.loaded; showDl(); }); },
+        }).then((tr) => { TRANSLATORS.set(l, tr); delete dl[l]; showDl(); return tr; })
+          .catch((e) => { delete dl[l]; showDl(); return { error: e }; });
+      });
+      showDl();
+      const skipped = [], failed = [];
+      let done = 0;
+      for (let i = 0; i < need.length; i++) {
+        const l = need[i];
+        const tr = await makers[i];
+        if (!tr) { skipped.push(l); mark(l, "자동 번역 안 됨"); continue; }
+        if (tr.error) {
+          failed.push(l);
+          mark(l, tr.error?.name === "NotAllowedError" ? "내려받기를 못 했습니다. 한 번 더 눌러 주세요" : "번역기를 열지 못했습니다",
+            `${tr.error?.name || ""} ${tr.error?.message || ""}`.trim());
+          continue;
+        }
+        if (!Object.keys(dl).length) prog.textContent = `번역하는 중 · ${langName(l)} (${i + 1} / ${need.length})`;
+        try {
+          for (const f of fields) {
+            if (!wants(l, f)) continue;
+            field(l, f.k).value = await translateLines(tr, src[f.k]);
+          }
+          done++;
+        } catch (e) { failed.push(l); mark(l, "번역하지 못했습니다", String(e?.message || e)); }
+        sync();
+      }
+      prog.textContent = "";
+      const parts = [];
+      if (done) parts.push(`${done}개 언어를 채웠습니다. 기계 번역이라 어색할 수 있으니 저장하기 전에 읽어 보고 칸에서 바로 고치세요.`);
+      if (skipped.length) parts.push(`이 브라우저가 번역하지 못하는 언어: ${skipped.map(langName).join(", ")}. 직접 채우거나 비워 두세요.`);
+      if (failed.length) parts.push(`번역하지 못한 언어: ${failed.map(langName).join(", ")}.`);
+      msg(parts.join(" "));
+      onInput?.();
+    } catch (e) {
+      prog.textContent = "";
+      msg(`자동 번역을 하지 못했습니다. ${e?.message || e}`);
+    } finally { go.disabled = false; }
+  };
+
+  const api = {
+    on: true,
+    values() {
+      const out = {};
+      for (const l of targets) {
+        const one = {};
+        for (const f of fields) { const v = field(l, f.k).value.trim(); if (v) one[f.k] = v; }
+        if (Object.keys(one).length) out[l] = one;
+      }
+      return out;
+    },
+    fill(texts) {
+      for (const l of targets) for (const f of fields) field(l, f.k).value = texts?.[l]?.[f.k] || "";
+      targets.forEach((l) => mark(l, ""));
+      msg("");
+      const mode = q("[data-i18n-mode]");
+      if (mode) mode.value = "empty";
+      sync();
+    },
+    errors() {
+      const out = [];
+      for (const f of fields) {
+        if (!f.max) continue;
+        for (const l of targets) {
+          const n = charLen(field(l, f.k).value.trim()), max = f.max(l);
+          if (n > max) out.push(`${langFull(l)} ${f.label}은 ${max}자까지입니다. 지금 ${n}자입니다.`);
+        }
+      }
+      return out;
+    },
+    setDisabled(b) {
+      host.querySelectorAll("input, textarea, select, button").forEach((el) => { el.disabled = b; });
+    },
+  };
+  sync();
+  return api;
+}
+
+/** 운영 문구(공지, 푸시, 선물 메모, 점검)의 빈 칸 안내. 앱과 send-push가 칸마다 그 언어 → 영어 → 원문 순으로 고른다(113). */
+const TEXTS_EMPTY_TIP = "비워 둔 언어는 영어 칸을 보여 주고, 영어 칸도 비었으면 한국어 원문을 보여 줍니다. "
+  + "한국어 앱은 늘 원문을 봅니다. 1.5.1 이하 앱은 언어와 상관없이 한국어 원문만 봅니다.";
+
 // 1.5.0부터 선물은 우편함에 들어가 직접 받는다. 그 전 앱은 접속할 때 저절로 받는다(099).
 const GRANT_HOW = "1.5.0 이상 앱은 우편함에서 눌러서 받고, 그 전 앱은 앱을 켤 때 저절로 받습니다.";
 
@@ -1460,6 +1685,9 @@ function openGrant(id) {
   $("#gErr").textContent = "";
   ["#gCoins", "#gHints", "#gAutos"].forEach((s) => ($(s).value = 0));
   $("#gMemo").value = "";
+  // 113 메모 번역. 서버 texts는 {언어: {title}}이다(선물·일괄 지급 둘 다).
+  const memoI18n = i18nBlock($("#gMemoI18n"), { id: "i18n.grant", emptyTip: TEXTS_EMPTY_TIP,
+    fields: [{ k: "title", label: "메모", src: "#gMemo" }] });
   // 받기 시작은 **오늘 지금**을 미리 넣어 둔다(사용자 지시). 비워 두면 "즉시"와 같지만,
   // 빈 칸은 "안 정했다"로도 읽혀서 매번 무엇이 기본인지 다시 생각해야 했다.
   // 마감은 비워 둔다 — 언제까지 받게 할지는 보상마다 다르고, 잘못 넣으면 못 받는다.
@@ -1491,6 +1719,7 @@ function openGrant(id) {
           p_target: id, p_coins: coins, p_hints: hints, p_autos: autos,
           p_memo: $("#gMemo").value.trim() || null,
           p_starts_at: starts, p_expires_at: ends,
+          ...(memoI18n.on ? { p_texts: memoI18n.values() } : {}),
         });
         if (withPush) await sendGiftPush(giftId, null);
       } else {
@@ -1500,6 +1729,7 @@ function openGrant(id) {
           p_coins: coins, p_hints: hints, p_autos: autos,
           p_memo: $("#gMemo").value.trim() || null,
           p_starts_at: starts, p_expires_at: ends, p_reason: reason,
+          ...(memoI18n.on ? { p_texts: memoI18n.values() } : {}),
         });
         if (withPush) await sendGiftPush(null, batchId);
       }
@@ -1525,6 +1755,10 @@ function openNotice() {
   const dlg = $("#noticeDlg");
   ["#nTitle", "#nBody", "#nStart", "#nEnd"].forEach((x) => ($(x).value = ""));
   $("#nPopup").checked = true;
+  // 113 번역 칸. 공지 푸시(admin_send_notice_push)는 서버가 이 번역을 발송 줄에 그대로 옮긴다.
+  const noticeI18n = i18nBlock($("#nI18n"), { id: "i18n.notice", emptyTip: TEXTS_EMPTY_TIP, fields: [
+    { k: "title", label: "제목", src: "#nTitle" },
+    { k: "body", label: "내용", src: "#nBody", multi: true, rows: 3 }] });
   $("#nHow").textContent = NOTICE_HOW;
   $("#nErr").textContent = "";
   // 110 푸시는 기본 꺼짐. 종류 칸과 안내는 푸시 발송 창의 것을 그대로 옮겨 써서 두 창의 말이 갈리지 않게 한다.
@@ -1555,6 +1789,7 @@ function openNotice() {
         p_title: title, p_body: body,
         p_starts_at: at($("#nStart").value), p_expires_at: at($("#nEnd").value),
         p_popup: $("#nPopup").checked,
+        ...(noticeI18n.on ? { p_texts: noticeI18n.values() } : {}),
       });
       if (withPush) {
         // 공지는 이미 올라갔다. 푸시가 실패해도 공지를 다시 올리지 않게 창은 닫고 알리기만 한다.
@@ -1603,7 +1838,7 @@ const COND_TYPES = {
   platform: { label: "휴대폰 종류", fields: [
     { k: "v", type: "select", opts: [["ios", "iPhone·iPad"], ["android", "Android"]], def: "ios" }] },
   lang: { label: "앱 언어", fields: [
-    { k: "v", type: "select", opts: [["ko", "한국어"], ["en", "English"], ["ja", "日本語"], ["zh", "中文"]], def: "ko" }] },
+    { k: "v", type: "select", opts: () => uiLangs().map((l) => [l, langFull(l)]), def: "ko" }] },
   // 104 이벤트 조건 셋. id 칸의 목록은 LIVE_EVENTS에서 그때그때 만든다(opts가 함수). 붙으면 광고성으로만 나간다.
   event: { label: "이벤트 참여", fields: [
     { k: "id", type: "select", opts: () => eventCondOpts(), def: () => eventCondOpts()[0]?.[0] ?? "" },
@@ -1638,7 +1873,7 @@ const COND_PRESETS = [
   ["코인 5,000 이상 쌓인 사람", () => [{ t: "coins", op: "gte", v: 5000 }]],
   ["대전을 한 번도 안 한 사람", () => [{ t: "versus", field: "played", op: "lte", v: 0 }]],
 ];
-const LANG_NAMES = { ko: "한국어", en: "English", ja: "日本語", zh: "中文" };
+// 언어 이름은 langName()이 만든다(113). 고를 언어 목록은 서버 목록(uiLangs)이다.
 // 기기 이름은 짧게 iOS·AOS로 쓴다(사용자 요청, 2026-10-08). 회원 목록 「앱」 칸, 푸시 조건, 기기별 집계, 기록 표가 같이 읽는다.
 const PLATFORM_NAMES = { ios: "iOS", android: "AOS" };
 // 결제 상품 이름. 모르는 상품은 상품 ID를 그대로 보인다. 앞에 붙는 패키지 이름(com.….)은 떼고 찾는다.
@@ -1720,7 +1955,7 @@ function describeConds(arg) {
       case "versus": return `대전 ${name("versus", "field", c.field)} ${fmt(c.v)} ${name("versus", "op", c.op)}`;
       case "supporter": return "응원 상품을 산 회원";
       case "platform": return PLATFORM_NAMES[c.v] || c.v;
-      case "lang": return LANG_NAMES[c.v] || c.v;
+      case "lang": return langName(c.v);
       case "event": return `${eventTag(c.id)} ${name("event", "state", c.state)}`;
       case "event_rank": return `${eventTag(c.id)} 순위 ${c.from}~${c.to}위`;
       case "event_boards": return `${eventTag(c.id)} 걸은 판 수 ${fmt(c.v)} ${name("event_boards", "op", c.op)}`;
@@ -1759,6 +1994,36 @@ function openPush(prefill = null, editId = null) {
   const pf = prefill || {};
   $("#pTitle").value = pf.title || "";
   $("#pBody").value = pf.body || "";
+  // 113 번역 칸. 고치기·복제는 저장된 번역(admin_push_list의 texts)으로 채운다.
+  // 칸을 고치면 아래 「한국어가 아닌 휴대폰」 안내를 다시 센다. byLang은 마지막 미리보기의 언어별 기기 수다.
+  let byLang = null;
+  const pushI18n = i18nBlock($("#pI18n"), { id: "i18n.push", emptyTip: TEXTS_EMPTY_TIP,
+    onInput: () => { const el = $("#pLangWarn"); if (el && byLang) el.innerHTML = langWarn(byLang); },
+    fields: [
+      { k: "title", label: "제목", src: "#pTitle" },
+      { k: "body", label: "본문", src: "#pBody", multi: true, rows: 2 }] });
+  pushI18n.fill(pf.texts || {});
+  /**
+   * 한국어가 아닌 휴대폰에 무엇이 가는지. send-push가 칸마다 그 언어 → 영어 → 원문 순으로 고른다(113).
+   * 서버 목록에 없는 언어는 영어로 본다(send-push langOf). 번역 칸이 없는 서버(113 전)면 예전 안내 그대로다.
+   */
+  const langWarn = (by) => {
+    const foreign = Object.entries(by || {}).filter(([k]) => k !== "ko");
+    const total = foreign.reduce((a, [, n]) => a + n, 0);
+    if (!total) return "";
+    if (!pushI18n.on) {
+      return `「주의」 앱 언어가 한국어가 아닌 휴대폰 ${fmt(total)}대에도 이 문구 그대로 갑니다. 언어별로 보내려면 「앱 언어」 조건을 넣어 따로 보내세요.`;
+    }
+    const tx = pushI18n.values();
+    const known = uiLangs();
+    const korean = foreign.filter(([k]) => {
+      const own = tx[known.includes(k) ? k : "en"], en = tx.en;
+      return !(own?.title || en?.title) || !(own?.body || en?.body);
+    }).reduce((a, [, n]) => a + n, 0);
+    return korean
+      ? `「주의」 앱 언어가 한국어가 아닌 휴대폰 ${fmt(total)}대 중 ${fmt(korean)}대는 번역 칸이 비어 있어 한국어 원문을 받습니다. 「다른 언어」에서 그 언어나 영어 칸을 채우세요.`
+      : `앱 언어가 한국어가 아닌 휴대폰 ${fmt(total)}대는 「다른 언어」 칸의 문구를 받습니다. 비운 언어는 영어 칸을 받습니다.`;
+  };
   // 종류(095). 복제·고치기는 원래 종류를 따른다. 새로 열면 광고성 — 모르면 「(광고)」를 붙이는 쪽이 안전하다.
   $("#pKind").value = pf.kind === "notice" ? "notice" : "ad";
   const showKind = () => { $("#pKindNote").style.display = $("#pKind").value === "notice" ? "" : "none"; };
@@ -1926,7 +2191,7 @@ function openPush(prefill = null, editId = null) {
       const r = await rpc("admin_push_preview", { p_target: t, p_target_arg: currentArg(), p_limit: 30 });
       // 더 늦게 보낸 요청이 있거나, 이 창이 닫혔거나 새 창이 열렸으면 버린다
       if (!live()) return null;
-      const langs = Object.entries(r.by_lang || {}).map(([k, n]) => `${LANG_NAMES[k] || k} ${fmt(n)}`).join(" · ");
+      const langs = Object.entries(r.by_lang || {}).map(([k, n]) => `${langName(k)} ${fmt(n)}`).join(" · ");
       const plats = Object.entries(r.by_platform || {}).map(([k, n]) => `${PLATFORM_NAMES[k] || k} ${fmt(n)}`).join(" · ");
       summary = `받을 사람: ${fmt(r.people)}명, 휴대폰 ${fmt(r.devices)}대`;
       $("#pCount").innerHTML = `받을 사람: <b>${fmt(r.people)}명</b> · 휴대폰 ${fmt(r.devices)}대` +
@@ -1940,9 +2205,10 @@ function openPush(prefill = null, editId = null) {
       if (filled) renderPicked();
       const names = (r.names || []).map((x) => esc(x.name || "(이름 없음)")).join(", ");
       $("#pPreview").innerHTML = names ? `${names}${r.people > r.names.length ? ` 외 ${fmt(r.people - r.names.length)}명` : ""}` : "";
-      // 한국어가 아닌 사람이 섞여 있으면 문구가 한 벌이라는 것을 한 번 더 알린다.
-      const foreign = Object.entries(r.by_lang || {}).filter(([k]) => k !== "ko").reduce((a, [, n]) => a + n, 0);
-      if (foreign) $("#pPreview").innerHTML += `<div style="margin-top:4px">「주의」 앱 언어가 한국어가 아닌 휴대폰 ${fmt(foreign)}대에도 이 문구 그대로 갑니다. 언어별로 보내려면 「앱 언어」 조건을 넣어 따로 보내세요.</div>`;
+      // 한국어가 아닌 사람이 섞여 있으면 그 사람들이 받을 문구를 한 번 더 알린다. 번역 칸을 고치면 이 줄만 다시 쓴다.
+      byLang = r.by_lang || {};
+      const warnText = langWarn(byLang);
+      if (warnText) $("#pPreview").innerHTML += `<div id="pLangWarn" style="margin-top:4px">${warnText}</div>`;
       return summary;
     } catch (e) {
       if (!live()) return null;
@@ -2084,6 +2350,8 @@ function openPush(prefill = null, editId = null) {
         p_scheduled_at: at ? at.toISOString() : null,
         p_link: linkNow,
         p_kind: kind,
+        // 고치기도 늘 보낸다. 빈 객체면 번역을 비운다(113 admin_update_push, null이면 그대로 둔다).
+        ...(pushI18n.on ? { p_texts: pushI18n.values() } : {}),
       };
       if (editId) await rpc("admin_update_push", { p_id: editId, ...common });
       else await rpc("admin_send_push", common);
@@ -2189,7 +2457,18 @@ async function loadConfig() {
   // loadConfig는 탭과 무관하게 boot()가 항상 부르므로 여기 두면 어느 탭에서도 맞는다.
   VS_ON = CONFIG.versus_enabled === true;
   EV_ON = CONFIG.versus_events_on !== false;
+  // 지원 언어(113). config의 languages 줄이 먼저고, 없으면 supported_langs()에 한 번만 묻는다.
+  // 둘 다 없으면 113 전 서버라 LANGS는 null로 두고 번역 칸을 숨긴다.
+  const cfgLangs = Array.isArray(CONFIG.languages) ? CONFIG.languages.map(String).filter(Boolean) : [];
+  if (cfgLangs.length) LANGS = cfgLangs;
+  else if (!LANGS_ASKED) {
+    LANGS_ASKED = true;
+    const r = await rpc("supported_langs").catch(() => null);
+    if (Array.isArray(r) && r.length) LANGS = r.map(String);
+  }
 }
+/** supported_langs()를 이미 물어봤는가. 113 전 서버에 새로고침마다 없는 함수를 부르지 않게 한다. */
+let LANGS_ASKED = false;
 
 /**
  * 랭킹 보상 표를 고친다(076).
@@ -2375,6 +2654,7 @@ function updateTab(err) {
                 style="flex:1;resize:vertical;font:inherit">${esc(CONFIG?.maintenance?.message || "")}</textarea>
       <button class="sm" id="saveMaint">저장</button>
     </div>
+    <div id="maintI18n" style="margin:-4px 0 10px"></div>
     <div class="toolbar">
       <span class="muted">점검 예약 · 한국시간, 비우면 예약 없음</span>
       <input type="datetime-local" id="maintFrom" value="${esc(CONFIG?.maintenance?.starts_at || "")}">
@@ -2883,10 +3163,19 @@ async function saveMaintenance() {
   const was = CONFIG?.maintenance?.on === true;
   if (on && !was && !confirm("점검 모드를 켭니다.\n\n모든 앱에서 랭킹과 같이하기가 잠기고 안내 문구가 뜹니다.\n앱은 1분 안에 따라옵니다.")) return;
   if (!on && was && !confirm("점검 모드를 풉니다.\n\n랭킹과 같이하기가 다시 열립니다.")) return;
+  // 113부터는 admin_set_maintenance로 저장한다. admin_set_config는 값을 통째로 덮어써서 번역(texts)이 사라진다.
+  if (MAINT_I18N?.on) {
+    await act(() => rpc("admin_set_maintenance", {
+      p_on: on, p_message: message, p_starts_at: starts_at, p_ends_at: ends_at, p_texts: MAINT_I18N.values(),
+    }), refresh);
+    return;
+  }
   await act(() => rpc("admin_set_config", {
     p_key: "maintenance", p_value: { on, message, starts_at, ends_at },
   }), refresh);
 }
+/** 점검 문구의 번역 칸(113). 업데이트 메뉴를 그릴 때마다 새로 붙인다. 113 전 서버면 on이 거짓이다. */
+let MAINT_I18N = null;
 
 async function saveApiUrl() {
   const v = $("#apiUrl").value.trim();
@@ -3760,7 +4049,7 @@ function leOverlap(events, id, start, until, testOnly) {
 
 /**
  * 만들기·고치기 창의 값 검사. 화면을 건드리지 않아 따로 돌려 볼 수 있다.
- * v = { kind, nameKo, nameEn, nameJa, nameZh, start, end, until(Date|null), level, buildIos, buildAnd, test, tiers[] }
+ * v = { kind, nameKo, names{언어: 이름}, start, end, until(Date|null), level, buildIos, buildAnd, test, tiers[] }
  * ev는 고치는 이벤트(새로 만들면 null). 돌려주는 값 { errors[], warns[] }. errors가 있으면 저장을 막는다.
  * 서버 admin_live_event_save(103)가 다시 본다. 여기서는 서버가 거절할 것을 먼저 알리고, 서버가 안 막는 것은 경고만 한다.
  */
@@ -3774,6 +4063,7 @@ function checkLiveEvent(v, ev, now, events) {
   const def = KIND_DEFAULTS[v.kind];
   if (!def) errors.push(`모르는 종류입니다: ${v.kind}`);
   if (!v.nameKo.trim()) errors.push("한국어 이름은 비울 수 없습니다.");
+  else if (charLen(v.nameKo.trim()) > leNameMax("ko")) errors.push(`한국어 이름은 ${leNameMax("ko")}자까지입니다. 지금 ${charLen(v.nameKo.trim())}자입니다.`);
   if (!v.start || !v.end || !v.until) errors.push("시작, 끝, 결과 공개 끝을 모두 넣으세요.");
   else {
     if (!(v.start < v.end)) errors.push("끝은 시작보다 뒤여야 합니다.");
@@ -3833,6 +4123,9 @@ function liveEventsTab() {
   const COLS = 11;
   const row = (e) => {
     const [stName, stCls] = LE_STATE[e.state] || [e.state, "dim"];
+    // 한국어 밖의 이름(113 names). 113 전 서버는 옛 칸 셋으로 센다. 이름은 숫자에 마우스를 올리면 보인다.
+    const otherNames = Object.entries(e.names && Object.keys(e.names).length ? e.names
+      : { en: e.name_en, ja: e.name_ja, zh: e.name_zh }).filter(([l, x]) => l !== "ko" && x);
     const left = e.state === "live" ? `<div class="muted" style="font-size:11.5px">끝까지 ${fmtSpan(new Date(e.effective_end) - now)}</div>`
       : e.state === "scheduled" ? `<div class="muted" style="font-size:11.5px">시작까지 ${fmtSpan(new Date(e.starts_at) - now)}</div>` : "";
     const why = e.cancelled_at ? `<div class="muted" style="font-size:11.5px">${esc(fmtDateTime(e.cancelled_at))} 취소 · ${esc(e.cancel_reason || "")}</div>` : "";
@@ -3859,7 +4152,7 @@ function liveEventsTab() {
     return `<tr>
       <td class="num fit">#${e.id}</td>
       <td>${esc(e.name_ko)}<div class="muted" style="font-size:11.5px">${esc(KIND_DEFAULTS[e.kind]?.label || e.kind)}${
-        [e.name_en, e.name_ja, e.name_zh].filter(Boolean).length ? ` · ${esc([e.name_en, e.name_ja, e.name_zh].filter(Boolean).join(" / "))}` : ""}</div></td>
+        otherNames.length ? ` · <span title="${esc(otherNames.map(([l, x]) => `${langName(l)}: ${x}`).join("\n"))}">다른 언어 ${otherNames.length}개</span>` : ""}</div></td>
       <td class="c"><span class="pill ${stCls}">${stName}</span>${e.test_only ? '<span class="pill dim">시험</span>' : ""}${left}${why}</td>
       <td>${esc(fmtDateTime(e.starts_at))}</td>
       <td>${end}</td>
@@ -3911,10 +4204,26 @@ function openLiveEvent(id = null) {
   $("#leUntilHow").textContent = `끝난 뒤에도 결과 공개 끝까지는 앱에서 순위 결과를 보여 줍니다. 순위 보상은 이벤트가 끝나면 우편함으로 가고, 보낸 날부터 ${RANK_CLAIM_DAYS}일 안에 받아야 합니다. 참여할 수 있는 레벨에 못 미친 사람은 참여하지 못합니다.`;
   $("#leKind").innerHTML = Object.entries(KIND_DEFAULTS).map(([k, d]) => `<option value="${k}">${esc(d.label)}</option>`).join("");
   $("#leKind").value = kind0;
-  $("#leNameKo").value = ev?.name_ko || "";
-  $("#leNameEn").value = ev?.name_en || "";
-  $("#leNameJa").value = ev?.name_ja || "";
-  $("#leNameZh").value = ev?.name_zh || "";
+  // 이름은 names(113 admin_live_events) 하나에서 읽는다. 113 전 서버는 옛 칸 넷으로 만든다.
+  const names0 = ev ? (ev.names && Object.keys(ev.names).length ? ev.names
+    : { ko: ev.name_ko, en: ev.name_en, ja: ev.name_ja, zh: ev.name_zh }) : {};
+  $("#leNameKo").value = names0.ko || ev?.name_ko || "";
+  // 다른 언어 이름 칸. 113 전 서버면 옛 넷(en, ja, zh)만 그리고 옛 저장 함수로 보낸다.
+  const nameI18n = i18nBlock($("#leNamesI18n"), {
+    id: "i18n.event", langs: uiLangs(),
+    emptyTip: "비워 둔 언어는 그 언어로 된 앱의 기본 이름(산책길 이벤트면 「산책길」)을 보여 줍니다. 1.5.1 이하 앱은 한국어, 영어, 일본어, 중국어 간체 이름만 봅니다.",
+    fields: [{ k: "name", label: "이름", src: "#leNameKo", max: leNameMax }],
+    // 자동 번역으로 채운 이름도 글자 수를 다시 본다. check는 아래에서 만든다(누를 때 부른다).
+    onInput: () => check(),
+  });
+  nameI18n.fill(Object.fromEntries(Object.entries(names0).filter(([l, v]) => l !== "ko" && v).map(([l, v]) => [l, { name: v }])));
+  const koCount = () => {
+    const n = charLen($("#leNameKo").value.trim()), max = leNameMax("ko");
+    $("#leNameKoCount").textContent = `${n} / ${max}자`;
+    $("#leNameKoCount").classList.toggle("over", n > max);
+  };
+  $("#leNameKo").addEventListener("input", koCount);
+  koCount();
   $("#leStart").value = ev ? toKstInput(ev.starts_at) : "";
   $("#leEnd").value = ev ? toKstInput(ev.ends_at) : "";
   $("#leUntil").value = ev ? toKstInput(ev.results_until) : "";
@@ -3953,10 +4262,14 @@ function openLiveEvent(id = null) {
       el.disabled = readOnly || (st === "live" && el.id !== "leUntil");
     });
     $("#leOk").style.display = readOnly ? "none" : "";
+    nameI18n.setDisabled(readOnly || st === "live");
   };
   const values = () => ({
     kind: $("#leKind").value,
-    nameKo: $("#leNameKo").value, nameEn: $("#leNameEn").value, nameJa: $("#leNameJa").value, nameZh: $("#leNameZh").value,
+    nameKo: $("#leNameKo").value,
+    // {ko: 이름, en: 이름, ...}. 빈 이름은 뺀다. 글자 수 검사와 저장이 이것을 읽는다.
+    names: { ko: $("#leNameKo").value.trim(),
+      ...Object.fromEntries(Object.entries(nameI18n.values()).map(([l, o]) => [l, o.name])) },
     start: kstInput($("#leStart").value), end: kstInput($("#leEnd").value), until: kstInput($("#leUntil").value),
     level: Number($("#leLevel").value), buildIos: Number($("#leBuildIos").value), buildAnd: Number($("#leBuildAnd").value),
     test: $("#leTest").checked,
@@ -3966,6 +4279,8 @@ function openLiveEvent(id = null) {
   const check = () => {
     if (readOnly) { $("#leErr").textContent = ""; $("#leWarn").style.display = "none"; return; }
     result = checkLiveEvent(values(), ev, new Date(), LIVE_EVENTS);
+    // 다른 언어 이름의 글자 수는 칸 옆 숫자로도 보인다. 넘으면 저장을 막는다(서버 live_event_names_clean도 막는다).
+    result.errors.push(...nameI18n.errors());
     $("#leErr").innerHTML = result.errors.map(esc).join("<br>");
     $("#leWarn").innerHTML = result.warns.map(esc).join("<br>");
     $("#leWarn").style.display = result.warns.length ? "" : "none";
@@ -3999,10 +4314,14 @@ function openLiveEvent(id = null) {
     if (!confirm(`${lines.join("\n")}\n\n저장할까요?`)) return;
     $("#leOk").disabled = true;
     try {
+      // 113 새 판은 이름을 객체 하나(p_names)로 받는다. 113 전 서버는 옛 판(이름 넷)으로 보낸다.
+      const nameArgs = LANGS ? { p_names: v.names } : {
+        p_name_ko: v.nameKo.trim(), p_name_en: v.names.en || null,
+        p_name_ja: v.names.ja || null, p_name_zh: v.names.zh || null,
+      };
       const r = await rpc("admin_live_event_save", {
         p_id: ev ? Number(ev.id) : null, p_kind: v.kind,
-        p_name_ko: v.nameKo.trim(), p_name_en: v.nameEn.trim() || null,
-        p_name_ja: v.nameJa.trim() || null, p_name_zh: v.nameZh.trim() || null,
+        ...nameArgs,
         p_starts_at: v.start.toISOString(), p_ends_at: v.end.toISOString(), p_results_until: v.until.toISOString(),
         p_min_level: v.level, p_min_build: { ios: v.buildIos, android: v.buildAnd },
         p_rewards: { tiers: v.tiers }, p_test_only: v.test,
@@ -5418,6 +5737,11 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     });
     $("#saveVersions").onclick = saveVersions;
     if ($("#saveMaint")) $("#saveMaint").onclick = saveMaintenance;
+    if ($("#maintI18n")) {
+      MAINT_I18N = i18nBlock($("#maintI18n"), { id: "i18n.maint", emptyTip: TEXTS_EMPTY_TIP,
+        fields: [{ k: "body", label: "안내 문구", src: "#maintMsg", multi: true, rows: 2 }] });
+      MAINT_I18N.fill(CONFIG?.maintenance?.texts || {});
+    }
     if ($("#saveMaintSched")) $("#saveMaintSched").onclick = saveMaintenance;
     if ($("#saveAnomaly")) $("#saveAnomaly").onclick = saveAnomalyThreshold;
     if ($("#saveApiUrl")) $("#saveApiUrl").onclick = saveApiUrl;

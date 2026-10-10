@@ -540,6 +540,31 @@
   /* 버튼을 줄이지 않으면 칸이 가장 좁을 때 버튼 하나 폭까지 줄어 8개가 한 줄씩 쌓인다
      (폰에서 한 줄 높이 290px 남짓). 상자 폭을 내용대로 잡게 해 380px 안에서 두 줄로 감는다. */
   td .actions{width:max-content}
+
+  /* ---------------------------------------------------------------- 다른 언어 칸 (113)
+     한국어 원문 칸 아래의 접는 칸. 만드는 곳은 main.js i18nBlock() 한 곳이다. 언어마다 이름표 한 칸, 입력 한 칸이다. */
+  .i18n > summary{padding:10px 0 6px}
+  .i18n .i18n-tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:4px 0 2px}
+  .i18n .i18n-tools select{width:auto;min-height:0;margin:0}
+  .i18n .i18n-prog{font-size:12px}
+  .i18n .i18n-msg{font-size:12.5px;margin:2px 0 4px}
+  .i18n .i18n-msg:empty{display:none}
+  .i18n .i18n-lang{display:grid;grid-template-columns:minmax(104px,140px) minmax(0,1fr);gap:4px 10px;
+                   padding:7px 0;border-top:1px dashed var(--line)}
+  .i18n .i18n-name{font-size:12.5px;font-weight:700;padding-top:8px;word-break:keep-all}
+  .i18n .i18n-name small{display:block;font-weight:600;color:var(--dim);font-size:11.5px}
+  .i18n .i18n-st{display:block;font-weight:600;color:var(--danger);font-size:11.5px}
+  .i18n .i18n-st:empty{display:none}
+  .i18n .i18n-f{display:flex;flex-direction:column;gap:2px;margin-bottom:4px}
+  .i18n .i18n-f:last-child{margin-bottom:0}
+  .i18n .i18n-fl{font-size:11.5px;color:var(--dim)}
+  .i18n input,.i18n textarea{width:100%;max-width:100%;box-sizing:border-box;margin:0;min-width:0}
+  .i18n .i18n-count,.name-count{font-size:11.5px;color:var(--dim);text-align:right;font-variant-numeric:tabular-nums}
+  .i18n .i18n-count.over,.name-count.over{color:var(--danger);font-weight:700}
+  @media (max-width:560px){
+    .i18n .i18n-lang{grid-template-columns:minmax(0,1fr)}
+    .i18n .i18n-name{padding-top:0}
+  }
 </style>
 </head>
 <body>
@@ -556,6 +581,7 @@
   </div>
   <label>메모 · 받는 사람 앱에 그대로 보입니다<span data-infotip="우편함에서 보상과 함께 보이는 짧은 설명입니다. 예: 점검 보상, 이벤트 1등 축하"></span></label>
   <input type="text" id="gMemo" placeholder="예: 점검 보상">
+  <div id="gMemoI18n"></div>
   <div class="row wide">
     <div><label>받기 시작 · 비우면 바로</label><input type="datetime-local" id="gStart"></div>
     <div><label>받기 마감 · 비우면 기한 없음</label><input type="datetime-local" id="gEnd"></div>
@@ -599,6 +625,7 @@
   <input type="text" id="pTitle" placeholder="예: 주말 이벤트가 열렸어요">
   <label>본문</label>
   <textarea id="pBody" rows="3" placeholder="알림에 그대로 보입니다"></textarea>
+  <div id="pI18n"></div>
   <div class="row wide">
     <div><label>받을 사람<span data-infotip="알림을 켠 회원 전체: 앱에서 광고성 정보 알림을 켠 모든 회원. 조건에 맞는 회원만: 아래에 넣은 조건에 모두 맞는 사람. 직접 고른 회원만: 닉네임이나 회원 ID로 찾아 넣은 사람. 어느 쪽이든 알림을 켠 사람에게만 갑니다."></span></label>
       <select id="pTarget">
@@ -641,14 +668,11 @@
   <div class="muted" style="font-size:12.5px" id="leHow"></div>
   <div class="row wide">
     <div><label>이벤트 종류</label><select id="leKind"></select></div>
-    <div><label>한국어 이름 · 꼭 적어야 합니다, 20자까지</label><input type="text" id="leNameKo" maxlength="20" placeholder="예: 가을 산책길"></div>
+    <div><label>한국어 이름 · 꼭 적어야 합니다</label><input type="text" id="leNameKo" placeholder="예: 가을 산책길">
+      <div class="name-count" id="leNameKoCount"></div></div>
   </div>
-  <label>다른 언어 이름. 비우면 그 언어의 앱 기본 이름이 보입니다</label>
-  <div class="row">
-    <div><input type="text" id="leNameEn" maxlength="30" placeholder="English"></div>
-    <div><input type="text" id="leNameJa" maxlength="20" placeholder="日本語"></div>
-    <div><input type="text" id="leNameZh" maxlength="20" placeholder="中文"></div>
-  </div>
+  <!-- 다른 언어 이름(113). main.js i18nBlock이 서버 언어 목록으로 칸을 만든다. 글자 수 상한은 칸 옆에 보인다. -->
+  <div id="leNamesI18n"></div>
   <div class="row wide">
     <div><label>시작 · 한국시간</label><input type="datetime-local" id="leStart"></div>
     <div><label>끝 · 한국시간</label><input type="datetime-local" id="leEnd"></div>
@@ -684,6 +708,7 @@
   <input type="text" id="nTitle" placeholder="예: 점검 안내">
   <label>내용</label>
   <textarea id="nBody" rows="4" placeholder="앱에서 그대로 보입니다"></textarea>
+  <div id="nI18n"></div>
   <div class="row">
     <div><label>보이기 시작 · 비우면 바로</label><input type="datetime-local" id="nStart"></div>
     <div><label>보이기 끝 · 비우면 계속</label><input type="datetime-local" id="nEnd"></div>
