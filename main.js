@@ -20,6 +20,16 @@ let MATCH = null, REPORTS = [];
 let ECON = null, ANOMALIES = [];
 // 상단 카드 숫자. 서버가 센다(092). 회원 목록(50명 한 쪽)으로 세면 50명을 넘을 때 틀렸다.
 let SUMMARY = null;
+
+/** 114 서버인가. admin_summary가 선물과 랭킹 보상을 나눈 수(unclaimed_rank)를 주면 114다. 운영은 아직 113이라 옛 이름을 쓴다. */
+const server114 = () => !!SUMMARY && Object.prototype.hasOwnProperty.call(SUMMARY, "unclaimed_rank");
+/** 「아직 안 받아 간」 카드와 종의 이름. 113 서버의 수는 선물만이고, 114부터 랭킹 보상까지 센다. */
+const unclaimedLabel = () => (server114() ? "아직 안 받아 간 보상 · 선물과 랭킹" : "아직 안 받아 간 선물");
+/** 가입·방문·리텐션 차트 아래 안내. 가입은 profiles, 방문은 events.profile_id로 세서 지운 회원은 둘 다에서 사라진다. */
+const PEOPLE_CHART_NOTE = () => "지운 회원은 빠집니다. 지금 남아 있는 회원만 셉니다."
+  + (server114() ? " 시험 계정도 뺍니다." : "");
+const UNCLAIMED_TIP_114 = "우편함에서 지금 「받기」가 보이는 보상 수입니다. 관리자 선물과 오늘 점수·기록전·숫자·이벤트 랭킹 보상을 셉니다. "
+  + "받는 기한이 지난 것, 지운 회원 몫, 시험 계정 몫은 뺍니다.";
 /** 앱 설정값 전체 (key → value). 업데이트 관문·기능 스위치가 여기 들어 있다. */
 let CONFIG = {};
 /** 회원 id → {orders, revenue, currency}. 회원 목록 옆에 붙여 쓴다. */
@@ -506,7 +516,8 @@ function versionName(code) {
 function appVersionCell(id) {
   if (APP_VERSIONS === null) return '<span class="muted" title="앱 버전 기록을 못 읽었습니다">?</span>';
   const a = APP_VERSIONS[id];
-  if (!a) return '<span class="muted" title="최근 90일 안에 앱을 켠 기록이 없습니다">—</span>';
+  // 114 함수는 90일을 보지만 이용 기록(events)이 30일만 남아 실제로 보이는 것은 30일이다.
+  if (!a) return '<span class="muted" title="최근 30일 안에 앱을 켠 기록이 없습니다. 이용 기록은 30일만 남습니다">—</span>';
   const os = PLATFORM_NAMES[a.platform] || a.platform || "";
   const ver = a.version_code == null ? '<span class="muted">1.4.4 이하</span>' : esc(versionName(a.version_code));
   return `<span title="마지막으로 켠 때 ${esc(fmtDateTime(a.opened_at))}">${esc(os)} ${ver}</span>`;
@@ -932,11 +943,13 @@ function chartsTab(err) {
     ${kpiRow()}
     ${sec("charts.people", "사람", `
     <h3 class="sub">새로 가입한 사람 · 앱을 켠 사람 · 최근 30일</h3>
+    <div class="muted" style="font-size:12px;margin:-4px 0 6px">${PEOPLE_CHART_NOTE()}</div>
     ${lineChart(days, [
       { name: "새로 가입", color: "#17b3a8", values: STATS.map((r) => Number(r.signups)) },
       { name: "앱을 켠 사람", color: "#7aa2f7", values: STATS.map((r) => Number(r.active)) },
     ])}
     <h3 class="sub">다시 온 사람 · 가입한 날 기준</h3>
+    <div class="muted" style="font-size:12px;margin:-4px 0 6px">${PEOPLE_CHART_NOTE()}</div>
     ${retentionTable()}`, { open: true })}
 
     ${sec("charts.economy", "경제", `
@@ -1093,7 +1106,7 @@ function purchasesTab(err) {
       <thead><tr><th>시각</th><th>회원</th><th>상품</th><th class="num">코인</th>
         <th class="num">금액</th><th>기기</th></tr></thead>
       <tbody>${moreRows("ledger", PAY_LEDGER.map((r) => `<tr>
-        <td class="muted">${new Date(r.created_at).toLocaleString("ko-KR")}</td>
+        <td class="muted">${fmtDateTime(r.created_at)}</td>
         <td>${esc(r.username || (r.profile_id || "").slice(0, 8) || "(삭제됨)")}</td>
         <td>${productName(r.product_id)}</td>
         <td class="num">${r.coins ? fmt(r.coins) : "—"}</td>
@@ -1108,7 +1121,7 @@ const NOTICE_HOW = "모든 공지는 1.5.0 이상 앱의 우편함에 들어갑�
 function noticesTab(err) {
   if (err) return loadFail("공지를 불러오지 못했습니다.", err, "supabase_admin_v3.sql");
   const now = Date.now();
-  const when = (v) => (v ? new Date(v).toLocaleString("ko-KR", { dateStyle: "short", timeStyle: "short" }) : "—");
+  const when = (v) => fmtDateTime(v);   // 114 시각 표시는 fmtDateTime 하나로. 한국시간이다
   return `<div class="toolbar">
       <span class="muted" style="font-size:12.5px">${NOTICE_HOW}</span>
       <div style="flex:1"></div>
@@ -1145,7 +1158,7 @@ const PUSH_SOURCES = {
 
 function pushTab(err) {
   if (err) return loadFail("푸시 목록을 불러오지 못했습니다.", err, "sql/migrations/067_push.sql");
-  const when = (v) => (v ? new Date(v).toLocaleString("ko-KR", { timeZone: "Asia/Seoul", dateStyle: "short", timeStyle: "short" }) : "—");
+  const when = (v) => fmtDateTime(v);   // 114 시각 표시는 fmtDateTime 하나로. 한국시간이다
   const now = new Date();
   const target = (m) => {
     switch (m.target) {
@@ -1403,14 +1416,6 @@ async function deleteSelected() {
   }, refresh);
 }
 
-/** datetime-local 칸이 먹는 모양("YYYY-MM-DDTHH:mm")으로. toISOString()을 쓰면
- *  UTC로 바뀌어 한국시간과 9시간 어긋난 값이 칸에 박힌다. */
-function localDatetimeValue(d) {
-  const pad = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
-       + `T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
 /**
  * 이벤트 기간을 정한다. 둘 다 비우면 상시다(기본 14종이 그렇다).
  *
@@ -1421,29 +1426,40 @@ function openEventWhen(id) {
   if (!ev) return;
   const dlg = $("#evDlg");
   $("#evTitle").textContent = `「${EV_INFO[ev.code]?.[1] ?? ev.code}」 장난 기간`;
-  const toLocal = (v) => {
-    if (!v) return "";
-    const d = new Date(v);
-    const pad = (n) => String(n).padStart(2, "0");
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
-         + `T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  };
-  $("#evStart").value = toLocal(ev.starts_at);
-  $("#evEnd").value = toLocal(ev.ends_at);
+  // 114 칸은 한국시간으로 읽고 쓴다(kstInput, toKstInput). 브라우저 시간대를 따르면 외국에서 열 때 9시간 어긋난다.
+  $("#evStart").value = ev.starts_at ? toKstInput(ev.starts_at) : "";
+  $("#evEnd").value = ev.ends_at ? toKstInput(ev.ends_at) : "";
   $("#evErr").textContent = "";
   dlg.showModal();
   $("#evCancel").onclick = () => dlg.close();
   $("#evOk").onclick = async () => {
-    const at = (v) => (v ? new Date(v).toISOString() : null);
+    const at = (v) => (v ? kstInput(v).toISOString() : null);
     const starts = at($("#evStart").value), ends = at($("#evEnd").value);
     if (starts && ends && ends <= starts) { $("#evErr").textContent = "끝이 시작보다 빠릅니다"; return; }
     await act(async () => {
-      const { error } = await sb.from("versus_events")
-        .update({ starts_at: starts, ends_at: ends }).eq("id", id);
-      if (error) throw error;
+      await updateVersusEvent(id, { p_set_period: true, p_starts_at: starts, p_ends_at: ends },
+                              { starts_at: starts, ends_at: ends });
       dlg.close();
     }, refresh);
   };
+}
+
+/**
+ * 114 대전 장난 하나를 고친다. 서버 함수 admin_versus_event_update가 고치고 관리 기록을 남긴다.
+ * 114 전 서버에는 그 함수가 없어서 예전처럼 표를 직접 고친다(운영은 authenticated에 UPDATE 권한이 없어 실패하던 길이다).
+ */
+async function updateVersusEvent(id, args, legacyPatch) {
+  const { error } = await sb.rpc("admin_versus_event_update", { p_id: id, ...args });
+  if (!error) return;
+  if (!isMissingFunction(error)) throw error;
+  const { error: e2 } = await sb.from("versus_events").update(legacyPatch).eq("id", id);
+  if (e2) throw e2;
+}
+
+/** 서버에 그 함수가 아직 없다는 오류인가. 114 전 서버(운영)에서 새 함수를 부르면 PGRST202가 온다. */
+function isMissingFunction(error) {
+  return error?.code === "PGRST202" || error?.code === "42883"
+    || /could not find the function|function .* does not exist/i.test(error?.message || "");
 }
 
 // ------------------------------------------------------------------ 다른 언어 칸 · 자동 번역 (113)
@@ -1691,7 +1707,7 @@ function openGrant(id) {
   // 받기 시작은 **오늘 지금**을 미리 넣어 둔다(사용자 지시). 비워 두면 "즉시"와 같지만,
   // 빈 칸은 "안 정했다"로도 읽혀서 매번 무엇이 기본인지 다시 생각해야 했다.
   // 마감은 비워 둔다 — 언제까지 받게 할지는 보상마다 다르고, 잘못 넣으면 못 받는다.
-  $("#gStart").value = localDatetimeValue(new Date());
+  $("#gStart").value = toKstInput(new Date());   // 114 칸은 한국시간(kstInput, toKstInput)
   $("#gEnd").value = "";
   // 110 푸시는 기본 꺼짐. 켜면 지급 뒤 admin_send_gift_push를 부른다.
   $("#gPush").checked = false;
@@ -1708,8 +1724,8 @@ function openGrant(id) {
     const hints = Number($("#gHints").value) || 0;
     const autos = Number($("#gAutos").value) || 0;
     if (coins + hints + autos <= 0) { $("#gErr").textContent = "코인, 힌트, 자동배치 중 하나는 1 이상 넣어 주세요"; return; }
-    // datetime-local은 표준시 표기가 없다 — 브라우저(=한국) 기준으로 해석해 ISO로 보낸다.
-    const at = (v) => (v ? new Date(v).toISOString() : null);
+    // datetime-local은 표준시 표기가 없다. 114 브라우저 시간대가 아니라 한국시간으로 읽는다(kstInput).
+    const at = (v) => (v ? kstInput(v).toISOString() : null);
     const starts = at($("#gStart").value), ends = at($("#gEnd").value);
     if (starts && ends && ends <= starts) { $("#gErr").textContent = "받기 마감이 받기 시작보다 빠릅니다"; return; }
     const withPush = $("#gPush").checked;
@@ -1780,7 +1796,7 @@ function openNotice() {
   $("#nOk").onclick = async () => {
     const title = $("#nTitle").value.trim(), body = $("#nBody").value.trim();
     if (!title || !body) { $("#nErr").textContent = "제목과 내용을 모두 적어 주세요"; return; }
-    const at = (v) => (v ? new Date(v).toISOString() : null);
+    const at = (v) => (v ? kstInput(v).toISOString() : null);   // 114 한국시간으로 읽는다
     const withPush = $("#nPush").checked, pushKind = $("#nPushKind").value;
     if (withPush && !confirm(`공지와 함께 푸시를 보냅니다.\n${pushKindLine(pushKind)}\n누르면 열리는 화면: 우편함\n\n"${title}"\n\n보낸 뒤에는 취소할 수 없습니다. 계속할까요?`)) return;
     $("#nOk").disabled = true;   // 두 번 눌러 두 번 나가는 일을 막는다
@@ -2439,8 +2455,7 @@ async function loadVersus() {
     MATCH = (await rpc("admin_matching_stats").catch(() => []))[0] || null;
     REPORTS = await rpc("admin_reports", { p_limit: 100 }).catch(() => []) || [];
     // 061 — 이벤트 목록. 아직 안 올린 서버에서는 표가 통째로 빠질 뿐 나머지는 그대로 돈다.
-    VS_EVENTS = (await sb.from("versus_events").select("*").order("category").order("code")
-      .then((r) => r.data).catch(() => null)) || [];
+    await loadVersusEvents();
     await loadConfig();
     return null;
   } catch (e) { return e; }
@@ -2669,6 +2684,16 @@ function updateTab(err) {
     <div class="muted" style="margin-top:-6px;font-size:12px">
       예약을 넣으면 그 시간 동안 앱이 알아서 점검 상태가 됩니다. 위 스위치를 켤 필요는 없습니다.
       <b>시각을 넣은 뒤 저장을 눌러야</b> 반영됩니다.
+    </div>
+    <label class="switch" style="margin-top:8px">
+      <input type="checkbox" id="maintAnnounce">
+      <span>저장할 때 점검 안내도 같이 보내기</span>
+    </label>
+    <div class="muted" style="font-size:12px">
+      예약 시각으로 안내 공지를 14개 언어로 만들어 우편함에 넣고, 같은 내용으로 서비스 안내 푸시를 보냅니다.
+      공지는 앱을 켤 때 팝업으로도 뜨고 점검이 끝나면 내려갑니다.
+      푸시는 알림 받기에 동의한 사람에게만 가고, 한국시간 ${QUIET_TEXT}에는 ${QUIET_END}까지 미뤄집니다.
+      예약 시작과 끝을 모두 넣어야 보낼 수 있습니다. 한 번 보내면 되돌릴 수 없으니 예약을 고칠 때는 꺼 두세요.
     </div>`)
     + pane("daily", cfgEditor("daily_record"))
     + pane("number", cfgEditor("number_mode"))
@@ -2768,6 +2793,16 @@ let WINNER_DAYS = 14;
 let EV_ON = true;
 /** 「장난」(061) — 14종. 기간과 on/off를 여기서 만진다. */
 let VS_EVENTS = [];
+// 114 장난 목록을 못 읽었으면 그 오류. 표가 빈 것과 못 읽은 것을 가른다.
+let VS_EVENTS_ERR = null;
+
+/** 대전 장난 목록(061 versus_events)을 읽는다. 실패해도 나머지 화면은 돈다. */
+async function loadVersusEvents() {
+  const r = await sb.from("versus_events").select("*").order("category").order("code")
+    .then((x) => x, (e) => ({ data: null, error: e }));
+  VS_EVENTS = r.data || [];
+  VS_EVENTS_ERR = r.error || null;
+}
 
 /**
  * 랭킹 화면 — **앱이 보는 것과 같은 모집단**이다(077).
@@ -2989,7 +3024,9 @@ function serverTab(err) {
       앱이 알려 온 잔액과, <b>앱이 보낸 코인 기록으로 계산한 잔액</b>을 나란히 봅니다. 차이가 크게 플러스면
       기록 없이 코인이 생긴 것입니다. <b>막지는 않고 보여 주기만 합니다.</b> 인터넷 없이 쓰고 늦게
       올라오거나 기기를 옮긴 직후에도 차이가 날 수 있어서 판단은 사람이 합니다.
-      코인 기록은 30일만 남기므로 <b>가입한 지 오래된 계정일수록 차이가 크게 나옵니다.</b>
+      ${server114()
+        ? "30일 지나 지운 코인 기록은 회원별 누계로 남겨 같이 셉니다(서버 114)."
+        : "코인 기록은 30일만 남기므로 <b>가입한 지 오래된 계정일수록 차이가 크게 나옵니다.</b>"}
     </div>
     ${audit}`, { note: `${fmt(COIN_AUDIT.length)}건` })}
 
@@ -3039,7 +3076,7 @@ function markSeen(key, count) {
 const ALERT_ROWS = [
   ["coin_gap_players", "잔액이 안 맞는 계정", "anomaly"],
   ["open_reports", "처리 안 한 신고", "versus"],
-  ["unclaimed_rewards", "아직 안 받아 간 보상", "rewards"],
+  ["unclaimed_rewards", unclaimedLabel, "rewards"],
   ["stale_rooms", "버려진 대전 방", "versus"],
 ];
 
@@ -3051,7 +3088,7 @@ function pendingAlerts() {
   if (!ALERTS) return [];
   const seen = seenMap();
   return ALERT_ROWS
-    .map(([k, label, tabId]) => [k, label, tabId, Number(ALERTS[k] || 0)])
+    .map(([k, label, tabId]) => [k, typeof label === "function" ? label() : label, tabId, Number(ALERTS[k] || 0)])
     .filter(([k, , , n]) => n > 0 && seen[k] !== n);
 }
 
@@ -3163,16 +3200,81 @@ async function saveMaintenance() {
   const was = CONFIG?.maintenance?.on === true;
   if (on && !was && !confirm("점검 모드를 켭니다.\n\n모든 앱에서 랭킹과 같이하기가 잠기고 안내 문구가 뜹니다.\n앱은 1분 안에 따라옵니다.")) return;
   if (!on && was && !confirm("점검 모드를 풉니다.\n\n랭킹과 같이하기가 다시 열립니다.")) return;
-  // 113부터는 admin_set_maintenance로 저장한다. admin_set_config는 값을 통째로 덮어써서 번역(texts)이 사라진다.
-  if (MAINT_I18N?.on) {
-    await act(() => rpc("admin_set_maintenance", {
-      p_on: on, p_message: message, p_starts_at: starts_at, p_ends_at: ends_at, p_texts: MAINT_I18N.values(),
-    }), refresh);
-    return;
+  const announce = $("#maintAnnounce")?.checked === true;
+  if (announce) {
+    if (!starts_at || !ends_at) { alert("안내를 보내려면 점검 예약의 시작과 끝을 모두 넣어 주세요"); return; }
+    if (kstInput(ends_at) <= new Date()) { alert("점검 예약의 끝이 이미 지났습니다. 안내를 보낼 수 없습니다"); return; }
+    const a = maintAnnouncement(starts_at, ends_at);
+    if (!confirm(`점검 안내를 같이 보냅니다.\n\n우편함 공지 · 앱을 켤 때 팝업 · ${toKstText(ends_at)}까지\n`
+        + `서비스 안내 푸시 · 알림 받기에 동의한 사람 전체\n\n${a.title}\n${a.body}\n\n보낸 뒤에는 취소할 수 없습니다. 계속할까요?`)) return;
   }
-  await act(() => rpc("admin_set_config", {
-    p_key: "maintenance", p_value: { on, message, starts_at, ends_at },
-  }), refresh);
+  // 113부터는 admin_set_maintenance로 저장한다. admin_set_config는 값을 통째로 덮어써서 번역(texts)이 사라진다.
+  try {
+    if (MAINT_I18N?.on) {
+      await rpc("admin_set_maintenance", {
+        p_on: on, p_message: message, p_starts_at: starts_at, p_ends_at: ends_at, p_texts: MAINT_I18N.values(),
+      });
+    } else {
+      await rpc("admin_set_config", { p_key: "maintenance", p_value: { on, message, starts_at, ends_at } });
+    }
+  } catch (e) { alert("처리하지 못했습니다.\n\n" + plainError(e.message)); return; }
+  if (announce) await sendMaintAnnouncement(starts_at, ends_at);
+  await refresh();
+}
+
+/**
+ * 점검 안내 공지·푸시 문구(2026-10-11). 앱 문구표가 아니라 여기 둔다. 서버에 texts로 실려 가고 앱은 받은 대로 보여 준다.
+ * 시각은 한국시간이고, 다른 언어에는 시간대를 같이 적는다. 일본은 한국과 같은 시간대라 「日本時間」으로 적는다.
+ * 둘째 줄은 앱의 점검 안내(maintenance_notice)와 같은 뜻이다. 그 문구를 바꾸면 여기도 맞춘다.
+ */
+const MAINT_ANNOUNCE = {
+  ko: ["서버 점검 안내", "{when} (한국시간)에 서버 점검이 있어요.\n점검 중에도 게임은 계속할 수 있고, 랭킹과 같이하기만 잠시 쉬어요."],
+  en: ["Server maintenance notice", "Server maintenance: {when} (Korea time, UTC+9)\nYou can keep playing. Only Rankings and Play together will be paused."],
+  ja: ["サーバーメンテナンスのお知らせ", "{when}（日本時間）にサーバーメンテナンスを行います。\nメンテナンス中もゲームは続けられます。ランキングと「いっしょに」のみ一時停止します。"],
+  zh: ["服务器维护通知", "服务器将于 {when}（韩国时间 UTC+9）进行维护。\n维护期间可以继续游戏，只有排行榜和一起玩暂停。"],
+  zh_hant: ["伺服器維護通知", "伺服器將於 {when}（韓國時間 UTC+9）進行維護。\n維護期間可以繼續玩遊戲，只有排行榜和一起玩暫停。"],
+  es: ["Aviso de mantenimiento", "Mantenimiento del servidor: {when} (hora de Corea, UTC+9)\nPuedes seguir jugando; solo el ranking y Jugar juntos estarán en pausa."],
+  pt: ["Aviso de manutenção", "Manutenção do servidor: {when} (horário da Coreia, UTC+9)\nVocê pode continuar jogando. Só o ranking e o Jogar Juntos ficarão pausados."],
+  de: ["Wartungshinweis", "Serverwartung: {when} (koreanische Zeit, UTC+9)\nDu kannst weiterspielen, nur Rangliste und Zusammen machen kurz Pause."],
+  fr: ["Maintenance prévue", "Maintenance du serveur : {when} (heure de Corée, UTC+9)\nTu peux continuer à jouer ; seuls le classement et Jouer ensemble seront en pause."],
+  id: ["Info pemeliharaan server", "Pemeliharaan server: {when} (waktu Korea, UTC+9)\nGame tetap bisa dimainkan, hanya Peringkat dan Main Bareng yang istirahat sebentar."],
+  th: ["แจ้งปิดปรับปรุงเซิร์ฟเวอร์", "ปิดปรับปรุงเซิร์ฟเวอร์: {when} (เวลาเกาหลี UTC+9)\nเล่นเกมต่อได้ แต่อันดับและเล่นด้วยกันจะพักชั่วคราว"],
+  vi: ["Thông báo bảo trì máy chủ", "Bảo trì máy chủ: {when} (giờ Hàn Quốc, UTC+9)\nBạn vẫn chơi được, chỉ Xếp hạng và Chơi cùng tạm nghỉ."],
+  it: ["Avviso di manutenzione", "Manutenzione del server: {when} (ora coreana, UTC+9)\nPuoi continuare a giocare; solo classifica e Gioca insieme saranno in pausa."],
+  tr: ["Sunucu bakımı duyurusu", "Sunucu bakımı: {when} (Kore saati, UTC+9)\nOynamaya devam edebilirsin, yalnızca sıralama ve Birlikte Oyna kısa süre duracak."],
+};
+
+/** datetime-local 값(한국시간)을 「2026-10-12 02:00」으로. */
+const toKstText = (v) => v.replace("T", " ");
+
+/** 같은 날이면 끝은 시각만 적는다. 「2026-10-12 02:00 ~ 04:00」 */
+function maintWhen(from, to) {
+  const f = toKstText(from), t = toKstText(to);
+  return f.slice(0, 10) === t.slice(0, 10) ? `${f} ~ ${t.slice(11)}` : `${f} ~ ${t}`;
+}
+
+/** 한국어 원문과 다른 언어 번역(texts). texts 모양은 113과 같다. */
+function maintAnnouncement(from, to) {
+  const when = maintWhen(from, to);
+  const fill = ([title, body]) => ({ title, body: body.replace("{when}", when) });
+  const texts = {};
+  for (const [lang, pair] of Object.entries(MAINT_ANNOUNCE)) if (lang !== "ko") texts[lang] = fill(pair);
+  return { ...fill(MAINT_ANNOUNCE.ko), texts };
+}
+
+/** 공지를 올리고 그 공지로 서비스 안내 푸시를 보낸다. 점검 설정은 이미 저장된 뒤다. */
+async function sendMaintAnnouncement(from, to) {
+  const a = maintAnnouncement(from, to);
+  let noticeId;
+  try {
+    noticeId = await rpc("admin_create_notice_v2", {
+      p_title: a.title, p_body: a.body, p_starts_at: null,
+      p_expires_at: kstInput(to).toISOString(), p_popup: true, p_texts: a.texts,
+    });
+  } catch (e) { alert("점검은 저장했지만 안내 공지를 올리지 못했습니다.\n\n" + plainError(e.message)); return; }
+  // 공지는 이미 올라갔다. 푸시가 실패해도 공지를 다시 올리지 않게 알리기만 한다.
+  try { await rpc("admin_send_notice_push", { p_notice_id: noticeId, p_kind: "notice" }); }
+  catch (e) { alert("점검 저장과 안내 공지는 했지만 푸시는 보내지 못했습니다.\n\n" + plainError(e.message)); }
 }
 /** 점검 문구의 번역 칸(113). 업데이트 메뉴를 그릴 때마다 새로 붙인다. 113 전 서버면 on이 거짓이다. */
 let MAINT_I18N = null;
@@ -3406,14 +3508,21 @@ function appIcon(name, px = 22, alt = "") {
 }
 
 function versusEventsTable() {
-  if (!VS_EVENTS.length) return "";
+  // 114 비었으면 숨기지 않고 알린다. 출시 전 초기화가 이 표를 비워 대전에서 장난이 하나도 나지 않았는데 화면에는 아무 표시가 없었다.
+  if (VS_EVENTS_ERR) return `<h2>장난</h2><div class="notice">장난 목록을 불러오지 못했습니다. ${esc(VS_EVENTS_ERR.message || "")}</div>`;
+  if (!VS_EVENTS.length) {
+    return `<h2>장난</h2>
+    <div class="notice" style="border-color:var(--danger);color:var(--danger)">
+      장난 정의가 없습니다. 대전에서 장난이 나지 않습니다.
+      <br>서버 114가 기본 14종을 다시 넣습니다. 114 전 서버라면 061의 14줄을 다시 넣어야 합니다.</div>`;
+  }
   const KIND = { buff: "이로움", debuff: "해로움", neutral: "중립" };
   // 「설정」 칸의 항목 이름(061 versus_events.config). 모르는 항목은 그대로 보인다.
   const CONF = { bones: ["뼈다귀", "개"], seconds: ["시간", "초"], cells: ["칸", "개"], ratio: ["비율", "%"] };
   const confText = (c) => Object.entries(c || {}).map(([k, v]) => k === "duration_ms" ? `지속 ${msText(v)}`
     : CONF[k] ? `${CONF[k][0]} ${v}${CONF[k][1]}` : `${k} ${typeof v === "object" ? JSON.stringify(v) : v}`).join(" · ");
   const CLS = { buff: "today", debuff: "heart", neutral: "" };
-  const when = (v) => (v ? new Date(v).toLocaleString("ko-KR", { dateStyle: "short", timeStyle: "short" }) : "—");
+  const when = (v) => fmtDateTime(v);   // 114 시각 표시는 fmtDateTime 하나로. 한국시간이다
   const now = Date.now();
 
   // 갈래마다 몇 개가 살아 있는지 — 두 개 미만이면 경고한다.
@@ -3751,7 +3860,7 @@ function memberEventsRow() {
     ? `<div class="muted" style="font-size:12px;margin:2px 0 6px">결제한 것</div>
        <div class="table-scroll" style="margin-bottom:10px">
          <table style="min-width:380px"><tbody>${MEMBER_PAYS.map((p) => `<tr>
-           <td class="muted">${new Date(p.created_at).toLocaleString("ko-KR")}</td>
+           <td class="muted">${fmtDateTime(p.created_at)}</td>
            <td>${productName(p.product_id)}</td>
            <td class="num">${p.coins ? fmt(p.coins) : "—"}</td>
            <td class="num">${money(p.amount, p.currency)}</td>
@@ -3766,7 +3875,7 @@ function memberEventsRow() {
   const inner = plays + pays + (MEMBER_EVENTS.length
     ? `<div class="table-scroll" style="max-height:260px;overflow-y:auto">
          <table style="min-width:380px"><tbody>${MEMBER_EVENTS.map((e) => `<tr>
-           <td class="muted">${new Date(e.created_at).toLocaleString("ko-KR")}</td>
+           <td class="muted">${fmtDateTime(e.created_at)}</td>
            <td>${eventName(e.name)}</td>
            <td class="num">${e.value ?? ""}</td>
            <td class="muted">${esc(PLATFORM_NAMES[e.platform] || e.platform || "")}</td>
@@ -3823,12 +3932,17 @@ const AUDIT_NAMES = {
   test_account_on: "시험 계정 지정", test_account_off: "시험 계정 풀기", rank_exclude: "랭킹에서 뺌",
   live_event_create: "이벤트 만듦", live_event_update: "이벤트 고침", live_event_end_now: "이벤트 지금 끝냄",
   live_event_cancel: "이벤트 취소", live_event_exclude: "이벤트 순위에서 뺌",
+  // 114
+  push_send: "푸시 만듦", push_update: "푸시 고침", push_cancel: "푸시 취소", resolve_report: "신고 처리",
+  versus_event_update: "대전 장난 고침",
 };
 // 관리 기록 「내용」 칸의 항목 이름. 모르는 항목은 그대로 보인다.
 const AUDIT_KEYS = {
   reason: "사유", note: "메모", value: "값", key: "설정", minutes: "분", affected: "대상 수", report: "신고 번호",
   id: "번호", coins: "코인", hints: "힌트", autos: "자동배치", memo: "메모", daily: "오늘 점수", total: "누적 점수",
   name: "이름", kind: "종류", event_id: "이벤트 번호", batch_id: "묶음 번호", notice_id: "공지 번호", code: "코드",
+  // 114 푸시·장난 기록
+  title: "제목", target: "대상", target_arg: "대상 값", scheduled_at: "보낼 시각", link: "링크", before: "전", after: "후",
 };
 function auditDetail(d) {
   if (!d || typeof d !== "object") return esc(d ?? "");
@@ -3857,7 +3971,7 @@ function auditTable(err) {
   <div class="table-scroll"><table>
     <thead><tr><th>시각</th><th>한 일</th><th>대상 회원 ID</th><th>내용</th></tr></thead>
     <tbody>${moreRows(`audit|${AUDIT_KIND}|${AUDIT_Q}`, rows.map((a) => `<tr>
-      <td class="muted">${new Date(a.created_at).toLocaleString("ko-KR")}</td>
+      <td class="muted">${fmtDateTime(a.created_at)}</td>
       <td>${esc(AUDIT_NAMES[a.action] || a.action)}</td>
       <td class="muted">${esc((a.target_id || "").slice(0, 8))}</td>
       <td class="muted long" style="max-width:520px">${auditDetail(a.detail)}</td>
@@ -3911,7 +4025,7 @@ function rewardCells(b) {
 
 function batchesTable(shown) {
   if (!shown.length) return "";
-  const when = (v) => (v ? new Date(v).toLocaleString("ko-KR", { dateStyle: "short", timeStyle: "short" }) : "—");
+  const when = (v) => fmtDateTime(v);   // 114 시각 표시는 fmtDateTime 하나로. 한국시간이다
   return `<h2>모든 회원에게 준 보상</h2>
   <div class="table-scroll"><table>
     <thead><tr><th>만든 때</th><th>보상</th><th>메모</th><th>받을 수 있는 기간</th>
@@ -3963,13 +4077,13 @@ function rewardsRows(shown) {
     <tbody>${shown.map(({ r, st }) => {
       const who = PLAYERS.find((p) => p.id === r.profile_id);
       return `<tr>
-        <td class="muted">${new Date(r.created_at).toLocaleString("ko-KR")}</td>
+        <td class="muted">${fmtDateTime(r.created_at)}</td>
         <td>${esc(who?.username || (r.profile_id || "").slice(0, 8))}</td>
         <td class="num">${fmt(r.coins)}</td><td class="num">${fmt(r.hints)}</td><td class="num">${fmt(r.autos)}</td>
         <td class="muted">${esc(r.memo || "")}</td>
         <td class="c fit"><span class="pill ${st.cls}">${st.label}</span>${
           r.claimed_at ? `<div class="muted" style="font-size:11px;margin-top:3px">${
-            new Date(r.claimed_at).toLocaleDateString("ko-KR")}</div>` : ""}</td>
+            fmtDate(r.claimed_at)}</div>` : ""}</td>
       </tr>`;
     }).join("")}</tbody></table></div>`;
 }
@@ -5267,9 +5381,9 @@ const CFG_EDITORS = {
   // 1.5.0. 앱이 coin_pct만 읽는다. 서버 함수는 이 키를 보지 않는다. 비율 위쪽 한도는 두지 않는다(100 넘게도 된다).
   level_mode: {
     title: "레벨 판 코인",
-    note: "레벨 판을 깨면 받는 코인을 조절합니다. 1.5.0 이상 앱에만 적용되고, 1.4.4 이하 앱은 예전 그대로 받습니다. 칸을 비우면 기본값을 씁니다.",
+    note: "레벨 판을 깨면 받는 코인을 조절합니다. 1.5.0 이상 앱에만 적용되고, 1.4.4 이하 앱은 예전 그대로 받습니다. 코인 비율은 비워 둘 수 없습니다.",
     fields: [
-      { k: "coin_pct", type: "int", label: "판 클리어 코인 비율 (%)", help: "100이면 그대로, 50이면 절반입니다",
+      { k: "coin_pct", type: "int", required: true, label: "판 클리어 코인 비율 (%)", help: "100이면 그대로, 50이면 절반입니다. 비워 둘 수 없습니다",
         tip: "점수 ÷ 100이 기본 코인이고, 4개보다 적으면 4개입니다. 여기에 이 비율을 곱합니다. 예: 점수 1,000이면 기본 10개, 비율 50이면 5개입니다. 100보다 크게 넣어도 됩니다." },
     ],
   },
@@ -5292,7 +5406,7 @@ const CFG_EDITORS = {
           + "④ 가장 높은 한 판만 셉니다." },
       { k: "best_n", type: "int", label: "③일 때 더할 판 수", onlyIf: ["rank_basis", "best_n"],
         help: "「③ 상위 몇 판만 더하기」를 골랐을 때만 씁니다", tip: "예: 20이면 기간 중 점수가 높은 20판만 더합니다." },
-      { k: "coin_pct", type: "int", label: "판 클리어 코인 비율 (%)", help: "100이면 레벨 판과 같고, 50이면 절반입니다",
+      { k: "coin_pct", type: "int", required: true, label: "판 클리어 코인 비율 (%)", help: "100이면 레벨 판과 같고, 50이면 절반입니다. 비워 둘 수 없습니다",
         tip: "숫자 퍼즐 판을 깨면 받는 코인에 이 비율을 곱합니다." },
       { k: "late_grace_min", type: "int", label: "마감 뒤 더 받아 주는 시간 (분)",
         help: "기간이 끝난 뒤에도 이 시간 안에 올라온 판은 받습니다",
@@ -5348,7 +5462,7 @@ function cfgEditor(key) {
     const input = f.type === "select"
       ? `<select id="${id}"${f.examples ? ` data-cfgex="${key}:${f.k}"` : ""}><option value="">${defName ? `기본값 쓰기 · ${esc(defName)}` : "기본값 쓰기"}</option>${f.opts.map(([x, l]) =>
           `<option value="${x}" ${String(v) === x ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>`
-      : `<input type="number" id="${id}" value="${v == null ? "" : esc(String(v))}" placeholder="비우면 기본값" style="width:130px"${f.ms ? ` data-mstext="${id}_ms"` : ""}${f.onlyIf ? ` data-onlyif="cfg_${key}_${f.onlyIf[0]}" data-onlyval="${f.onlyIf[1]}" data-onlydef="${esc(CFG_EDITORS[key].fields.find((x) => x.k === f.onlyIf[0])?.def ?? "")}"` : ""}>`;
+      : `<input type="number" id="${id}" value="${v == null ? "" : esc(String(v))}" placeholder="${f.required ? "꼭 적어 주세요" : "비우면 기본값"}" style="width:130px"${f.ms ? ` data-mstext="${id}_ms"` : ""}${f.onlyIf ? ` data-onlyif="cfg_${key}_${f.onlyIf[0]}" data-onlyval="${f.onlyIf[1]}" data-onlydef="${esc(CFG_EDITORS[key].fields.find((x) => x.k === f.onlyIf[0])?.def ?? "")}"` : ""}>`;
     // 단위가 ms인 칸은 옆에 「= 6시간」처럼 바꿔 보인다. 입력할 때마다 다시 쓴다.
     const conv = f.ms ? `<span class="muted" id="${id}_ms" style="min-width:70px">${v == null ? "" : "= " + esc(msText(v))}</span>` : "";
     // 고른 값에 따라 바뀌는 예(숫자 퍼즐 「랭킹 점수 세는 법」). 처음 그릴 때도 지금 값으로 채운다.
@@ -5390,6 +5504,9 @@ function readCfgEditor(key) {
     if (f.type === "bool") v = el.checked;
     else if (el.value === "") v = undefined;
     else v = f.type === "int" ? Number(el.value) : el.value;
+    // 114 비우면 안 되는 칸(코인 비율). 빈 칸은 키를 빼는데, 키가 없으면 앱은 기본값이 아니라 마지막으로 받은 값을 계속 쓴다.
+    //   그래서 「비우면 기본값」이 거짓이 된다. 두 앱 SupabaseManager의 코인 비율 읽기가 그렇다.
+    if (f.required && v === undefined) throw new Error(`「${f.label}」은 비워 둘 수 없습니다. 비우면 앱이 기본값이 아니라 마지막으로 받은 값을 계속 씁니다`);
     if (f.type === "int" && v !== undefined && !(Number.isInteger(v) && v >= 0)) throw new Error(`「${f.label}」에는 0 이상의 정수를 넣어 주세요. 소수점과 음수는 안 됩니다`);
     if (b) {
       out[a] = { ...(out[a] && typeof out[a] === "object" ? out[a] : {}) };
@@ -5445,7 +5562,8 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
       <div class="card"><div class="label">오늘 최고 점수</div><div class="value">${Number(S.today_players) > 0 ? fmt(S.today_best) : "—"}</div></div>
       <div class="card"><div class="label">누적 최고 점수</div><div class="value">${Number(S.members) > 0 ? fmt(S.total_best) : "—"}</div></div>
       <div class="card" data-z><div class="label">응원 상품을 산 사람</div><div class="value">${fmt(S.supporters)}</div></div>
-      <div class="card" data-z><div class="label">아직 안 받아 간 보상</div><div class="value">${fmt(S.unclaimed_rewards)}</div></div>
+      <div class="card" data-z><div class="label">${esc(unclaimedLabel())}${server114() ? infoTip(UNCLAIMED_TIP_114) : ""}</div><div class="value">${fmt(S.unclaimed_rewards)}</div>${server114()
+        ? `<div class="muted" style="font-size:11.5px">선물 ${fmt(S.unclaimed_gifts)} · 랭킹 ${fmt(S.unclaimed_rank)}</div>` : ""}</div>
     </div>
 
     ${TAB === "players" ? `
@@ -5554,11 +5672,7 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
       b.onclick = async () => {
         const ev = VS_EVENTS.find((x) => String(x.id) === b.dataset.evtoggle);
         if (!ev) return;
-        await act(async () => {
-          const { error } = await sb.from("versus_events")
-            .update({ enabled: !ev.enabled }).eq("id", ev.id);
-          if (error) throw error;
-        }, refresh);
+        await act(() => updateVersusEvent(ev.id, { p_enabled: !ev.enabled }, { enabled: !ev.enabled }), refresh);
       };
     });
     document.querySelectorAll("[data-evwhen]").forEach((b) => {
@@ -6057,12 +6171,10 @@ async function boot() {
   }
   const aerr = TAB === "audit" ? await loadAudit().catch((e) => e) : null;
   const vserr = TAB === "versus" ? await loadVersus() : null;
-  // 설정 탭도 개별 사건 표를 그린다. 이 목록을 안 가져오면 versusEventsTable이
-  // `if (!VS_EVENTS.length) return ""`로 **조용히 빈 화면**을 준다 — 표가 없는 것인지
-  // 사건이 없는 것인지 구별이 안 된다. 스위치만 있는 탭이라 나머지 집계는 안 부른다.
+  // 설정 탭도 개별 사건 표를 그린다. 이 목록을 안 가져오면 versusEventsTable이 「장난 정의가 없습니다」로 잘못 알린다.
+  // 스위치만 있는 탭이라 나머지 집계는 안 부른다.
   if (TAB === "versusset") {
-    VS_EVENTS = (await sb.from("versus_events").select("*").order("category").order("code")
-      .then((r) => r.data).catch(() => null)) || [];
+    await loadVersusEvents();
   }
   const cfgerr = TAB === "update" ? cfgLoadErr : null;
   const sverr = TAB === "server" ? await loadServer() : null;
