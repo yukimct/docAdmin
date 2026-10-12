@@ -2645,7 +2645,7 @@ function updateTab(err) {
       </tr></thead>
       <tbody>${row("android", "AOS")}${row("ios", "iOS")}</tbody>
     </table></div>
-    <div class="muted" style="font-size:12.5px;margin-top:6px">숫자는 빌드 번호입니다. 예: 1.5.1은 52${infoTip("빌드 번호는 앱을 스토어에 올릴 때마다 하나씩 붙는 숫자입니다. 사람이 읽는 1.5.1 같은 버전과 따로 셉니다.")}</div>
+    <div class="muted" style="font-size:12.5px;margin-top:6px">숫자는 빌드 번호입니다. 예: 1.6.1은 55${infoTip("빌드 번호는 앱을 스토어에 올릴 때마다 하나씩 붙는 숫자입니다. 사람이 읽는 1.5.1 같은 버전과 따로 셉니다.")}</div>
     <div class="toolbar save-bar"><button class="sm" id="saveVersions">저장</button></div>
     </div>
     <div class="muted" style="font-size:12.5px;margin-bottom:var(--gap)">1.5.0을 낼 때 할 일: 새 앱이 충분히 퍼지면 최소 빌드를 올려 1.4.4에 남은 오늘의 퍼즐 도구 사용 길을 닫습니다.
@@ -2999,12 +2999,15 @@ function serverTab(err) {
       </tr>`).join("")}</tbody></table></div>`
     : `<div class="empty">아직 없습니다</div>`;
 
-  const transfers = TRANSFERS.length ? `<div class="table-scroll"><table style="min-width:560px">
-      <thead><tr><th>코드</th><th>닉네임</th><th>만든 날</th><th class="c fit">상태</th></tr></thead>
+  // 만료 칸은 서버가 적은 expires_at 그대로다. 보관 기간 숫자를 여기 적지 않는다(116부터 7일, 그 전 48시간).
+  const transfers = TRANSFERS.length ? `<div class="muted" style="font-size:12.5px;margin-bottom:6px">만료 칸이 그 코드를 쓸 수 있는 마지막 시각입니다. 기한이 지난 코드와 쓴 지 하루가 지난 코드는 자동으로 지웁니다.</div>
+      <div class="table-scroll"><table style="min-width:640px">
+      <thead><tr><th>코드</th><th>닉네임</th><th>만든 날</th><th>만료</th><th class="c fit">상태</th></tr></thead>
       <tbody>${TRANSFERS.map((t) => `<tr>
         <td><b>${esc(t.code)}</b></td>
         <td>${esc(t.username || "—")}</td>
         <td class="muted">${fmtDate(t.created_at)}</td>
+        <td class="muted">${t.expires_at ? fmtDate(t.expires_at) : "—"}</td>
         <td class="c fit">${t.used_at ? `<span class="muted">사용됨 ${fmtDate(t.used_at)}</span>`
               : t.expired ? '<span class="pill heart">기한 지남</span>'
               : '<span class="pill today">아직 안 씀</span>'}</td>
@@ -5340,7 +5343,7 @@ const NUMBER_BASIS_EXAMPLES = {
 };
 
 // 칸마다 help는 늘 보이는 한 줄, tip은 「?」 배지에 넣는 긴 설명과 예다.
-const BUILD_TIP = "빌드 번호는 앱을 스토어에 올릴 때마다 하나씩 붙는 숫자입니다. 예: 1.5.1은 52. iOS와 AOS는 둘 다 적거나 둘 다 비워야 합니다.";
+const BUILD_TIP = "빌드 번호는 앱을 스토어에 올릴 때마다 하나씩 붙는 숫자입니다. 예: 1.6.1은 55. iOS와 AOS는 둘 다 적거나 둘 다 비워야 합니다.";
 const CFG_EDITORS = {
   daily_record: {
     title: "오늘의 퍼즐 기록전",
