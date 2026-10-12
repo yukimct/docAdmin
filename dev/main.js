@@ -506,10 +506,15 @@ async function loadAppVersions() {
   } catch { APP_VERSIONS = null; }
 }
 
-/** 앱이 app_open에 담아 보낸 버전 숫자(주 × 10000 + 부 × 100 + 수, 109)를 1.5.0 꼴로. */
+/** 앱이 app_open에 담아 보낸 숫자를 버전으로.
+ *  1.6.1(57)까지: 주 × 10000 + 부 × 100 + 수(10601) → 「1.6.1」
+ *  그 뒤: (주 × 10000 + 부 × 100 + 수) × 1000 + 빌드 번호(10601058) → 「1.6.1(58)」. 100만 이상이면 이 꼴이다. */
 function versionName(code) {
   const v = Number(code);
-  return `${Math.floor(v / 10000)}.${Math.floor(v / 100) % 100}.${v % 100}`;
+  const withBuild = v >= 1000000;
+  const base = withBuild ? Math.floor(v / 1000) : v;
+  const name = `${Math.floor(base / 10000)}.${Math.floor(base / 100) % 100}.${base % 100}`;
+  return withBuild ? `${name}(${v % 1000})` : name;
 }
 
 /** 회원 목록 「앱」 칸. 버전을 담기 시작한 것이 1.5.0이라 빈 값은 그 전 앱이다. */
