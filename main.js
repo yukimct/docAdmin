@@ -770,7 +770,7 @@ function lcShow(chart, clientX) {
     p.style.visibility = top == null ? "hidden" : "";
   });
   chart.querySelector(".lc-date").textContent = lcLongDate(d.labels[i]);
-  chart.querySelectorAll(".lc-row b").forEach((b, k) => { b.textContent = fmt(d.series[k].values[i]); });
+  chart.querySelectorAll(".lc-row b").forEach((b, k) => { b.textContent = d.money ? usdText(d.series[k].values[i]) : fmt(d.series[k].values[i]); });
 
   // 아래 축의 날짜 칩. 안내선과 같은 left를 써서 바로 밑에 온다. 칩에 가리는 눈금 글자는 잠깐 숨긴다.
   const chip = chart.querySelector(".lc-chip");
@@ -1043,6 +1043,190 @@ function retentionTable() {
 
 /** 통화를 섞어 더하면 안 된다 — 통화별로 나눠서 보여준다. */
 const money = (v, cur) => `${fmt(Math.round(Number(v) || 0))} ${esc(cur || "")}`.trim();
+
+// ------------------------------------------------------------------ 광고 수익 (117)
+// AdMob 예상 수익. 서버 admob-sync가 1시간마다 AdMob API로 받아 admob_daily에 덮어쓴다.
+// 확정 수익은 API로 받을 수 없어 보여 주지 않는다(사용자 결정, 2026-10-12). 그래서 숫자마다 「예상」을 붙인다.
+// 날짜는 AdMob 보고 시간대(서울)이고 금액은 USD다.
+
+/** 일자별 표와 그래프가 보는 날 수. 28일 카드보다 넉넉하게 받는다. */
+const ADMOB_DAYS = 60;
+let ADMOB = [], ADMOB_ERR = null;
+
+async function loadAdmob() {
+  ADMOB_ERR = null;
+  ADMOB = await rpc("admin_admob_daily", { p_days: ADMOB_DAYS }).catch((e) => { ADMOB_ERR = e; return []; }) || [];
+}
+
+/** 달러 금액을 $1,234.56 꼴로. */
+function usdText(dollars) {
+  return "$" + Number(dollars || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+/** AdMob 마이크로 단위(1달러 = 1,000,000)를 $ 글자로. */
+const usd = (micros) => usdText(Number(micros || 0) / 1e6);
+const ADMOB_COLORS = { Android: "#17b3a8", iOS: "#7aa2f7" };
+const WEEKDAY = ["일", "월", "화", "수", "목", "금", "토"];
+/** 2026-10-12 → 10-12 (월). 날짜 글자를 그대로 읽어 요일을 셈한다(브라우저 시간대와 상관없게 UTC로). */
+const dayWithWeekday = (d) => `${d.slice(5)} (${WEEKDAY[new Date(d + "T00:00:00Z").getUTCDay()]})`;
+
+/** 막대 꼭대기를 보기 좋은 값으로 올린다. 3.31 → 4, 0.08 → 0.1, 27 → 30. */
+function niceMax(v) {
+  if (!(v > 0)) return 1;
+  const p = Math.pow(10, Math.floor(Math.log10(v)));
+  for (const m of [1, 2, 2.5, 5, 10]) if (v <= m * p) return m * p;
+  return 10 * p;
+}
+
+/**
+ * 날짜별로 금액을 쌓은 막대. series = [{name, color, values:[달러]}], 값은 아래부터 쌓는다.
+ * 선 그래프(lineChart)와 같은 마크업·말풍선(lcShow)을 쓴다. 기둥은 lineChart의 점과 같은 자리에 선다.
+ * 수익이 하루에 몰리면 선 그래프에서는 나머지 날이 바닥에 깔려 안 보였다. 막대는 작은 날도 기둥으로 남는다.
+ */
+function moneyBars(labels, series, height = 180) {
+  series = series.filter((sr) => sr.values.some((v) => Number(v) > 0));
+  const n = labels.length;
+  if (!series.length || !n) return EMPTY_LINE;
+  const W = 720, H = height, PAD = { t: 10, b: 6 };
+  const ih = H - PAD.t - PAD.b;
+  const totals = labels.map((_, i) => series.reduce((a, sr) => a + (Number(sr.values[i]) || 0), 0));
+  const max = niceMax(Math.max(...totals));
+  const x = (i) => (n < 2 ? W / 2 : (i * W) / (n - 1));
+  const y = (v) => PAD.t + ih - (v / max) * ih;
+  const px = (i) => +((x(i) / W) * 100).toFixed(2);
+  const py = (v) => +((y(v) / H) * 100).toFixed(2);
+  const base = py(0);
+
+  const yTicks = [0, 0.5, 1].map((f) => ({ top: py(max * f), text: usdText(max * f) }));
+  const grid = yTicks.map((t) => `<i class="lc-gl" style="top:${t.top}%"></i>`).join("");
+  const widest = yTicks.reduce((a, t) => (t.text.length > a.length ? t.text : a), "");
+  const yAxis = `<b>${esc(widest)}</b>` + yTicks.map((t) => `<span style="top:${t.top}%">${esc(t.text)}</span>`).join("");
+
+  const colW = `min(calc(70% / ${Math.max(1, n - 1)}), 28px)`;
+  const cols = labels.map((d, i) => {
+    const t = totals[i];
+    if (!t) return "";
+    let cum = 0;
+    const segs = series.map((sr) => {
+      const v = Number(sr.values[i]) || 0;
+      if (!v) return "";
+      const bottom = (cum / t) * 100, h = (v / t) * 100;
+      cum += v;
+      return `<i class="db-seg" style="bottom:${bottom.toFixed(2)}%;height:${h.toFixed(2)}%;background:${sr.color}"></i>`;
+    }).join("");
+    // 아주 작은 날도 보이게 기둥 높이는 최소 2px
+    return `<div class="db-col" style="left:${px(i)}%;width:${colW};top:min(${py(t)}%, calc(${base}% - 2px));bottom:${(100 - base).toFixed(2)}%"
+      title="${esc(`${dayWithWeekday(d)} ${usdText(t)}`)}">${segs}</div>`;
+  }).join("");
+
+  const tickAt = lcTicks(n), lastJ = tickAt.length - 1;
+  const ticks = tickAt.map((i, j) => {
+    const minor = (j % 2 === 1 && j !== lastJ) || (lastJ % 2 === 1 && j === lastJ - 1);
+    return `<span class="lc-tick${minor ? " lc-minor" : ""}" style="left:${px(i)}%">${esc(lcShortDate(labels[i]))}</span>`;
+  }).join("");
+
+  // 말풍선: 합계, 플랫폼별. 짚는 점은 합계 기둥 꼭대기 하나다.
+  const tipSeries = [{ name: "합계", color: "var(--line-strong)", values: totals }, ...series];
+  const rows = tipSeries.map((sr) =>
+    `<div class="lc-row"><i style="background:${sr.color}"></i><span>${esc(sr.name)}</span><b></b></div>`).join("");
+  const legend = series.map((sr) => `<span class="lg"><i style="background:${sr.color}"></i>${esc(sr.name)}</span>`).join("");
+  const data = {
+    money: true,
+    labels: labels.map(String),
+    xs: labels.map((_, i) => px(i)),
+    series: tipSeries.map((sr, k) => ({ values: sr.values.map((v) => Math.round(v * 100) / 100), ys: k ? [] : sr.values.map((v) => py(v)) })),
+  };
+  return `<div class="chart lc db" data-lc="${esc(JSON.stringify(data))}">
+    <div class="lc-body">
+      <div class="lc-y">${yAxis}</div>
+      <div class="lc-plot">${grid}
+        <div class="lc-area">${cols}<i class="lc-guide"></i><i class="lc-pt" style="background:var(--line-strong)"></i></div>
+      </div>
+      <div class="lc-x"><div class="lc-xin">${ticks}<span class="lc-chip"></span></div></div>
+    </div>
+    <div class="legend">${legend}</div>
+    <div class="lc-tip"><div class="lc-date"></div>${rows}</div>
+  </div>`;
+}
+
+/** 날짜 하나의 합. 플랫폼별 수익도 같이 든다. */
+function admobByDay() {
+  const m = new Map();
+  for (const r of ADMOB) {
+    const d = String(r.day);
+    const a = m.get(d) || { day: d, earn: 0, imp: 0, req: 0, matched: 0, clicks: 0, Android: 0, iOS: 0 };
+    a.earn += Number(r.earnings_micros); a.imp += Number(r.impressions); a.req += Number(r.requests);
+    a.matched += Number(r.matched); a.clicks += Number(r.clicks);
+    a[r.platform] = (a[r.platform] || 0) + Number(r.earnings_micros);
+    m.set(d, a);
+  }
+  return m;
+}
+
+function admobTab(err) {
+  if (err) return loadFail("광고 수익을 불러오지 못했습니다.", err, "117_admob_daily.sql · Edge Function admob-sync");
+  const by = admobByDay();
+  // 오늘부터 n일 동안(오늘 포함)의 합
+  const span = (from, n) => {
+    const t = { earn: 0, imp: 0, Android: 0, iOS: 0 };
+    for (let i = from; i < from + n; i++) {
+      const a = by.get(kstDate(-i));
+      if (a) { t.earn += a.earn; t.imp += a.imp; t.Android += a.Android; t.iOS += a.iOS; }
+    }
+    return t;
+  };
+  const split = (t) => `<div class="muted" style="font-size:12px;margin-top:4px">Android ${usd(t.Android)} · iOS ${usd(t.iOS)} · 노출 ${fmt(t.imp)}</div>`;
+  // [이름, 이 기간, 견줄 기간, 견줄 기간 이름]. 오늘은 아직 하루가 덜 지나 견주지 않는다.
+  const cards = [
+    ["오늘 예상 수익", span(0, 1), null, "아직 집계 중"],
+    ["어제 예상 수익", span(1, 1), span(2, 1), "그저께 대비"],
+    ["최근 7일 예상 수익", span(0, 7), span(7, 7), "그 전 7일 대비"],
+    ["최근 28일 예상 수익", span(0, 28), span(28, 28), "그 전 28일 대비"],
+  ];
+  // 비율이 아니라 달러 차이로 적는다. 수익이 아주 작은 날과 견주면 ▲17942%처럼 뜻 없는 비율이 나왔다.
+  const vs = (t, b, label) => {
+    if (!b) return `<span class="muted" style="font-size:12px">${label}</span>`;
+    const diff = t.earn - b.earn;
+    const sign = diff > 0 ? "▲ +" : diff < 0 ? "▼ −" : "";
+    return `<span class="muted" style="font-size:12px">${label} ${diff ? `<b style="font-weight:600;color:var(--ink)">${sign}${usd(Math.abs(diff))}</b>` : "같음"}</span>`;
+  };
+  const last = ADMOB.reduce((a, r) => (!a || r.updated_at > a ? r.updated_at : a), null);
+
+  // 그래프: 최근 28일, 오래된 날부터. 받은 줄이 없는 날은 0이다.
+  const days = Array.from({ length: 28 }, (_, i) => kstDate(i - 27));
+  const val = (d, k) => Math.round(((by.get(d)?.[k] || 0) / 1e6) * 100) / 100;
+
+  const rows = [...by.values()].sort((a, b) => (a.day < b.day ? 1 : -1));
+  const pct = (a, b) => (b ? Math.round((a / b) * 1000) / 10 + "%" : "—");
+  const table = rows.length ? `<div class="table-scroll"><table style="min-width:720px">
+    <thead><tr><th>날짜</th><th class="num">예상 수익</th><th class="num">Android</th><th class="num">iOS</th>
+      <th class="num">노출</th><th class="num">요청</th><th class="num">일치율${infoTip("광고를 달라고 한 요청 중 광고가 실제로 돌아온 비율입니다.")}</th>
+      <th class="num">eCPM${infoTip("노출 1,000번당 예상 수익입니다.")}</th><th class="num">클릭</th></tr></thead>
+    <tbody>${moreRows("admob", rows.map((a) => `<tr${!a.earn && !a.imp ? ' class="muted"' : ""}>
+      <td class="nowrap">${esc(dayWithWeekday(a.day))}${a.day === kstDate(0) ? ' <span class="pill today">오늘</span>' : ""}</td>
+      <td class="num"><b>${usd(a.earn)}</b></td>
+      <td class="num">${a.Android ? usd(a.Android) : '<span class="muted">—</span>'}</td>
+      <td class="num">${a.iOS ? usd(a.iOS) : '<span class="muted">—</span>'}</td>
+      <td class="num">${fmt(a.imp)}</td>
+      <td class="num">${fmt(a.req)}</td>
+      <td class="num">${pct(a.matched, a.req)}</td>
+      <td class="num">${a.imp ? usd((a.earn / a.imp) * 1000) : "—"}</td>
+      <td class="num">${fmt(a.clicks)}</td>
+    </tr>`))}</tbody></table></div>${moreBar("admob", rows.length)}`
+    : `<div class="empty">아직 받은 광고 수익이 없습니다</div>`;
+
+  return `
+    <div class="muted" style="font-size:12.5px;margin-bottom:var(--gap)">
+      AdMob이 추정한 <b>예상 수익</b>입니다(USD, 서울 날짜). 실제로 받는 확정 금액은 다음 달 초 AdMob 결제 화면에서 정해지며 조금 다를 수 있습니다.
+      1시간마다 새로 받습니다${last ? ` · 마지막으로 받은 시각 ${esc(fmtDateTime(last))}` : ""}.</div>
+    <div class="cards">${cards.map(([label, t, b, vsLabel]) => `
+      <div class="card"><div class="label">${label}</div><div class="value">${usd(t.earn)}</div>
+        <div style="margin-top:2px">${vs(t, b, vsLabel)}</div>${split(t)}</div>`).join("")}</div>
+    ${sec("admob.chart", "일자별 예상 수익 · 최근 28일", moneyBars(days, [
+      { name: "Android", color: ADMOB_COLORS.Android, values: days.map((d) => val(d, "Android")) },
+      { name: "iOS", color: ADMOB_COLORS.iOS, values: days.map((d) => val(d, "iOS")) },
+    ]), { open: true })}
+    ${sec("admob.daily", `일자별 표 · 최근 ${ADMOB_DAYS}일`, table, { open: true, note: `${fmt(rows.length)}일` })}`;
+}
 
 function purchasesTab(err) {
   if (err) return loadFail("구매 기록을 불러오지 못했습니다.", err, "supabase_purchases.sql");
@@ -2747,7 +2931,7 @@ const NAV = [
   { id: "liveevents", label: "이벤트" },
   { label: "같이하기", items: [["versus", "현황"], ["versusset", "설정"]] },
   { label: "회원", items: [["players", "회원 목록"], ["rewards", "보상"]] },
-  { label: "기록", items: [["events", "앱 사용 기록"], ["purchases", "결제"], ["audit", "관리 기록"]] },
+  { label: "기록", items: [["events", "앱 사용 기록"], ["purchases", "결제"], ["admob", "광고 수익"], ["audit", "관리 기록"]] },
   { label: "운영", items: [["anomaly", "이상 징후"], ["update", "업데이트·게임 설정"],
                           ["notices", "공지"], ["push", "푸시"], ["server", "서버 상태"]] },
 ];
@@ -5602,6 +5786,7 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     ${TAB === "events" ? eventsTable(eventsErr) : ""}
     ${TAB === "rewards" ? rewardsTable() : ""}
     ${TAB === "purchases" ? purchasesTab(payErr) : ""}
+    ${TAB === "admob" ? admobTab(ADMOB_ERR) : ""}
     ${TAB === "versus" ? versusTab(vsErr) : ""}
     ${TAB === "versusset" ? versusSetupTab() : ""}
     ${TAB === "anomaly" ? anomalyTab() : ""}
@@ -6166,6 +6351,7 @@ async function boot() {
   if (TAB === "charts" && CHART_VIEW !== "all") await loadPlay();
   const nerr = TAB === "notices" ? await loadNotices() : null;
   const perr2 = TAB === "purchases" ? await loadPurchases() : null;
+  if (TAB === "admob") await loadAdmob();
   if (TAB === "players") await Promise.all([loadPayTotals(), loadAppVersions()]);
   if (TAB === "players") await loadReach();
   if (TAB === "rewards" || TAB === "players") {
