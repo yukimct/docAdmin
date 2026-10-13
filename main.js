@@ -517,6 +517,24 @@ function versionName(code) {
   return withBuild ? `${name}(${v % 1000})` : name;
 }
 
+/**
+ * 실제로 쓰는 사람이 아닐 것 같은 회원. 지워도 되는지 고를 때 참고만 한다.
+ * 가입하고 하루가 지났는데 판을 하나도 깨지 않았고, 가입 뒤 한 시간 안에 접속이 끊긴 계정이다.
+ * 점수·레벨·대전·협동·결제·응원·푸시 동의 중 하나라도 있으면 쓴 흔적으로 보고 빼낸다.
+ * 시험 계정으로 지정한 회원은 그 표시가 따로 있어 겹쳐 달지 않는다.
+ */
+const IDLE_JUDGE_HOURS = 24, IDLE_LAST_SEEN_MINUTES = 60;
+function looksIdle(p) {
+  if (TEST_SET.has(String(p.id))) return false;
+  const created = new Date(p.created_at).getTime();
+  if (!created || Date.now() - created < IDLE_JUDGE_HOURS * 3600e3) return false;
+  if ((p.total_score || 0) > 0 || (p.max_level || 1) > 1) return false;
+  if (Number(p.vs_played || 0) > 0 || Number(p.coop_played || 0) > 0) return false;
+  if (p.supporter || PAY_TOTALS[p.id] || REACH === null || REACH[p.id]) return false;
+  const seen = p.coins_at ? new Date(p.coins_at).getTime() : created;
+  return seen - created <= IDLE_LAST_SEEN_MINUTES * 60e3;
+}
+
 /** 회원 목록 「앱」 칸. 버전을 담기 시작한 것이 1.5.0이라 빈 값은 그 전 앱이다. */
 function appVersionCell(id) {
   if (APP_VERSIONS === null) return '<span class="muted" title="앱 버전 기록을 못 읽었습니다">?</span>';
@@ -3995,7 +4013,8 @@ function playersTable() {
           ${p.supporter ? '<span class="pill heart">응원</span>' : ""}
           ${played ? '<span class="pill today">오늘</span>' : ""}
           ${p.reset_requested_at ? '<span class="pill heart" title="다음에 앱을 켜면 게임이 처음부터 시작됩니다">게임 초기화 요청됨</span>' : ""}
-          ${TEST_SET.has(String(p.id)) ? '<span class="pill dim">시험 계정</span>' : ""}</td>
+          ${TEST_SET.has(String(p.id)) ? '<span class="pill dim">시험 계정</span>' : ""}
+          ${looksIdle(p) ? `<span class="pill dim" title="가입하고 ${IDLE_JUDGE_HOURS}시간이 지났는데 판을 깬 적이 없고, 가입 뒤 ${IDLE_LAST_SEEN_MINUTES}분 안에 접속이 끊겼습니다. 점수, 대전, 결제, 푸시 동의 기록도 없습니다. 추정이라 실제 사용자일 수 있습니다">사용 안 함 추정</span>` : ""}</td>
         <td class="num">${p.max_level == null ? '<span class="muted">—</span>' : fmt(p.max_level)}</td>
         <td class="num">${fmt(p.total_score)}</td>
         <td class="num">${played ? fmt(p.daily_score) : '<span class="muted">—</span>'}</td>
