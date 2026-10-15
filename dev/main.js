@@ -5792,7 +5792,7 @@ function readCfgEditor(key) {
 
 /** 종류마다 관리자 화면에 보일 이름. N 자리에 목표가 들어간다. 앱 문구 mission_k_*의 한국어와 같다. */
 const MISSION_KIND_LABEL = {
-  cleared: "퍼즐 N판 클리어", combo3: "연속 3회 N번 달성", combo5: "연속 5회 N번 달성", combo8: "연속 8회 N번 달성",
+  cleared: "퍼즐 N판 클리어", combo3: "3콤보 N번 달성", combo5: "5콤보 N번 달성", combo8: "8콤보 N번 달성",
   fastClear: "기준 시간 안에 N판 클리어", adWatched: "광고 N번 시청", perfect: "실수 없이 N판 클리어",
   versusPlayed: "대전 N판 하기", versusWon: "대전 N승", coopPlayed: "협동 N판 하기", scoreGained: "점수 N점 획득",
   attended: "N일 접속", dailyCleared: "오늘의 퍼즐 N번 도전", hintUsed: "힌트 N번 사용", autoUsed: "자동배치 N번 사용",
@@ -5813,12 +5813,19 @@ function missionsCurrent() {
 }
 
 function missionRowHtml(m) {
-  const kinds = MISSION_KINDS.map((k) => `<option value="${k}" ${k === m.kind ? "selected" : ""}>${esc(MISSION_KIND_LABEL[k] || k)}</option>`).join("");
-  const periods = MISSION_PERIODS.map(([k, l]) => `<option value="${k}" ${k === m.period ? "selected" : ""}>${l}</option>`).join("");
+  // 이 관리자 화면이 모르는 종류·기간이면(앱을 먼저 올리고 SQL로 넣은 줄 등) 그 값을 옵션으로 남긴다.
+  // 없으면 브라우저가 첫 옵션을 골라, 그대로 저장하면 「퍼즐 N판 클리어」 일일 미션으로 바뀐다.
+  const kindKeys = m.kind && !MISSION_KINDS.includes(m.kind) ? [...MISSION_KINDS, m.kind] : MISSION_KINDS;
+  const periodList = m.period && !MISSION_PERIODS.some(([k]) => k === m.period) ? [...MISSION_PERIODS, [m.period, m.period]] : MISSION_PERIODS;
+  const kinds = kindKeys.map((k) => `<option value="${esc(k)}" ${k === m.kind ? "selected" : ""}>${esc(MISSION_KIND_LABEL[k] || `(모르는 종류) ${k}`)}</option>`).join("");
+  const periods = periodList.map(([k, l]) => `<option value="${esc(k)}" ${k === m.period ? "selected" : ""}>${esc(l)}</option>`).join("");
+  // id가 있는 줄은 기간·종류도 잠근다. 받은 기록이 id로 남아 있어, 같은 id로 기간을 바꾸면
+  // 일일에 받은 사람이 주간으로 또 받는다. 바꾸려면 줄을 빼고 새 줄을 더한다.
+  const lock = m.id ? 'disabled title="이미 내보낸 미션은 기간·종류를 바꿀 수 없습니다. 새 줄을 더하세요"' : "";
   return `<tr data-mrow>
     <td class="c fit"><input type="checkbox" data-m="on" ${m.on === false ? "" : "checked"}></td>
-    <td><select data-m="period">${periods}</select></td>
-    <td><select data-m="kind" style="max-width:260px">${kinds}</select>
+    <td><select data-m="period" ${lock}>${periods}</select></td>
+    <td><select data-m="kind" style="max-width:260px" ${lock}>${kinds}</select>
       <div class="muted" style="font-size:11px" data-m="req">${esc(MISSION_REQ[m.requires] || "")}</div></td>
     <td class="num"><input type="number" data-m="target" value="${Number(m.target) || 1}" min="1" style="width:90px"></td>
     <td class="num"><input type="number" data-m="coins" value="${Number(m.coins) || 0}" min="0" style="width:80px"></td>
@@ -5860,6 +5867,12 @@ function readMissions() {
     if (!id) id = `${period[0]}_${kind}${target}`;
     if (!(target > 0)) throw new Error(`「${MISSION_KIND_LABEL[kind] || kind}」 목표는 1 이상이어야 합니다`);
     if (!(coins >= 0)) throw new Error(`「${MISSION_KIND_LABEL[kind] || kind}」 보상은 0 이상이어야 합니다`);
+    // 오타 막기. Android는 Int 범위를 넘는 줄을 버리고 iOS는 쓴다.
+    if (target > 100000000) throw new Error(`「${MISSION_KIND_LABEL[kind] || kind}」 목표가 너무 큽니다(1억 이하)`);
+    if (coins > 10000) throw new Error(`「${MISSION_KIND_LABEL[kind] || kind}」 보상이 너무 큽니다(10,000 이하)`);
+    // 「모두 받음」 미션이 자기 기간 안에 있으면 자기를 받아야 오르는 칸이라 영영 못 깬다. gen.py와 같은 규칙이다.
+    if ((kind === "allDailyDays" && period === "daily") || (kind === "allWeeklyWeeks" && period !== "monthly"))
+      throw new Error(`「${MISSION_KIND_LABEL[kind]}」는 ${kind === "allDailyDays" ? "주간·월간" : "월간"}에만 넣을 수 있습니다`);
     const m = { id, period, kind, target, coins, order, on: g("on").checked };
     if (MISSION_KIND_REQ[kind]) m.requires = MISSION_KIND_REQ[kind];
     return m;
@@ -5914,11 +5927,15 @@ async function saveMissions() {
   let list;
   try { list = readMissions(); } catch (e) { alert(e.message); return; }
   const prev = new Map(missionsCurrent().map((m) => [m.id, m]));
-  const changed = list.filter((m) => { const p = prev.get(m.id); return !p || p.on !== m.on || p.target !== m.target || p.coins !== m.coins; });
+  const changed = list.filter((m) => {
+    const p = prev.get(m.id);
+    return !p || p.on !== m.on || p.target !== m.target || p.coins !== m.coins || p.kind !== m.kind || p.period !== m.period || (p.order || 0) !== m.order;
+  });
   const removed = [...prev.keys()].filter((id) => !list.some((m) => m.id === id));
   const lines = changed.slice(0, 15).map((m) => `· ${m.on ? "켬" : "끔"} ${MISSION_KIND_LABEL[m.kind].replace("N", fmt(m.target))} · ${m.coins}코인`).join("\n");
   const msg = `미션 목록을 저장합니다. 앱은 다음에 서버 설정을 읽을 때부터 따릅니다.\n\n`
     + `바뀐 줄 ${changed.length}개${removed.length ? `, 뺀 줄 ${removed.length}개` : ""}\n${lines}${changed.length > 15 ? "\n…" : ""}\n\n`
+    + (removed.length ? `「주의」 뺀 줄: ${removed.join(", ")}\n같은 미션을 다시 더할 거라면 빼지 말고 켬만 끄세요. 새 줄은 id가 달라 오늘 받은 사람이 또 받습니다.\n\n` : "")
     + MISSION_PERIODS.map(([k, l]) => `${l} ${fmt(list.filter((m) => m.period === k && m.on).reduce((a, m) => a + m.coins, 0))}코인`).join(" · ")
     + "\n\n저장할까요?";
   if (!confirm(msg)) return;
