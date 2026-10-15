@@ -3424,7 +3424,7 @@ function navBar() {
     if (!g.items) {
       const today = g.today ? navTodayText(g.today) : "";
       return `<div class="item"><button class="top ${TAB === g.id ? "on" : ""}"
-                data-tab="${g.id}">${g.label}${today ? ` <span class="muted" style="font-size:11.5px;font-weight:600">${esc(today)}</span>` : ""}</button></div>`;
+                data-tab="${g.id}">${g.label}${today ? ` <span class="nav-amt">${esc(today)}</span>` : ""}</button></div>`;
     }
     const active = g.items.some(([id]) => id === TAB);
     // 묶음 이름을 누르면 그 묶음의 첫 화면으로 간다(사용자 지시, 2026-10-15). 이미 그 묶음 안이면 그 자리에 둔다.

@@ -91,6 +91,8 @@
   .nav .top.on{background:var(--accent-wash);color:var(--accent);
                box-shadow:inset 0 -2px 0 var(--accent)}
   .nav .top .caret{opacity:.5;font-size:10px;margin-left:3px}
+  /* 광고 수익·결제 옆 오늘 금액. .muted를 쓰면 폰에서 .head .muted 숨김에 같이 걸려 안 보였다(2026-10-15 제보). */
+  .nav .top .nav-amt{color:var(--dim);font-size:11.5px;font-weight:600;white-space:nowrap}
   /* 메뉴를 버튼에 **딱 붙인다**(top:100%, 여백 없음).
      사이에 빈틈이 있으면 마우스가 그 위를 지나는 순간 :hover가 끊겨 메뉴가 닫힌다 —
      "다른 메뉴를 고르려고 움직이면 자꾸 꺼진다"의 원인이 이것이었다.
