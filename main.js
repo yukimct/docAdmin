@@ -487,6 +487,43 @@ async function loadStats() {
   } catch (e) { STATS = []; BUCKETS = []; FUNNEL = []; DAILY_BUCKETS = []; RETENTION = []; return e; }
 }
 
+// 메뉴 옆 오늘 금액(사용자 지시, 2026-10-15). 화면마다 새로고침할 때 오늘 하루치만 가볍게 받는다.
+// 광고 수익은 AdMob 예상(USD, 서울 날짜), 결제는 통화별 합계(한국 날짜)다. 못 받으면 비워 둔다.
+let NAV_TODAY = { admob: null, pay: null };
+
+async function loadNavToday() {
+  const today = kstToday();
+  const [ad, pay] = await Promise.all([
+    rpc("admin_admob_daily", { p_days: 1 }).catch(() => null),
+    rpc("admin_purchase_daily", { p_days: 1 }).catch(() => null),
+  ]);
+  NAV_TODAY.admob = ad ? ad.filter((r) => String(r.day) === today).reduce((a, r) => a + Number(r.earnings_micros || 0), 0) : null;
+  if (pay) {
+    const m = {};
+    for (const r of pay.filter((r) => String(r.day) === today)) m[r.currency] = (m[r.currency] || 0) + Number(r.revenue || 0);
+    NAV_TODAY.pay = m;
+  } else NAV_TODAY.pay = null;
+}
+
+/** 통화 금액 글자. 원은 ₩1,234, 달러는 $1.23, 그 밖은 금액 뒤에 통화 코드. */
+function moneyText(cur, v) {
+  if (cur === "KRW") return "₩" + Math.round(v).toLocaleString("ko-KR");
+  if (cur === "USD") return usdText(v);
+  return `${Number(v).toLocaleString("en-US", { maximumFractionDigits: 2 })} ${cur}`;
+}
+
+/** 메뉴 옆에 붙일 오늘 금액. 못 받았으면 빈 글자. */
+function navTodayText(kind) {
+  if (kind === "admob") return NAV_TODAY.admob == null ? "" : usd(NAV_TODAY.admob);
+  if (kind === "pay") {
+    const m = NAV_TODAY.pay;
+    if (!m) return "";
+    const parts = Object.entries(m).map(([c, v]) => moneyText(c, v));
+    return parts.length ? parts.join(" · ") : "₩0";
+  }
+  return "";
+}
+
 async function loadPurchases() {
   try {
     PAY_DAILY = await rpc("admin_purchase_daily", { p_days: 30 }) || [];
@@ -2956,10 +2993,12 @@ const NAV = [
   { id: "ranking", label: "랭킹" },
   { id: "liveevents", label: "이벤트" },
   // 광고 수익은 자주 보는 화면이라 기록 묶음에서 꺼내 최상위로 올렸다(사용자 지시, 2026-10-15).
-  { id: "admob", label: "광고 수익" },
+  { id: "admob", label: "광고 수익", today: "admob" },
+  // 결제도 자주 본다. 광고 수익 옆으로 꺼냈다(사용자 지시, 2026-10-15). 두 메뉴 옆에 오늘 금액을 붙인다(navToday).
+  { id: "purchases", label: "결제", today: "pay" },
   { label: "같이하기", items: [["versus", "현황"], ["versusset", "설정"]] },
   { label: "회원", items: [["players", "회원 목록"], ["rewards", "보상"]] },
-  { label: "기록", items: [["events", "앱 사용 기록"], ["purchases", "결제"], ["audit", "관리 기록"]] },
+  { label: "기록", items: [["events", "앱 사용 기록"], ["audit", "관리 기록"]] },
   { label: "운영", items: [["anomaly", "이상 징후"], ["update", "업데이트·게임 설정"],
                           ["notices", "공지"], ["push", "푸시"], ["server", "서버 상태"]] },
 ];
@@ -3383,8 +3422,9 @@ const HOVER_NAV = () => window.matchMedia("(hover: hover)").matches;
 function navBar() {
   return `<nav class="nav">${NAV.map((g) => {
     if (!g.items) {
+      const today = g.today ? navTodayText(g.today) : "";
       return `<div class="item"><button class="top ${TAB === g.id ? "on" : ""}"
-                data-tab="${g.id}">${g.label}</button></div>`;
+                data-tab="${g.id}">${g.label}${today ? ` <span class="muted" style="font-size:11.5px;font-weight:600">${esc(today)}</span>` : ""}</button></div>`;
     }
     const active = g.items.some(([id]) => id === TAB);
     // 묶음 이름을 누르면 그 묶음의 첫 화면으로 간다(사용자 지시, 2026-10-15). 이미 그 묶음 안이면 그 자리에 둔다.
@@ -5922,7 +5962,6 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
       <div class="card"><div class="label">전체 회원</div><div class="value">${fmt(S.members)}</div></div>
       <div class="card"><div class="label">오늘 판을 깬 사람${infoTip(TIP_BOARD_CLEAR)}</div><div class="value">${fmt(S.today_players)}</div></div>
       <div class="card"><div class="label">오늘 최고 점수</div><div class="value">${Number(S.today_players) > 0 ? fmt(S.today_best) : "—"}</div></div>
-      <div class="card"><div class="label">누적 최고 점수</div><div class="value">${Number(S.members) > 0 ? fmt(S.total_best) : "—"}</div></div>
       <div class="card" data-z><div class="label">응원 상품을 산 사람</div><div class="value">${fmt(S.supporters)}</div></div>
       <div class="card" data-z><div class="label">${esc(unclaimedLabel())}${server114() ? infoTip(UNCLAIMED_TIP_114) : ""}</div><div class="value">${fmt(S.unclaimed_rewards)}</div>${server114()
         ? `<div class="muted" style="font-size:11.5px">선물 ${fmt(S.unclaimed_gifts)} · 랭킹 ${fmt(S.unclaimed_rank)}</div>` : ""}</div>
@@ -6516,6 +6555,7 @@ async function boot() {
   // 상단 카드는 서버 집계 하나(092)로 센다.
   let sumErr = null;
   SUMMARY = await rpc("admin_summary").catch((e) => { sumErr = e; return null; });
+  await loadNavToday();
   const needsPlayers = ["players", "rewards"].includes(TAB);
   const perr = needsPlayers ? await loadPlayers() : null;
   // 문턱·점검 예약이 여기서 온다. 업데이트 탭은 실패를 보여 줘야 해서 오류를 받아 둔다.
