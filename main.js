@@ -1,5 +1,7 @@
 // 관리자 화면 — 회원·점수 관리 / 이벤트 집계 / 보상 지급.
 import { sb, $, fmt, fmtDate, fmtDateTime, fmtTime, esc, kstToday, askReason, askReasonRequired, rpc } from "./app.js";
+// 미션 기본 목록(1.7.0). 생성 파일이다. 원본은 missions/defaults.json이다.
+import { MISSION_DEFAULTS, MISSION_KINDS } from "./missions_defaults.js";
 
 /** 처음 열었을 때 보이는 탭. 차트다(사용자 지시) — 관리자가 가장 자주 확인하는 건
  *  개별 회원이 아니라 "어제 오늘 뭐가 달라졌나"이기 때문이다. */
@@ -2905,6 +2907,7 @@ function updateTab(err) {
     + pane("daily", cfgEditor("daily_record"))
     + pane("number", cfgEditor("number_mode"))
     + pane("level", cfgEditor("level_mode"))
+    + pane("missions", missionsEditor())
     + pane("notify", cfgEditor("mailbox_rank_push"))
     + pane("etc", `
     <h2>서버 주소 옮기기</h2>
@@ -2929,7 +2932,7 @@ function updateTab(err) {
 
 /** 업데이트·게임 설정의 하위 탭. 고른 칸은 기기에 적어 두고 다음에 열 때 그 칸부터 보인다. */
 const UPD_VIEWS = [["ver", "버전·점검"], ["daily", "기록전"], ["number", "숫자 퍼즐"], ["level", "레벨 판·코인"],
-                   ["notify", "알림"], ["etc", "기타"]];
+                   ["missions", "미션"], ["notify", "알림"], ["etc", "기타"]];
 const UPD_STORE = "dogadm.updateView";
 let UPD_VIEW = (() => { const v = loadStore(UPD_STORE, "ver"); return UPD_VIEWS.some(([k]) => k === v) ? v : "ver"; })();
 
@@ -2952,9 +2955,11 @@ const NAV = [
   { id: "charts", label: "차트" },
   { id: "ranking", label: "랭킹" },
   { id: "liveevents", label: "이벤트" },
+  // 광고 수익은 자주 보는 화면이라 기록 묶음에서 꺼내 최상위로 올렸다(사용자 지시, 2026-10-15).
+  { id: "admob", label: "광고 수익" },
   { label: "같이하기", items: [["versus", "현황"], ["versusset", "설정"]] },
   { label: "회원", items: [["players", "회원 목록"], ["rewards", "보상"]] },
-  { label: "기록", items: [["events", "앱 사용 기록"], ["purchases", "결제"], ["admob", "광고 수익"], ["audit", "관리 기록"]] },
+  { label: "기록", items: [["events", "앱 사용 기록"], ["purchases", "결제"], ["audit", "관리 기록"]] },
   { label: "운영", items: [["anomaly", "이상 징후"], ["update", "업데이트·게임 설정"],
                           ["notices", "공지"], ["push", "푸시"], ["server", "서버 상태"]] },
 ];
@@ -3372,6 +3377,9 @@ document.addEventListener("click", (e) => {
   document.querySelector(".bell")?.classList.remove("open");
 });
 
+/** 마우스를 올려 하위 메뉴를 펼칠 수 있는 화면인지. index.html의 @media (hover:hover)와 같은 기준이다. */
+const HOVER_NAV = () => window.matchMedia("(hover: hover)").matches;
+
 function navBar() {
   return `<nav class="nav">${NAV.map((g) => {
     if (!g.items) {
@@ -3379,8 +3387,11 @@ function navBar() {
                 data-tab="${g.id}">${g.label}</button></div>`;
     }
     const active = g.items.some(([id]) => id === TAB);
+    // 묶음 이름을 누르면 그 묶음의 첫 화면으로 간다(사용자 지시, 2026-10-15). 이미 그 묶음 안이면 그 자리에 둔다.
+    // 마우스를 올리면 펼쳐지는 하위 목록은 예전 그대로다. 마우스가 없는 화면(휴대폰)은 예전처럼 눌러서 펼친다.
+    // 그래야 하위 메뉴를 고를 길이 남는다. 가를 때는 아래 배선의 HOVER_NAV를 본다.
     return `<div class="item">
-      <button class="top ${active ? "on" : ""}">${g.label}<span class="caret">▾</span></button>
+      <button class="top ${active ? "on" : ""}" data-grouptab="${active ? TAB : g.items[0][0]}">${g.label}<span class="caret">▾</span></button>
       <div class="menu">${g.items.map(([id, label]) =>
         `<button class="${TAB === id ? "on" : ""}" data-tab="${id}">${label}</button>`).join("")}</div>
     </div>`;
@@ -5734,6 +5745,146 @@ function readCfgEditor(key) {
   return out;
 }
 
+// ------------------------------------------------------------------ 설정: 미션 (1.7.0, 118)
+// app_config.missions = {"list": [...]}. 한 줄이 미션 하나다. 앱은 미션 「종류」(kind)만 알고 목록은 여기서 정한다.
+// 앱이 서버 값을 못 받으면 기기에 남긴 마지막 목록, 그것도 없으면 앱 기본 목록(MISSION_DEFAULTS와 같다)을 쓴다.
+// 「주의」 id는 받은 기록의 열쇠다. 한 번 내보낸 미션의 id를 바꾸면 그날 받은 사람도 다시 받을 수 있다.
+
+/** 종류마다 관리자 화면에 보일 이름. N 자리에 목표가 들어간다. 앱 문구 mission_k_*의 한국어와 같다. */
+const MISSION_KIND_LABEL = {
+  cleared: "퍼즐 N판 클리어", combo3: "연속 3회 N번 달성", combo5: "연속 5회 N번 달성", combo8: "연속 8회 N번 달성",
+  fastClear: "기준 시간 안에 N판 클리어", adWatched: "광고 N번 시청", perfect: "실수 없이 N판 클리어",
+  versusPlayed: "대전 N판 하기", versusWon: "대전 N승", coopPlayed: "협동 N판 하기", scoreGained: "점수 N점 획득",
+  attended: "N일 접속", dailyCleared: "오늘의 퍼즐 N번 도전", hintUsed: "힌트 N번 사용", autoUsed: "자동배치 N번 사용",
+  numberCleared: "숫자 퍼즐 N판 클리어", numberBigCleared: "숫자 퍼즐 7×7 이상 N판 클리어",
+  dailyFinished: "오늘의 퍼즐 N번 끝까지 풀기", dailyPerfect: "오늘의 퍼즐 실수 없이 N번", shared: "결과 공유 N번",
+  shopBought: "상점에서 N번 구매", allDailyDays: "일일 미션을 모두 받은 날 N일", allWeeklyWeeks: "주간 미션을 모두 받은 주 N번",
+  walkJoined: "산책길 이벤트 N번 참가", walkBoards: "산책길 N판 걷기", todayTop10: "오늘 랭킹 10위 안에 N번",
+};
+const MISSION_PERIODS = [["daily", "일일"], ["weekly", "주간"], ["monthly", "월간"]];
+const MISSION_REQ = { number_mode: "숫자 모드가 켜져 있을 때만", live_event: "산책길 이벤트 기간에만" };
+/** 이 종류는 앱이 조건을 붙인다. 새 줄을 더할 때 자동으로 채운다. 기본 목록과 같다. */
+const MISSION_KIND_REQ = { numberCleared: "number_mode", numberBigCleared: "number_mode", walkJoined: "live_event", walkBoards: "live_event" };
+
+/** 지금 서버 목록. 없으면 기본 목록이다. */
+function missionsCurrent() {
+  const list = CONFIG?.missions?.list;
+  return Array.isArray(list) && list.length ? list : MISSION_DEFAULTS;
+}
+
+function missionRowHtml(m) {
+  const kinds = MISSION_KINDS.map((k) => `<option value="${k}" ${k === m.kind ? "selected" : ""}>${esc(MISSION_KIND_LABEL[k] || k)}</option>`).join("");
+  const periods = MISSION_PERIODS.map(([k, l]) => `<option value="${k}" ${k === m.period ? "selected" : ""}>${l}</option>`).join("");
+  return `<tr data-mrow>
+    <td class="c fit"><input type="checkbox" data-m="on" ${m.on === false ? "" : "checked"}></td>
+    <td><select data-m="period">${periods}</select></td>
+    <td><select data-m="kind" style="max-width:260px">${kinds}</select>
+      <div class="muted" style="font-size:11px" data-m="req">${esc(MISSION_REQ[m.requires] || "")}</div></td>
+    <td class="num"><input type="number" data-m="target" value="${Number(m.target) || 1}" min="1" style="width:90px"></td>
+    <td class="num"><input type="number" data-m="coins" value="${Number(m.coins) || 0}" min="0" style="width:80px"></td>
+    <td class="num"><input type="number" data-m="order" value="${Number(m.order) || 0}" style="width:70px"></td>
+    <td><input type="text" data-m="id" value="${esc(m.id || "")}" style="width:130px" ${m.id ? "readonly" : ""} placeholder="비우면 자동"></td>
+    <td class="c fit"><button type="button" class="sm" data-mdel>빼기</button></td>
+  </tr>`;
+}
+
+function missionsEditor() {
+  const fromServer = Array.isArray(CONFIG?.missions?.list) && CONFIG.missions.list.length > 0;
+  return `<h2>미션${infoTip("앱이 미션 목록을 서버에서 받아 씁니다. 1.7.0 이상 앱부터 따릅니다. 1.6.1 이하는 앱에 박힌 목록을 씁니다.")}</h2>
+    <div class="notice">
+      ${fromServer ? "서버에 저장된 목록입니다." : "<b>서버에 아직 목록이 없습니다.</b> 아래는 앱 기본 목록입니다. 저장하면 서버에 올라갑니다."}
+      켬을 끄면 앱에서 사라지고, 다시 켜면 돌아옵니다. 목표와 보상을 바꾸면 그날 쌓은 진행은 그대로 이어집니다.
+      <b>이미 내보낸 미션은 id를 바꾸지 마세요.</b> 받은 기록이 id로 남아 있어 바꾸면 같은 날 다시 받을 수 있습니다.
+      새 종류는 앱 업데이트가 필요해 여기서는 앱이 아는 종류만 고를 수 있습니다.
+    </div>
+    <div class="toolbar" id="missionTotals"></div>
+    <div class="table-scroll"><table>
+      <thead><tr><th class="c fit">켬</th><th>기간</th><th>미션</th><th class="num">목표</th><th class="num">보상</th><th class="num">순서</th><th>id</th><th></th></tr></thead>
+      <tbody id="missionRows">${missionsCurrent().map(missionRowHtml).join("")}</tbody>
+    </table></div>
+    <div class="save-bar">
+      <button type="button" class="sm" id="missionAdd">줄 더하기</button>
+      <button type="button" class="sm" id="missionReset">기본 목록으로 되돌리기</button>
+      <button type="button" class="sm" id="missionSave">저장</button>
+    </div>`;
+}
+
+/** 표에서 목록을 읽는다. 틀린 곳이 있으면 던진다. */
+function readMissions() {
+  const rows = [...document.querySelectorAll("#missionRows [data-mrow]")];
+  const list = rows.map((tr) => {
+    const g = (k) => tr.querySelector(`[data-m="${k}"]`);
+    const kind = g("kind").value, period = g("period").value;
+    const target = parseInt(g("target").value, 10), coins = parseInt(g("coins").value, 10), order = parseInt(g("order").value, 10) || 0;
+    let id = g("id").value.trim();
+    if (!id) id = `${period[0]}_${kind}${target}`;
+    if (!(target > 0)) throw new Error(`「${MISSION_KIND_LABEL[kind] || kind}」 목표는 1 이상이어야 합니다`);
+    if (!(coins >= 0)) throw new Error(`「${MISSION_KIND_LABEL[kind] || kind}」 보상은 0 이상이어야 합니다`);
+    const m = { id, period, kind, target, coins, order, on: g("on").checked };
+    if (MISSION_KIND_REQ[kind]) m.requires = MISSION_KIND_REQ[kind];
+    return m;
+  });
+  const ids = list.map((m) => m.id);
+  const dup = ids.find((x, i) => ids.indexOf(x) !== i);
+  if (dup) throw new Error(`id가 겹칩니다: ${dup}\n같은 종류·목표를 두 번 넣었다면 한 줄의 id를 직접 적어 주세요`);
+  if (!list.length) throw new Error("미션이 하나도 없습니다");
+  return list;
+}
+
+/** 기간마다 켠 미션 수와 보상 합계. 표를 고칠 때마다 다시 센다. */
+function missionTotalsText() {
+  let list;
+  try { list = readMissions(); } catch { return '<span class="muted">표에 고칠 곳이 있습니다</span>'; }
+  return MISSION_PERIODS.map(([k, l]) => {
+    const on = list.filter((m) => m.period === k && m.on);
+    return `<span class="pill" style="margin-left:0">${l} ${on.length}개 · ${fmt(on.reduce((a, m) => a + m.coins, 0))}코인</span>`;
+  }).join(" ") + ' <span class="muted" style="font-size:12px">다 받았을 때 한 사람이 받는 코인입니다. 이벤트·숫자 모드 조건이 붙은 미션도 넣어 셉니다</span>';
+}
+
+function wireMissions() {
+  const body = $("#missionRows");
+  if (!body) return;
+  const totals = () => { $("#missionTotals").innerHTML = missionTotalsText(); };
+  body.addEventListener("input", totals);
+  body.addEventListener("change", (e) => {
+    // 종류를 바꾸면 조건 안내도 바꾼다.
+    if (e.target.dataset.m === "kind") {
+      const tr = e.target.closest("[data-mrow]");
+      tr.querySelector('[data-m="req"]').textContent = MISSION_REQ[MISSION_KIND_REQ[e.target.value]] || "";
+    }
+    totals();
+  });
+  body.addEventListener("click", (e) => {
+    if (e.target.matches("[data-mdel]")) { e.target.closest("[data-mrow]").remove(); totals(); }
+  });
+  $("#missionAdd").onclick = () => {
+    body.insertAdjacentHTML("beforeend", missionRowHtml({ period: "daily", kind: "cleared", target: 1, coins: 10, order: 999, on: false }));
+    totals();
+  };
+  $("#missionReset").onclick = () => {
+    if (!confirm("표를 앱 기본 목록으로 바꿉니다. 저장을 눌러야 서버에 올라갑니다. 바꿀까요?")) return;
+    body.innerHTML = MISSION_DEFAULTS.map(missionRowHtml).join("");
+    totals();
+  };
+  $("#missionSave").onclick = saveMissions;
+  totals();
+}
+
+async function saveMissions() {
+  let list;
+  try { list = readMissions(); } catch (e) { alert(e.message); return; }
+  const prev = new Map(missionsCurrent().map((m) => [m.id, m]));
+  const changed = list.filter((m) => { const p = prev.get(m.id); return !p || p.on !== m.on || p.target !== m.target || p.coins !== m.coins; });
+  const removed = [...prev.keys()].filter((id) => !list.some((m) => m.id === id));
+  const lines = changed.slice(0, 15).map((m) => `· ${m.on ? "켬" : "끔"} ${MISSION_KIND_LABEL[m.kind].replace("N", fmt(m.target))} · ${m.coins}코인`).join("\n");
+  const msg = `미션 목록을 저장합니다. 앱은 다음에 서버 설정을 읽을 때부터 따릅니다.\n\n`
+    + `바뀐 줄 ${changed.length}개${removed.length ? `, 뺀 줄 ${removed.length}개` : ""}\n${lines}${changed.length > 15 ? "\n…" : ""}\n\n`
+    + MISSION_PERIODS.map(([k, l]) => `${l} ${fmt(list.filter((m) => m.period === k && m.on).reduce((a, m) => a + m.coins, 0))}코인`).join(" · ")
+    + "\n\n저장할까요?";
+  if (!confirm(msg)) return;
+  await act(() => rpc("admin_set_config", { p_key: "missions", p_value: { list } }), refresh);
+}
+
 async function saveCfgEditor(key) {
   let value;
   try { value = readCfgEditor(key); } catch (e) { alert(e.message); return; }
@@ -5849,10 +6000,12 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
   document.querySelectorAll("[data-tab]").forEach((b) => {
     b.onclick = () => { BELL_OPEN = false; TAB = b.dataset.tab; refresh(); };
   });
-  // 위쪽 메뉴 묶음: 누르면 그 메뉴만 열고 나머지는 닫는다(index.html .nav .item.open 주석).
+  // 위쪽 메뉴 묶음. 마우스가 있으면 첫 화면으로 바로 간다(2026-10-15).
+  // 마우스가 없으면 그 메뉴만 열고 나머지는 닫는다(index.html .nav .item.open 주석).
   document.querySelectorAll(".nav > .item > .top:not([data-tab])").forEach((b) => {
     b.onclick = (e) => {
       e.stopPropagation();
+      if (HOVER_NAV()) { BELL_OPEN = false; TAB = b.dataset.grouptab; refresh(); return; }
       const item = b.parentElement;
       const willOpen = !item.classList.contains("open");
       document.querySelectorAll(".nav > .item.open").forEach((x) => x.classList.remove("open"));
@@ -6072,6 +6225,7 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     if ($("#saveAnomaly")) $("#saveAnomaly").onclick = saveAnomalyThreshold;
     if ($("#saveApiUrl")) $("#saveApiUrl").onclick = saveApiUrl;
     document.querySelectorAll("[data-cfgsave]").forEach((b) => { b.onclick = () => saveCfgEditor(b.dataset.cfgsave); });
+    wireMissions();
     // 다른 선택에서만 쓰는 칸은 흐리게 한다(숫자 퍼즐 「③일 때 더할 판 수」). 「기본값 쓰기」면 서버 기본값으로 따진다.
     document.querySelectorAll("[data-onlyif]").forEach((el) => {
       const src = $("#" + el.dataset.onlyif);
