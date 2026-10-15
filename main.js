@@ -38,6 +38,10 @@ let CONFIG = {};
 let PAY_TOTALS = {};
 /** 회원마다 마지막으로 켠 앱의 기기와 버전(109). 함수가 없는 서버면 null이고 칸에 ?를 보인다. */
 let APP_VERSIONS = null;
+/** 회원별 접속 국가(119). profile_id → { country, country_at }. 못 읽었으면 null. */
+let COUNTRIES = null;
+/** 나라별 회원 수(119). 못 읽었으면 null. */
+let COUNTRY_COUNTS = null;
 /** 이벤트 이력을 펼쳐 놓은 회원. */
 let OPEN_MEMBER = null, MEMBER_EVENTS = [], MEMBER_PAYS = [];
 let SORT = "total", QUERY = "", EMAIL = "";
@@ -543,6 +547,44 @@ async function loadAppVersions() {
     const rows = await rpc("admin_app_versions") || [];
     APP_VERSIONS = Object.fromEntries(rows.map((r) => [r.profile_id, r]));
   } catch { APP_VERSIONS = null; }
+}
+
+/** 회원별 접속 국가와 나라별 회원 수(119). 119 전 서버면 둘 다 null이라 칸에 ?가 보인다. */
+async function loadCountries() {
+  try {
+    const rows = await rpc("admin_member_countries") || [];
+    COUNTRIES = Object.fromEntries(rows.map((r) => [r.profile_id, r]));
+  } catch { COUNTRIES = null; }
+  try { COUNTRY_COUNTS = await rpc("admin_country_counts") || []; } catch { COUNTRY_COUNTS = null; }
+}
+
+/** 국가 코드 → 「한국」. XX는 Cloudflare가 모를 때, T1은 Tor다. 브라우저가 모르는 코드는 코드 그대로. */
+function countryName(cc) {
+  if (cc === "XX") return "알 수 없음";
+  if (cc === "T1") return "Tor";
+  try { return new Intl.DisplayNames(["ko"], { type: "region" }).of(cc) || cc; } catch { return cc; }
+}
+
+function countryCell(id) {
+  if (COUNTRIES === null) return '<span class="muted" title="국가 기록을 못 읽었습니다">?</span>';
+  const c = COUNTRIES[id];
+  if (!c) return '<span class="muted" title="2026-10-15부터 앱을 켠 회원만 남습니다">—</span>';
+  return `<span title="마지막으로 적은 때 ${esc(fmtDateTime(c.country_at))} · 접속 위치 기준이라 VPN이면 그 나라로 보입니다">${esc(c.country)} ${esc(countryName(c.country))}</span>`;
+}
+
+/** 나라별 회원 수 표. */
+function countryCountsTable() {
+  if (COUNTRY_COUNTS === null) return '<div class="empty">나라별 회원 수를 불러오지 못했습니다. 119_member_country가 적용됐는지 확인하세요</div>';
+  if (!COUNTRY_COUNTS.length) return '<div class="empty">아직 국가가 남은 회원이 없습니다</div>';
+  const total = COUNTRY_COUNTS.reduce((a, r) => a + Number(r.members), 0);
+  return `<div class="muted" style="font-size:12.5px;margin-bottom:6px">앱이 서버에 신호를 보낼 때의 접속 위치입니다. 2026-10-15부터 쌓이고, 마지막으로 접속한 나라만 남습니다.</div>
+    <div class="table-scroll"><table>
+    <thead><tr><th>나라</th><th class="num">회원</th><th class="num">비율</th><th class="num">최근 30일 접속</th></tr></thead>
+    <tbody>${COUNTRY_COUNTS.map((r) => `<tr>
+      <td>${esc(r.country)} ${esc(countryName(r.country))}</td>
+      <td class="num">${fmt(r.members)}</td>
+      <td class="num muted">${total ? (Number(r.members) * 100 / total).toFixed(1) : 0}%</td>
+      <td class="num">${fmt(r.recent_30d)}</td></tr>`).join("")}</tbody></table></div>`;
 }
 
 /** 앱이 app_open에 담아 보낸 숫자를 버전으로.
@@ -4051,6 +4093,7 @@ function playersTable() {
       ${th("coop", "협동 이김 / 판", "num")}
       <th class="num">결제 합계</th>
       <th class="fit">앱 버전${infoTip("마지막으로 켠 앱의 기기와 버전입니다. 버전은 1.5.0부터 남고, 그 전 앱은 「1.4.4 이하」로 보입니다.")}</th>
+      <th class="fit">국가${infoTip("앱이 서버에 신호를 보낼 때의 접속 위치입니다. VPN을 쓰면 그 나라로 보이고, 마지막으로 접속한 나라만 남습니다.")}</th>
       ${th("played", "마지막 플레이")}
       ${th("created", "가입한 때")}
       <th class="c fit">푸시${infoTip("「받음」은 광고성 정보 알림을 켠 지 2년이 안 됐고, 알림 받을 휴대폰이 서버에 등록된 회원입니다. 이런 회원에게만 푸시가 닿습니다.")}</th>
@@ -4082,6 +4125,7 @@ function playersTable() {
                    : '<span class="muted">—</span>';
         })()}</td>
         <td class="fit">${appVersionCell(p.id)}</td>
+        <td class="fit">${countryCell(p.id)}</td>
         <td class="muted wrap">${fmtDate(p.daily_date)}
           ${p.coins_at ? `<div class="muted" style="font-size:11px">마지막 접속 ${
             // daily_date와 같은 날이면 시:분만, 다른 날이면 날짜까지 적는다.
@@ -6010,6 +6054,7 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
         <button class="danger sm" id="resetAllGames" title="모든 회원의 레벨, 코인, 아이템을 처음으로 돌립니다">전체 게임 초기화</button>
         <button class="ghost sm" id="cancelResets" title="아직 앱을 안 켜서 적용 안 된 게임 초기화 요청을 거둡니다">게임 초기화 요청 거두기</button>
       </div>
+      ${sec("players.countries", "나라별 회원 수", countryCountsTable())}
       <div id="ptable">${playersTable()}</div>` : ""}
     ${TAB === "charts" ? chartsView(statsErr) : ""}
     ${TAB === "ranking" ? rankingView(rkErr) : ""}
@@ -6587,7 +6632,7 @@ async function boot() {
   const nerr = TAB === "notices" ? await loadNotices() : null;
   const perr2 = TAB === "purchases" ? await loadPurchases() : null;
   if (TAB === "admob") await loadAdmob();
-  if (TAB === "players") await Promise.all([loadPayTotals(), loadAppVersions()]);
+  if (TAB === "players") await Promise.all([loadPayTotals(), loadAppVersions(), loadCountries()]);
   if (TAB === "players") await loadReach();
   if (TAB === "rewards" || TAB === "players") {
     await loadRewards().catch(() => {});
