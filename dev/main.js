@@ -2955,9 +2955,11 @@ const NAV = [
   { id: "charts", label: "차트" },
   { id: "ranking", label: "랭킹" },
   { id: "liveevents", label: "이벤트" },
+  // 광고 수익은 자주 보는 화면이라 기록 묶음에서 꺼내 최상위로 올렸다(사용자 지시, 2026-10-15).
+  { id: "admob", label: "광고 수익" },
   { label: "같이하기", items: [["versus", "현황"], ["versusset", "설정"]] },
   { label: "회원", items: [["players", "회원 목록"], ["rewards", "보상"]] },
-  { label: "기록", items: [["events", "앱 사용 기록"], ["purchases", "결제"], ["admob", "광고 수익"], ["audit", "관리 기록"]] },
+  { label: "기록", items: [["events", "앱 사용 기록"], ["purchases", "결제"], ["audit", "관리 기록"]] },
   { label: "운영", items: [["anomaly", "이상 징후"], ["update", "업데이트·게임 설정"],
                           ["notices", "공지"], ["push", "푸시"], ["server", "서버 상태"]] },
 ];
@@ -3375,6 +3377,9 @@ document.addEventListener("click", (e) => {
   document.querySelector(".bell")?.classList.remove("open");
 });
 
+/** 마우스를 올려 하위 메뉴를 펼칠 수 있는 화면인지. index.html의 @media (hover:hover)와 같은 기준이다. */
+const HOVER_NAV = () => window.matchMedia("(hover: hover)").matches;
+
 function navBar() {
   return `<nav class="nav">${NAV.map((g) => {
     if (!g.items) {
@@ -3382,8 +3387,11 @@ function navBar() {
                 data-tab="${g.id}">${g.label}</button></div>`;
     }
     const active = g.items.some(([id]) => id === TAB);
+    // 묶음 이름을 누르면 그 묶음의 첫 화면으로 간다(사용자 지시, 2026-10-15). 이미 그 묶음 안이면 그 자리에 둔다.
+    // 마우스를 올리면 펼쳐지는 하위 목록은 예전 그대로다. 마우스가 없는 화면(휴대폰)은 예전처럼 눌러서 펼친다.
+    // 그래야 하위 메뉴를 고를 길이 남는다. 가를 때는 아래 배선의 HOVER_NAV를 본다.
     return `<div class="item">
-      <button class="top ${active ? "on" : ""}">${g.label}<span class="caret">▾</span></button>
+      <button class="top ${active ? "on" : ""}" data-grouptab="${active ? TAB : g.items[0][0]}">${g.label}<span class="caret">▾</span></button>
       <div class="menu">${g.items.map(([id, label]) =>
         `<button class="${TAB === id ? "on" : ""}" data-tab="${id}">${label}</button>`).join("")}</div>
     </div>`;
@@ -5992,10 +6000,12 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
   document.querySelectorAll("[data-tab]").forEach((b) => {
     b.onclick = () => { BELL_OPEN = false; TAB = b.dataset.tab; refresh(); };
   });
-  // 위쪽 메뉴 묶음: 누르면 그 메뉴만 열고 나머지는 닫는다(index.html .nav .item.open 주석).
+  // 위쪽 메뉴 묶음. 마우스가 있으면 첫 화면으로 바로 간다(2026-10-15).
+  // 마우스가 없으면 그 메뉴만 열고 나머지는 닫는다(index.html .nav .item.open 주석).
   document.querySelectorAll(".nav > .item > .top:not([data-tab])").forEach((b) => {
     b.onclick = (e) => {
       e.stopPropagation();
+      if (HOVER_NAV()) { BELL_OPEN = false; TAB = b.dataset.grouptab; refresh(); return; }
       const item = b.parentElement;
       const willOpen = !item.classList.contains("open");
       document.querySelectorAll(".nav > .item.open").forEach((x) => x.classList.remove("open"));
