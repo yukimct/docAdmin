@@ -114,7 +114,7 @@ const KIND_DEFAULTS = {
       { to: 10, coins: 100, hints: 0, autos: 0 },
     ],
   },
-  // 두 마리 산책길(121). 줄과 구역마다 강아지 두 마리이고 판이 8×8부터다. 여는 레벨 하한은 산책길과 같은 8이다.
+  // 두 마리 산책길(121). 줄과 구역마다 강아지 두 마리이고 판은 모두 10×10이다(085e79b, 121 size_order). 여는 레벨 하한은 산책길과 같은 8이다.
   // 옛 앱은 모르는 종류라 업데이트 안내를 보여 참여하지 못한다. 그래서 최소 빌드는 산책길과 같게 둔다.
   walk2: {
     label: "산책길 두 마리", minLevel: 8, minBuild: { ios: 51, android: 51 },
@@ -1604,9 +1604,15 @@ async function resetScores(id) {
 async function requestGameReset(id) {
   const p = findPlayer(id);
   // 서버가 직접 지울 수 없는 값(레벨·코인·아이템)이라 "요청"만 남긴다.
+  // 요청이 이미 걸려 있으면 다시 걸 때 요청 시각이 새로 찍힌다. 앱은 처리한 요청 시각과 다르면 새 요청으로 보고
+  // 또 지운다(d2e13d4 gameResetAction). 앱이 지운 뒤 서버에 알리지 못해 표시가 남은 사람도 있으니 먼저 알린다.
+  const again = p.reset_requested_at
+    ? `\n\n주의: ${fmtDateTime(p.reset_requested_at)}에 건 요청이 아직 남아 있습니다.\n` +
+      `다시 걸면 새 요청이 되어, 앱이 이미 한 번 지웠더라도 그 뒤 쌓은 진행을 한 번 더 지웁니다.`
+    : "";
   if (!confirm(`${p.username}의 게임 진행을 초기화 요청합니다.\n\n` +
     `레벨·코인·아이템은 기기 안에 있어서 서버가 직접 지울 수 없습니다.\n` +
-    `표시만 남기고, 그 사람이 다음에 앱을 켤 때 앱이 스스로 초기화합니다.`)) return;
+    `표시만 남기고, 그 사람이 다음에 앱을 켤 때 앱이 스스로 초기화합니다.` + again)) return;
   const reason = askReason("게임 진행 초기화 요청");
   if (reason === null) return;
   await act(() => rpc("admin_request_game_reset", { p_target: id, p_reason: reason }), refresh);
@@ -1653,10 +1659,14 @@ async function resetAllGames() {
   // 인원수를 먼저 보여주고, 정해진 문구를 직접 입력하게 해서 오조작을 막는다.
   // 전체 인원은 서버 집계로(회원 목록은 50명 한 쪽뿐이다).
   const n = SUMMARY?.members ?? PLAYERS.length;
+  // 이미 요청이 걸린 사람도 요청 시각이 새로 찍혀 앱이 새 요청으로 보고 한 번 더 지운다(d2e13d4 gameResetAction).
+  const waiting = SUMMARY?.reset_waiting ?? PLAYERS.filter((p) => p.reset_requested_at).length;
   const typed = window.prompt(
     `전체 ${n}명의 게임 진행(레벨·코인·아이템)을 초기화합니다.\n\n` +
     `표시만 남기고, 각자 앱을 켜거나 앱으로 돌아올 때 앱이 스스로 초기화합니다.\n` +
-    `이미 초기화된 사람은 되돌릴 수 없습니다.\n\n` +
+    `이미 초기화된 사람은 되돌릴 수 없습니다.\n` +
+    (waiting > 0 ? `요청이 아직 남아 있는 ${waiting}명도 새 요청이 되어, 앱이 이미 지웠더라도 한 번 더 지웁니다.\n` : "") +
+    `\n` +
     `확인을 위해 초기화 라고 입력하세요:`);
   if (typed === null) return;
   if (typed.trim() !== "초기화") { alert("입력이 달라 취소했습니다"); return; }
@@ -3369,7 +3379,7 @@ function serverTab(err) {
     ${audit}`, { note: `${fmt(COIN_AUDIT.length)}건` })}
 
     ${sec("server.grants", "최근에 나간 랭킹 보상", `
-    <div class="muted" style="font-size:12.5px;margin-bottom:6px">랭킹 보상 설정은 랭킹 메뉴로 옮겼습니다. 오늘 점수, 오늘의 퍼즐 기록, 숫자 퍼즐 탭 아래에 각각 있습니다.</div>
+    <div class="muted" style="font-size:12.5px;margin-bottom:6px">랭킹 보상 설정은 랭킹 메뉴로 옮겼습니다. 오늘 점수, 오늘의 퍼즐 기록, 숫자 퍼즐, 두 마리 탭 아래에 각각 있습니다.</div>
     <div class="toolbar">
       <select id="winnerDays">
         ${[7, 14, 30, 90].map((d) =>
@@ -3965,12 +3975,14 @@ function versusTab(err) {
 
   const roomsTable = VS_ROOMS.length ? `
     <h2>지금 열려 있는 방 · ${VS_ROOMS.length}개</h2>
-    <div class="table-scroll"><table style="min-width:560px">
-      <thead><tr><th>방 코드</th><th class="c fit">상태</th><th class="num">지금 판 / 최대 판</th><th class="num">인원</th>
+    <div class="table-scroll"><table style="min-width:680px">
+      <thead><tr><th>방 코드</th><th class="c fit">상태</th><th class="num">판 크기</th><th>승부</th><th class="num">지금 판 / 최대 판</th><th class="num">인원</th>
                  <th class="c fit">장난</th><th>참가자</th><th>만든 날</th><th>관리</th></tr></thead>
       <tbody>${VS_ROOMS.map((r) => `<tr>
         <td><b>${esc(r.code)}</b></td>
         <td class="c fit">${r.status === "playing" ? "대전 중" : "사람 기다리는 중"}</td>
+        <td class="num">${r.board_n ? `${r.board_n}×${r.board_n}` : "—"}</td>
+        <td>${esc(VS_SERIES[r.win_target] || `${r.win_target}선승`)}</td>
         <td class="num">${r.round_no}/${r.win_target * 2 - 1}</td>
         <td class="num">${r.players}</td>
         <!-- 070. **꺼진 방만 눈에 띄게** 적는다 — 켜진 것이 기본이라 전부 칠하면
@@ -4012,13 +4024,17 @@ function sumBy(rows, keyOf, valOf) {
   return [...acc].map(([bucket, players]) => ({ bucket, players }));
 }
 
+/** 대결 종류 이름. 앱 대전 카운트다운 설명 카드(versus_cd_mode_*)와 같은 말이다. */
 function modeLabel(mode) {
-  return mode === "trio" ? "1:1:1"
-       : mode === "team" ? "2:2"
+  return mode === "trio" ? "1:1:1 대결"
+       : mode === "team" ? "2:2 팀 대결"
        : mode === "coop" ? "2:2 협동"
-       : mode === "duo"  ? "1:1"
+       : mode === "duo"  ? "1:1 대결"
        : mode || "—";
 }
+
+/** 승부 이름. 방의 win_target(이길 판 수)을 앱 문구 versus_series_1~3과 같은 말로 적는다. */
+const VS_SERIES = { 1: "단판", 2: "3판 2선승", 3: "5판 3선승" };
 
 /** 051부터 일자별이 (날짜 × 모드)로 온다. 선 그래프는 날짜 단위라 다시 합친다.
  *  무승부 선을 같이 그리는 이유: 무승부가 갑자기 늘면 제한 시간이 짧다는 신호다. */
@@ -4676,7 +4692,7 @@ function openLiveEvent(id = null) {
   // 다른 언어 이름 칸. 113 전 서버면 옛 넷(en, ja, zh)만 그리고 옛 저장 함수로 보낸다.
   const nameI18n = i18nBlock($("#leNamesI18n"), {
     id: "i18n.event", langs: uiLangs(),
-    emptyTip: "비워 둔 언어는 그 언어로 된 앱의 기본 이름(산책길 이벤트면 「산책길」)을 보여 줍니다. 1.5.1 이하 앱은 한국어, 영어, 일본어, 중국어 간체 이름만 봅니다.",
+    emptyTip: "비워 둔 언어는 그 언어로 된 앱의 기본 이름(산책길은 「산책길」, 산책길 두 마리는 「두 마리 산책길」)을 보여 줍니다. 1.5.1 이하 앱은 한국어, 영어, 일본어, 중국어 간체 이름만 봅니다.",
     fields: [{ k: "name", label: "이름", src: "#leNameKo", max: leNameMax }],
     // 자동 번역으로 채운 이름도 글자 수를 다시 본다. check는 아래에서 만든다(누를 때 부른다).
     onInput: () => check(),
@@ -5554,7 +5570,7 @@ function testAccountsSection() {
     return sec("rank.tests", "시험 계정", loadFail("시험 계정 목록을 불러오지 못했습니다.", "", "sql/migrations/107_admin_records.sql"));
   }
   return sec("rank.tests", `시험 계정 · ${fmt(TEST_ACCOUNTS.length)}명`, `
-    <div class="muted" style="font-size:12.5px;margin-bottom:6px">시험 계정은 오늘 점수, 기록전, 숫자 퍼즐 랭킹과 이벤트 순위에서 빠지고, 푸시를 순위 조건으로 보낼 때도 빠집니다.
+    <div class="muted" style="font-size:12.5px;margin-bottom:6px">시험 계정은 오늘 점수, 기록전, 숫자 퍼즐, 두 마리 랭킹과 이벤트 순위에서 빠지고, 푸시를 순위 조건으로 보낼 때도 빠집니다.
       차트에서는 「시험 계정도 세기」를 켜야 셉니다. 지정은 회원 목록의 「시험 계정으로」 버튼으로 합니다.</div>
     ${TEST_ACCOUNTS.length ? `<div class="table-scroll"><table>
       <thead><tr><th>닉네임</th><th>까닭</th><th>지정한 때</th><th></th></tr></thead>
@@ -5570,7 +5586,7 @@ function testAccountsSection() {
 async function setTestAccount(id, on, name = "") {
   const who = name || findPlayer(id)?.username || String(id).slice(0, 8);
   if (on) {
-    if (!confirm(`${who} 회원을 시험 계정으로 지정합니다.\n\n오늘 점수, 기록전, 숫자 퍼즐 랭킹과 이벤트 순위에서 빠지고, 푸시를 순위 조건으로 보낼 때도 빠집니다.\n계속할까요?`)) return;
+    if (!confirm(`${who} 회원을 시험 계정으로 지정합니다.\n\n오늘 점수, 기록전, 숫자 퍼즐, 두 마리 랭킹과 이벤트 순위에서 빠지고, 푸시를 순위 조건으로 보낼 때도 빠집니다.\n계속할까요?`)) return;
     const reason = askReasonRequired("시험 계정 지정");
     if (reason === null) return;
     await act(() => rpc("admin_set_test_account", { p_profile_id: id, p_on: true, p_reason: reason }), refresh);
@@ -5778,7 +5794,7 @@ const CFG_EDITORS = {
   // 120. 앱이 enabled·score_pct·coin_pct를 읽고, 서버 two_dog_board_put과 점수 상한 two_dog_score_cap이 같은 값을 읽는다.
   two_dog_mode: {
     title: "두 마리",
-    note: "줄과 구역마다 강아지를 두 마리씩 놓는 모드의 설정입니다. 랭킹은 매일 그날 점수의 합이고 기간은 바꿀 수 없습니다. 칸을 비우면 기본값을 씁니다.",
+    note: "줄과 구역마다 강아지를 두 마리씩 놓는 모드의 설정입니다. 판은 모두 10×10입니다. 랭킹은 매일 그날 점수의 합이고 기간은 바꿀 수 없습니다. 칸을 비우면 기본값을 씁니다.",
     fields: [
       { k: "enabled", type: "bool", label: "두 마리 켜기", help: "끄면 앱 설정에서 고르는 줄이 사라지고 PLAY가 한 마리로 갑니다. 새로 깬 판은 랭킹에 들어가지 않습니다" },
       { k: "min_build.ios", type: "int", label: "iOS 앱 최소 빌드 번호", help: "이 번호보다 낮은 앱에서 깬 판은 랭킹에 넣지 않습니다", tip: BUILD_TIP },
@@ -5786,7 +5802,7 @@ const CFG_EDITORS = {
       { k: "score_pct", type: "int", label: "판 점수 비율 (%)", def: 100,
         help: "100이면 한 마리와 같은 식으로 점수를 셉니다",
         tip: "점수는 판 크기, 남은 뼈다귀, 빈칸, 콤보, 시간으로 한 마리와 같은 식으로 센 뒤 이 비율을 곱합니다. "
-          + "서버의 점수 상한도 같은 값을 읽어서, 바꾸면 앱 점수와 상한이 함께 움직입니다. 예: 8×8 만점은 100일 때 2,630점, 150일 때 3,945점입니다." },
+          + "서버의 점수 상한도 같은 값을 읽어서, 바꾸면 앱 점수와 상한이 함께 움직입니다. 예: 판은 모두 10×10이라 만점이 100일 때 3,750점, 150일 때 5,625점입니다." },
       { k: "coin_pct", type: "int", label: "판 클리어 코인 비율 (%)", def: 50,
         help: "100이면 점수 ÷ 100만큼, 50이면 절반입니다", tip: "레벨 판 코인 식에 이 비율을 곱합니다." },
       { k: "late_grace_min", type: "int", label: "마감 뒤 더 받아 주는 시간 (분)",
@@ -5794,9 +5810,10 @@ const CFG_EDITORS = {
         tip: "인터넷이 늦게 붙은 사람을 위한 여유입니다. 예: 10이면 0시 뒤 10분까지 올라온 판을 받습니다." },
       { k: "min_ms_per_dog", type: "int", ms: true, label: "한 마리당 최소 시간",
         help: "이보다 빨리 깬 판은 사람이 낼 수 없는 기록으로 보고 받지 않습니다",
-        tip: "판의 강아지 수 × 이 값이 기준입니다. 두 마리 판은 강아지가 판 크기의 두 배입니다. 예: 600이고 8×8 판이면 16마리라 9.6초보다 빨리 깬 판을 받지 않습니다." },
+        tip: "판의 강아지 수 × 이 값이 기준입니다. 두 마리 판은 강아지가 판 크기의 두 배입니다. 예: 600이면 10×10 판은 20마리라 12초보다 빨리 깬 판을 받지 않습니다." },
       { k: "suspect_ms_per_dog", type: "int", ms: true, label: "의심 표시 기준 · 한 마리당",
-        help: "이보다 빨리 깨면 받기는 하고 「빠름」 표시를 붙입니다" },
+        help: "이보다 빨리 깨면 받기는 하고 「빠름」 표시를 붙입니다",
+        tip: "판의 강아지 수 × 이 값이 기준입니다. 예: 1500이면 10×10 판은 20마리라 30초보다 빨리 깬 판에 표시가 붙습니다." },
       { k: "slack_ms", type: "int", ms: true, label: "휴대폰 시계 오차 봐주기", help: "휴대폰 시계와 서버 시계가 이만큼 달라도 넘어갑니다" },
     ],
   },
@@ -5804,7 +5821,7 @@ const CFG_EDITORS = {
   mailbox_rank_push: {
     title: "랭킹 보상 도착 푸시",
     note: "켜면 매일 한국시간 12시에 랭킹 보상을 나눠 준 뒤, 새로 보상을 받은 사람에게 「우편함 / 랭킹 보상이 도착했어요.」 알림을 보냅니다. 처음에는 꺼져 있습니다.",
-    tip: "오늘 점수, 기록전, 숫자 퍼즐, 이벤트 보상이 모두 해당하고, 광고가 아닌 서비스 안내로 각자의 앱 언어에 맞춰 나갑니다. "
+    tip: "오늘 점수, 기록전, 숫자 퍼즐, 두 마리, 이벤트 보상이 모두 해당하고, 광고가 아닌 서비스 안내로 각자의 앱 언어에 맞춰 나갑니다. "
       + "한 사람에게 하루 한 통이고, 같은 보상으로 두 번 보내지 않습니다. 1.5.0 이상 앱을 쓴 적이 있고 광고성 정보 알림을 켠 사람에게만 갑니다.",
     fields: [
       { k: "enabled", type: "bool", label: "랭킹 보상 도착 푸시 켜기", def: false },
