@@ -3011,6 +3011,7 @@ function updateTab(err) {
     </div>`)
     + pane("daily", cfgEditor("daily_record"))
     + pane("number", cfgEditor("number_mode"))
+    + pane("twodog", cfgEditor("two_dog_mode"))
     + pane("level", cfgEditor("level_mode"))
     + pane("missions", missionsEditor())
     + pane("notify", cfgEditor("mailbox_rank_push"))
@@ -3036,7 +3037,7 @@ function updateTab(err) {
 }
 
 /** 업데이트·게임 설정의 하위 탭. 고른 칸은 기기에 적어 두고 다음에 열 때 그 칸부터 보인다. */
-const UPD_VIEWS = [["ver", "버전·점검"], ["daily", "기록전"], ["number", "숫자 퍼즐"], ["level", "레벨 판·코인"],
+const UPD_VIEWS = [["ver", "버전·점검"], ["daily", "기록전"], ["number", "숫자 퍼즐"], ["twodog", "두 마리"], ["level", "레벨 판·코인"],
                    ["missions", "미션"], ["notify", "알림"], ["etc", "기타"]];
 const UPD_STORE = "dogadm.updateView";
 let UPD_VIEW = (() => { const v = loadStore(UPD_STORE, "ver"); return UPD_VIEWS.some(([k]) => k === v) ? v : "ver"; })();
@@ -3075,7 +3076,7 @@ let SRV = null, WINNERS = [], TRANSFERS = [], COIN_AUDIT = [];
 /** 최근 랭킹 보상 지급(107 admin_rank_grants). 못 읽었으면 null. */
 let GRANTS = null;
 /** 지급 줄의 랭킹 이름. */
-const GRANT_KIND = { today: "오늘 점수", daily_time: "기록전", number: "숫자 퍼즐", event: "이벤트" };
+const GRANT_KIND = { today: "오늘 점수", daily_time: "기록전", number: "숫자 퍼즐", event: "이벤트", two_dog: "두 마리" };
 
 /** 최근 랭킹 보상 표. 수령은 받음 · 우편함 대기(기한) · 기한 지남. */
 function grantsTable() {
@@ -3088,7 +3089,7 @@ function grantsTable() {
     <tbody>${moreRows("grants", GRANTS.map((g) => `<tr>
       <td class="muted">${esc(fmtDate(g.created_at))}</td>
       <td>${esc(GRANT_KIND[g.kind] || g.kind)}</td>
-      <td>${esc(g.kind === "event" ? `#${g.period_key} ${g.event_name || ""}` : g.kind === "number" ? numberPeriodLabel(g.period_key) : g.period_key)}</td>
+      <td>${esc(g.kind === "event" ? `#${g.period_key} ${g.event_name || ""}` : g.kind === "number" || g.kind === "two_dog" ? numberPeriodLabel(g.period_key) : g.period_key)}</td>
       <td class="c fit">${g.rank}등</td>
       <td>${g.profile_id ? `<button class="plink" data-member="${esc(g.profile_id)}">${esc(g.username || String(g.profile_id).slice(0, 8))}</button>` : '<span class="muted">탈퇴</span>'}</td>
       <td class="num">${rec(g)}</td>
@@ -5470,7 +5471,7 @@ async function openMember(id) {
 
 // ------------------------------------------------------------------ 랭킹 메뉴: 오늘 점수 · 오늘의 퍼즐 기록 · 숫자 (107)
 
-const RANK_VIEWS = [["today", "오늘 점수"], ["daily_time", "오늘의 퍼즐 기록"], ["number", "숫자 퍼즐"]];
+const RANK_VIEWS = [["today", "오늘 점수"], ["daily_time", "오늘의 퍼즐 기록"], ["number", "숫자 퍼즐"], ["two_dog", "두 마리"]];
 let RANK_VIEW = "today";
 /** 기록 랭킹 한 기간의 표. REC_PERIOD가 비면 지금 기간이다(서버가 정한다). */
 let REC_ROWS = [], REC_TOTAL = 0, REC_PAGE = 0, REC_PERIOD = "", REC_ERR = null;
@@ -5513,9 +5514,10 @@ function numberPeriodRange(key) {
   return [d0.toISOString().slice(0, 10), d1.toISOString().slice(0, 10)];
 }
 
-/** 고를 수 있는 숫자 기간. 지금 설정의 기간 방식으로 최근 몇 개를 만든다. 서버 rank_period(101)와 같은 셈이다. */
-function numberPeriodChoices() {
-  const day = CONFIG?.number_mode?.period === "day";
+/** 고를 수 있는 숫자 기간. 지금 설정의 기간 방식으로 최근 몇 개를 만든다. 서버 rank_period(101)와 같은 셈이다.
+ *  두 마리(120)는 늘 하루 기간(d:)이라 kind로 받는다. */
+function numberPeriodChoices(kind = "number") {
+  const day = kind === "two_dog" || CONFIG?.number_mode?.period === "day";
   const today = kstDate(0);
   const t = new Date(`${today}T00:00:00Z`);
   const out = [];
@@ -5577,9 +5579,11 @@ function recordRankingTab() {
     ? `<input type="date" id="recDate" value="${esc(REC_PERIOD || today)}" max="${today}">
        <button class="sm" id="recToday">오늘</button>`
     : `<select id="recPeriod"><option value="" ${REC_PERIOD ? "" : "selected"}>지금 진행 중인 기간</option>${
-        numberPeriodChoices().map((k) => `<option value="${k}" ${k === REC_PERIOD ? "selected" : ""}>${esc(numberPeriodLabel(k))}</option>`).join("")}</select>`;
+        numberPeriodChoices(kind).map((k) => `<option value="${k}" ${k === REC_PERIOD ? "selected" : ""}>${esc(numberPeriodLabel(k))}</option>`).join("")}</select>`;
   const how = kind === "daily_time"
     ? "그날 오늘의 퍼즐을 빨리 푼 순위입니다. 걸린 시간이 짧은 순이고, 같으면 실수가 적은 순입니다. 매일 한국시간 0시에 마감합니다."
+    : kind === "two_dog"
+    ? `두 마리 판 하루 순위입니다. 그날 깬 두 마리 판 점수를 모두 더합니다. 매일 한국시간 0시에 마감하고, 앱에서는 랭킹 「일반」 탭 안에서 한 마리와 바꿔 봅니다.${per ? ` 지금 보는 날: ${esc(numberPeriodLabel(per))}` : ""}`
     : `숫자 퍼즐 한 기간의 순위입니다. 기간과 랭킹 점수 세는 법은 운영 → 업데이트·게임 설정의 숫자 퍼즐 칸을 따릅니다.${per ? ` 지금 보는 기간: ${esc(numberPeriodLabel(per))}` : ""}`;
   const rec = (r) => (kind === "daily_time" ? (r.value == null ? "—" : fmtDur(r.value)) : r.value == null ? "—" : fmt(r.value));
   const pages = Math.max(1, Math.ceil(REC_TOTAL / REC_SIZE));
@@ -5605,7 +5609,7 @@ function recordRankingTab() {
       랭킹이 마감되면 보상이 <b>우편함</b>으로 가고, 보낸 날부터 ${RANK_CLAIM_DAYS}일 안에 받아야 합니다. 아직 보상을 보내기 전인 줄의 「받을 보상」은 지금 보상표로 계산한 예상입니다.</div>
     <div class="toolbar">${pick}
       <div style="flex:1"></div>
-      <button class="ghost sm" id="recStats" title="차트 메뉴에서 이 기간의 판 하나하나를 봅니다">차트로 보기</button>
+      ${kind === "two_dog" ? "" : '<button class="ghost sm" id="recStats" title="차트 메뉴에서 이 기간의 판 하나하나를 봅니다">차트로 보기</button>'}
     </div>
     ${sec(`rank.${kind}.list`, `${esc(label)} 참가자 · ${fmt(REC_TOTAL)}명`, `
     ${REC_ERR ? loadFail("랭킹을 불러오지 못했습니다.", REC_ERR, "sql/migrations/107_admin_records.sql")
@@ -5634,9 +5638,10 @@ const PLAY_REASON = {
 async function excludeFromRecordRanking(profileId, name) {
   const per = REC_ROWS[0]?.period_key || REC_PERIOD;
   if (!per) return;
-  const label = RANK_VIEW === "number" ? numberPeriodLabel(per) : per;
-  if (!confirm(`${name || profileId.slice(0, 8)} 회원을 ${label} 랭킹에서 뺍니다.\n\n${EXCLUDE_HOW}` +
-               (RANK_VIEW === "number" ? "\n숫자 퍼즐은 이 기간에 앞으로 깨는 판도 점수에 넣지 않습니다." : "") + "\n\n계속할까요?")) return;
+  const label = RANK_VIEW === "number" || RANK_VIEW === "two_dog" ? numberPeriodLabel(per) : per;
+  const future = { number: "\n숫자 퍼즐은 이 기간에 앞으로 깨는 판도 점수에 넣지 않습니다.",
+                   two_dog: "\n두 마리는 그날 앞으로 깨는 판도 점수에 넣지 않습니다." }[RANK_VIEW] || "";
+  if (!confirm(`${name || profileId.slice(0, 8)} 회원을 ${label} 랭킹에서 뺍니다.\n\n${EXCLUDE_HOW}` + future + "\n\n계속할까요?")) return;
   const reason = askReasonRequired("랭킹 순위에서 빼기");
   if (reason === null) return;
   await act(async () => {
@@ -5749,6 +5754,31 @@ const CFG_EDITORS = {
       { k: "suspect_ms_per_dog", type: "int", ms: true, label: "의심 표시 기준 · 한 마리당",
         help: "이보다 빨리 깨면 받기는 하고 「빠름」 표시를 붙입니다",
         tip: "판 크기 × 이 값이 기준입니다. 예: 1500이고 6×6 판이면 9초보다 빨리 깬 판에 표시가 붙습니다." },
+      { k: "slack_ms", type: "int", ms: true, label: "휴대폰 시계 오차 봐주기", help: "휴대폰 시계와 서버 시계가 이만큼 달라도 넘어갑니다" },
+    ],
+  },
+  // 120. 앱이 enabled·score_pct·coin_pct를 읽고, 서버 two_dog_board_put과 점수 상한 two_dog_score_cap이 같은 값을 읽는다.
+  two_dog_mode: {
+    title: "두 마리",
+    note: "줄과 구역마다 강아지를 두 마리씩 놓는 모드의 설정입니다. 랭킹은 매일 그날 점수의 합이고 기간은 바꿀 수 없습니다. 칸을 비우면 기본값을 씁니다.",
+    fields: [
+      { k: "enabled", type: "bool", label: "두 마리 켜기", help: "끄면 앱 설정에서 고르는 줄이 사라지고 PLAY가 한 마리로 갑니다. 새로 깬 판은 랭킹에 들어가지 않습니다" },
+      { k: "min_build.ios", type: "int", label: "iOS 앱 최소 빌드 번호", help: "이 번호보다 낮은 앱에서 깬 판은 랭킹에 넣지 않습니다", tip: BUILD_TIP },
+      { k: "min_build.android", type: "int", label: "AOS 앱 최소 빌드 번호", help: "이 번호보다 낮은 앱에서 깬 판은 랭킹에 넣지 않습니다", tip: BUILD_TIP },
+      { k: "score_pct", type: "int", label: "판 점수 비율 (%)", def: 100,
+        help: "100이면 한 마리와 같은 식으로 점수를 셉니다",
+        tip: "점수는 판 크기, 남은 뼈다귀, 빈칸, 콤보, 시간으로 한 마리와 같은 식으로 센 뒤 이 비율을 곱합니다. "
+          + "서버의 점수 상한도 같은 값을 읽어서, 바꾸면 앱 점수와 상한이 함께 움직입니다. 예: 8×8 만점은 100일 때 2,630점, 150일 때 3,945점입니다." },
+      { k: "coin_pct", type: "int", label: "판 클리어 코인 비율 (%)", def: 50,
+        help: "100이면 점수 ÷ 100만큼, 50이면 절반입니다", tip: "레벨 판 코인 식에 이 비율을 곱합니다." },
+      { k: "late_grace_min", type: "int", label: "마감 뒤 더 받아 주는 시간 (분)",
+        help: "그날이 끝난 뒤에도 이 시간 안에 올라온 판은 받습니다",
+        tip: "인터넷이 늦게 붙은 사람을 위한 여유입니다. 예: 10이면 0시 뒤 10분까지 올라온 판을 받습니다." },
+      { k: "min_ms_per_dog", type: "int", ms: true, label: "한 마리당 최소 시간",
+        help: "이보다 빨리 깬 판은 사람이 낼 수 없는 기록으로 보고 받지 않습니다",
+        tip: "판의 강아지 수 × 이 값이 기준입니다. 두 마리 판은 강아지가 판 크기의 두 배입니다. 예: 600이고 8×8 판이면 16마리라 9.6초보다 빨리 깬 판을 받지 않습니다." },
+      { k: "suspect_ms_per_dog", type: "int", ms: true, label: "의심 표시 기준 · 한 마리당",
+        help: "이보다 빨리 깨면 받기는 하고 「빠름」 표시를 붙입니다" },
       { k: "slack_ms", type: "int", ms: true, label: "휴대폰 시계 오차 봐주기", help: "휴대폰 시계와 서버 시계가 이만큼 달라도 넘어갑니다" },
     ],
   },
