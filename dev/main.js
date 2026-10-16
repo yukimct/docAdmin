@@ -4185,6 +4185,7 @@ function playersTable() {
           ${played ? '<span class="pill today">오늘</span>' : ""}
           ${p.reset_requested_at ? '<span class="pill heart" title="다음에 앱을 켜면 게임이 처음부터 시작됩니다">게임 초기화 요청됨</span>' : ""}
           ${TEST_SET.has(String(p.id)) ? '<span class="pill dim">시험 계정</span>' : ""}
+          ${BLOCK_SET.has(String(p.id)) ? '<span class="pill warn" title="게임은 할 수 있지만 막힌 동안 낸 점수는 랭킹에 오르지 않습니다">점수 막힘</span>' : ""}
           ${looksIdle(p) ? `<span class="pill dim" title="가입하고 ${IDLE_JUDGE_HOURS}시간이 지났는데 판을 깬 적이 없고, 가입 뒤 ${IDLE_LAST_SEEN_MINUTES}분 안에 접속이 끊겼습니다. 점수, 대전, 결제, 푸시 동의 기록도 없습니다. 추정이라 실제 사용자일 수 있습니다">사용 안 함 추정</span>` : ""}</td>
         <td class="num">${p.max_level == null ? '<span class="muted">—</span>' : fmt(p.max_level)}</td>
         <td class="num">${fmt(p.total_score)}</td>
@@ -4314,6 +4315,7 @@ const AUDIT_NAMES = {
   set_notice_popup: "공지 창 띄우기 바꿈", notice_push: "공지 푸시", set_config: "설정 바꿈", force_rename: "닉네임 강제 변경",
   close_room: "대전 방 닫음", purge_rooms: "버려진 방 정리", cleanup_orphan_users: "빈 계정 정리",
   test_account_on: "시험 계정 지정", test_account_off: "시험 계정 풀기", rank_exclude: "랭킹에서 뺌",
+  score_block_on: "점수 막기", score_block_off: "점수 막기 풀기",
   live_event_create: "이벤트 만듦", live_event_update: "이벤트 고침", live_event_end_now: "이벤트 지금 끝냄",
   live_event_cancel: "이벤트 취소", live_event_exclude: "이벤트 순위에서 뺌",
   // 114
@@ -4324,7 +4326,7 @@ const AUDIT_NAMES = {
 const AUDIT_KEYS = {
   reason: "사유", note: "메모", value: "값", key: "설정", minutes: "분", affected: "대상 수", report: "신고 번호",
   id: "번호", coins: "코인", hints: "힌트", autos: "자동배치", memo: "메모", daily: "오늘 점수", total: "누적 점수",
-  name: "이름", kind: "종류", event_id: "이벤트 번호", batch_id: "묶음 번호", notice_id: "공지 번호", code: "코드",
+  name: "이름", kind: "종류", event_id: "이벤트 번호", started_at: "막은 때", block_reason: "막은 까닭", batch_id: "묶음 번호", notice_id: "공지 번호", code: "코드",
   // 114 푸시·장난 기록
   title: "제목", target: "대상", target_arg: "대상 값", scheduled_at: "보낼 시각", link: "링크", before: "전", after: "후",
 };
@@ -5540,6 +5542,8 @@ let REC_ROWS = [], REC_TOTAL = 0, REC_PAGE = 0, REC_PERIOD = "", REC_ERR = null;
 const REC_SIZE = 50;
 /** 시험 계정(107). null이면 못 읽었다(107 전 서버). */
 let TEST_ACCOUNTS = null, TEST_SET = new Set();
+/** 점수 막기(123). 지금 막힌 회원과 최근 30일 안에 푼 기록이다. null이면 못 읽었다. 123 전 서버라 그렇다. */
+let SCORE_BLOCKS = null, BLOCK_SET = new Set();
 /** 숫자 기간 고르기에 늘어놓을 지난 기간 수. */
 const NUMBER_PERIOD_CHOICES = { week: 8, day: 14 };
 
@@ -5558,6 +5562,13 @@ async function loadTestAccounts() {
     TEST_ACCOUNTS = await rpc("admin_test_accounts") || [];
   } catch { TEST_ACCOUNTS = null; }
   TEST_SET = new Set((TEST_ACCOUNTS || []).map((t) => String(t.profile_id)));
+}
+
+async function loadScoreBlocks() {
+  try {
+    SCORE_BLOCKS = await rpc("admin_score_blocks") || [];
+  } catch { SCORE_BLOCKS = null; }
+  BLOCK_SET = new Set((SCORE_BLOCKS || []).filter((b) => b.active).map((b) => String(b.profile_id)));
 }
 
 /** 숫자 기간 열쇠(101 rank_period)를 사람이 읽는 말로. w:2026-10-05 → 「10/05 주」, d:2026-10-05 → 「10/05」. */
@@ -5608,6 +5619,71 @@ function testAccountsSection() {
         <td>${esc(fmtDateTime(t.created_at))}</td>
         <td><button class="ghost sm" data-testoff="${esc(t.profile_id)}" data-name="${esc(t.username || "")}">시험 계정 풀기</button></td>
       </tr>`).join("")}</tbody></table></div>` : '<div class="empty">시험 계정이 없습니다</div>'}`);
+}
+
+/** 점수 막기가 하는 일. 확인창과 표 안내가 같은 말을 쓴다. */
+const SCORE_BLOCK_HOW =
+  "게임은 평소처럼 할 수 있고 앱에 막혔다는 안내는 가지 않습니다. 막힌 동안 낸 점수만 랭킹에 오르지 않습니다.\n" +
+  "오늘 점수와 누적 점수는 서버에서 멈추고, 앱에는 평소처럼 자기 점수가 보입니다.\n" +
+  "기록전은 앱에 「기록 확인을 통과하지 못했어요」로 보이고, 숫자 퍼즐과 두 마리는 순위 밖으로 보입니다.\n" +
+  "산책길 이벤트는 최고 기록이 오르지 않고, 대전과 협동은 막힌 동안의 판이 전적에 들지 않습니다.\n" +
+  "막기 전에 낸 점수는 그대로 남습니다. 지금 기간 점수까지 빼려면 랭킹 메뉴의 「순위에서 빼기」나 「점수 0으로」를 같이 쓰세요.";
+
+/** 점수 막은 회원 표. 회원 목록 위와 랭킹 세 탭 맨 아래에 같은 것을 둔다. */
+function scoreBlocksSection() {
+  if (SCORE_BLOCKS === null) {
+    return sec("players.blocks", "점수 막은 회원", loadFail("점수 막은 회원 목록을 불러오지 못했습니다.", "", "sql/migrations/123_score_block.sql"));
+  }
+  const on = SCORE_BLOCKS.filter((b) => b.active), off = SCORE_BLOCKS.filter((b) => !b.active);
+  const who = (b) => b.profile_id
+    ? `<button class="plink" data-member="${esc(b.profile_id)}">${esc(b.username || String(b.profile_id).slice(0, 8))}</button>`
+    : '<span class="muted">탈퇴</span>';
+  const by = (email, id) => esc(email || (id ? String(id).slice(0, 8) : ""));
+  return sec("players.blocks", `점수 막은 회원 · ${fmt(on.length)}명`, `
+    <div class="muted" style="font-size:12.5px;margin-bottom:6px;white-space:pre-line">${esc(SCORE_BLOCK_HOW)}
+      거는 것은 회원 목록의 「관리」 메뉴에서 「점수 막기」로 합니다.</div>
+    ${on.length ? `<div class="table-scroll"><table>
+      <thead><tr><th>닉네임</th><th>까닭</th><th>건 때</th><th>건 관리자</th><th></th></tr></thead>
+      <tbody>${on.map((b) => `<tr>
+        <td>${who(b)}</td>
+        <td class="long">${esc(b.reason || "")}</td>
+        <td>${esc(fmtDateTime(b.started_at))}</td>
+        <td class="muted">${by(b.created_by_email, b.created_by)}</td>
+        <td><button class="ghost sm" data-blockoff="${esc(b.profile_id)}" data-name="${esc(b.username || "")}">점수 막기 풀기</button></td>
+      </tr>`).join("")}</tbody></table></div>` : '<div class="empty">점수 막은 회원이 없습니다</div>'}
+    ${off.length ? `<h3 class="sub" style="margin:14px 0 6px">최근 30일 안에 푼 기록 · ${fmt(off.length)}건</h3>
+      <div class="table-scroll"><table>
+      <thead><tr><th>닉네임</th><th>막은 까닭</th><th>막은 기간</th><th>건 관리자</th><th>푼 관리자</th><th>푼 까닭</th></tr></thead>
+      <tbody>${off.map((b) => `<tr>
+        <td>${who(b)}</td>
+        <td class="long">${esc(b.reason || "")}</td>
+        <td class="muted">${esc(fmtDateTime(b.started_at))} ~ ${esc(fmtDateTime(b.ended_at))}</td>
+        <td class="muted">${by(b.created_by_email, b.created_by)}</td>
+        <td class="muted">${by(b.ended_by_email, b.ended_by)}</td>
+        <td class="long muted">${esc(b.end_reason || "")}</td>
+      </tr>`).join("")}</tbody></table></div>` : ""}`, { note: `${fmt(on.length)}명` });
+}
+
+/** 점수 막기 걸기·풀기. 거는 것은 사유가 필수다(서버 admin_score_block). */
+async function setScoreBlock(id, on, name = "") {
+  const who = name || findPlayer(id)?.username || String(id).slice(0, 8);
+  if (on) {
+    if (!confirm(`${who} 회원의 점수를 막습니다.\n\n${SCORE_BLOCK_HOW}\n\n계속할까요?`)) return;
+    const reason = askReasonRequired("점수 막기");
+    if (reason === null) return;
+    await act(async () => {
+      const r = await rpc("admin_score_block", { p_profile_id: id, p_on: true, p_reason: reason });
+      if (r === "already") alert("이미 점수가 막혀 있는 회원입니다. 건 때와 까닭은 바꾸지 않았습니다.");
+    }, refresh);
+  } else {
+    if (!confirm(`${who} 회원의 점수 막기를 풉니다.\n\n지금부터 내는 점수는 다시 랭킹에 오릅니다. 막힌 동안 낸 점수는 되살아나지 않습니다.`)) return;
+    const reason = askReason("점수 막기 풀기");
+    if (reason === null) return;
+    await act(async () => {
+      const r = await rpc("admin_score_block", { p_profile_id: id, p_on: false, p_reason: reason });
+      if (r === "not_blocked") alert("점수가 막혀 있지 않은 회원입니다.");
+    }, refresh);
+  }
 }
 
 /** 시험 계정 지정·해제. 지정은 사유가 필수다(서버 admin_set_test_account). */
@@ -5686,7 +5762,8 @@ function recordRankingTab() {
           <button class="ghost sm" id="recNext" ${REC_PAGE + 1 < pages ? "" : "disabled"}>다음</button></div>` : ""}`
       : '<div class="empty">이 기간에 기록이 없습니다</div>'}`, { open: true })}
     ${sec(`rank.${kind}.reward`, `${esc(label)} 보상`, rankRewardEditor(`rank_rewards_${kind}`, label), { note: rewardNote(`rank_rewards_${kind}`) })}
-    ${testAccountsSection()}`;
+    ${testAccountsSection()}
+    ${scoreBlocksSection()}`;
 }
 
 /** 기록 랭킹 사유 코드의 이름. 107 admin_play_reason_label과 같은 말이다(관리자 제외·서버 확인 안 됨 등 순위 표에 나오는 것만). */
@@ -5694,7 +5771,7 @@ const PLAY_REASON = {
   admin: "관리자가 뺌", unverified: "서버가 시간을 확인 못 함", game_over: "뼈다귀 다 씀", offline_check: "휴대폰 시각 확인 불가",
   closed: "마감 뒤 도착", unfinished: "마감 전에 못 끝냄", rejected: "기록 확인 실패", before_update: "업데이트 전에 본 퍼즐",
   too_fast: "너무 빠름", too_slow: "너무 오래 걸림", score_over: "나올 수 없는 점수", late: "늦게 도착", game_reset: "게임 초기화",
-  off: "기능 꺼짐", old_build: "옛 버전 앱", future: "아직 안 온 기간",
+  off: "기능 꺼짐", old_build: "옛 버전 앱", future: "아직 안 온 기간", score_block: "점수 막기",
 };
 
 async function excludeFromRecordRanking(profileId, name) {
@@ -5718,7 +5795,7 @@ function rankingView(err) {
     `<button class="${RANK_VIEW === k ? "on" : ""}" data-rankview="${k}">${label}</button>`).join("")}</div>`;
   if (RANK_VIEW !== "today") return tabs + recordRankingTab();
   return tabs + rankingTab(err) + sec("rank.today.reward", "오늘 점수 보상", rankRewardEditor("rank_rewards", "오늘 점수"),
-    { note: rewardNote("rank_rewards") }) + testAccountsSection();
+    { note: rewardNote("rank_rewards") }) + testAccountsSection() + scoreBlocksSection();
 }
 
 // ------------------------------------------------------------------ 설정: 오늘의 퍼즐 기록전 · 숫자 퍼즐 (101·102)
@@ -6174,6 +6251,7 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
         <button class="ghost sm" id="cancelResets" title="아직 앱을 안 켜서 적용 안 된 게임 초기화 요청을 거둡니다">게임 초기화 요청 거두기</button>
       </div>
       ${sec("players.countries", "나라별 회원 수", countryCountsTable())}
+      ${scoreBlocksSection()}
       <div id="ptable">${playersTable()}</div>` : ""}
     ${TAB === "charts" ? chartsView(statsErr) : ""}
     ${TAB === "ranking" ? rankingView(rkErr) : ""}
@@ -6347,6 +6425,9 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     };
     document.querySelectorAll("[data-testoff]").forEach((b) => {
       b.onclick = () => setTestAccount(b.dataset.testoff, false, b.dataset.name);
+    });
+    document.querySelectorAll("[data-blockoff]").forEach((b) => {
+      b.onclick = () => setScoreBlock(b.dataset.blockoff, false, b.dataset.name);
     });
     bindTierEditors();
   }
@@ -6529,6 +6610,9 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
   }
 
   if (TAB === "players") {
+    document.querySelectorAll("[data-blockoff]").forEach((b) => {
+      b.onclick = () => setScoreBlock(b.dataset.blockoff, false, b.dataset.name);
+    });
     $("#sort").value = SORT;
     // 한 군데로 모은다 — 선택 상자·방향 단추·표 머리글이 같은 길을 쓴다.
     const applySort = async (key, desc) => {
@@ -6652,6 +6736,7 @@ const ROW_HANDLERS = {
   name: editName, score: editScores, heart: toggleSupporter, gift: openGrant,
   zero: resetScores, wipe: requestGameReset, del: removePlayer, log: toggleMember,
   testacct: (id) => setTestAccount(id, !TEST_SET.has(String(id))),
+  scoreblock: (id) => setScoreBlock(id, !BLOCK_SET.has(String(id))),
 };
 
 function bindRowActions() {
@@ -6668,6 +6753,7 @@ function bindRowActions() {
 /** [작업, 이름, 설명, 위험한가]. 설명은 메뉴에 마우스를 올리면 보인다. */
 function rowMenuItems(id) {
   const test = TEST_SET.has(String(id));
+  const blocked = BLOCK_SET.has(String(id));
   return [
     ["name", "닉네임 바꾸기", ""],
     ["score", "점수 고치기", ""],
@@ -6675,6 +6761,8 @@ function rowMenuItems(id) {
     ["gift", "보상 주기", ""],
     ["testacct", test ? "시험 계정 풀기" : "시험 계정으로", "시험 계정은 랭킹과 이벤트 순위에서 빠집니다"],
     null,
+    ["scoreblock", blocked ? "점수 막기 풀기" : "점수 막기",
+     blocked ? "지금부터 내는 점수는 다시 랭킹에 오릅니다" : "게임은 그대로 하고 막힌 동안 낸 점수만 랭킹에 오르지 않게 합니다", !blocked],
     ["zero", "점수 0으로", "오늘 점수와 누적 점수를 0으로 만듭니다", true],
     ["wipe", "게임 초기화", "레벨, 코인, 아이템을 처음 상태로 돌립니다. 그 사람이 다음에 앱을 켤 때 적용됩니다", true],
     ["del", "계정 삭제", "", true],
@@ -6780,6 +6868,8 @@ async function boot() {
   if (TAB === "ranking" && RANK_VIEW !== "today") await loadRecordRanking();
   // 시험 계정은 회원 목록(알약·버튼)과 랭킹 메뉴(맨 아래 표)가 쓴다.
   if (TAB === "players" || TAB === "ranking") await loadTestAccounts();
+  // 점수 막기도 회원 목록(알약·메뉴·표)과 랭킹 메뉴(맨 아래 표)가 쓴다.
+  if (TAB === "players" || TAB === "ranking") await loadScoreBlocks();
   if (TAB === "liveevents" && LE_OPEN != null) await loadLiveRanking();
   const pusherr = TAB === "push" ? await loadPush() : null;
   // 알림은 **새로고침할 때만** 가져온다(사용자 지시) — 따로 도는 타이머는 두지 않는다.
