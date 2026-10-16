@@ -97,6 +97,8 @@ const PLAY_MEMBER_DAYS = 90;
 const PLAY_RPC = {
   daily: ["admin_daily_record_report", "admin_daily_record_rows"],
   number: ["admin_number_report", "admin_number_board_rows"],
+  // 122 두 마리. 숫자 퍼즐과 같은 꼴이다
+  two_dog: ["admin_two_dog_report", "admin_two_dog_board_rows"],
   event: ["admin_live_event_report", "admin_live_event_run_rows"],
 };
 /** 랭킹 보상을 우편함에서 받을 수 있는 날 수(18절). 서버 099 mailbox_rank_claim_until(정산된 날 + 8일 0시)과 짝이다.
@@ -104,6 +106,8 @@ const PLAY_RPC = {
 const RANK_CLAIM_DAYS = 7;
 /** 이벤트 종류별 기본값(7절). 새 이벤트 창이 이것으로 채운다. 산책길 여는 레벨은 표 check live_events_walk_level(103)과 같은
  *  하한이라 창도 이보다 낮게 저장하지 못하게 한다. 보상 제안값은 10절 표의 「7일 이벤트」 줄이다. */
+/** 두 마리 산책길이 들어간 첫 빌드(iOS·Android 같음). 옛 앱은 57·58이다. 새 이벤트 기본값과 저장 전 경고가 이 값을 읽는다. */
+const WALK2_MIN_BUILD = 59;
 const KIND_DEFAULTS = {
   walk: {
     label: "산책길", minLevel: 8, minBuild: { ios: 51, android: 51 },
@@ -115,9 +119,10 @@ const KIND_DEFAULTS = {
     ],
   },
   // 두 마리 산책길(121). 줄과 구역마다 강아지 두 마리이고 판은 모두 10×10이다(085e79b, 121 size_order). 여는 레벨 하한은 산책길과 같은 8이다.
-  // 옛 앱은 모르는 종류라 업데이트 안내를 보여 참여하지 못한다. 그래서 최소 빌드는 산책길과 같게 둔다.
+  // 옛 앱(빌드 58 이하)은 모르는 종류라 업데이트 안내를 보여 참여하지 못한다. 최소 빌드를 두 마리 산책길이 들어간 59로 둔다.
+  // 51로 두면 「참여 안 함」 푸시 조건(push_condition_ok2)이 빌드 51~58 사용자를 들어올 수 있는 사람으로 보고 고른다.
   walk2: {
-    label: "산책길 두 마리", minLevel: 8, minBuild: { ios: 51, android: 51 },
+    label: "산책길 두 마리", minLevel: 8, minBuild: { ios: WALK2_MIN_BUILD, android: WALK2_MIN_BUILD },
     tiers: [
       { to: 1, coins: 700, hints: 2, autos: 2 },
       { to: 2, coins: 400, hints: 1, autos: 1 },
@@ -1564,6 +1569,9 @@ async function editScores(id) {
   if (daily === null) return;
   const total = window.prompt(`누적 점수 (현재 ${p.total_score ?? 0})`, p.total_score ?? 0);
   if (total === null) return;
+  // 빈 칸은 0, 글자는 NaN(서버에는 null)으로 가던 것을 막는다. 0 이상의 정수만 보낸다.
+  const okScore = (v) => String(v).trim() !== "" && Number.isInteger(Number(v)) && Number(v) >= 0;
+  if (!okScore(daily) || !okScore(total)) { alert("점수는 0 이상의 정수로 넣어 주세요"); return; }
   const reason = askReason(`${p.username}의 점수를 바꿉니다`);
   if (reason === null) return;
   await act(() => rpc("admin_set_scores", {
@@ -1604,11 +1612,12 @@ async function resetScores(id) {
 async function requestGameReset(id) {
   const p = findPlayer(id);
   // 서버가 직접 지울 수 없는 값(레벨·코인·아이템)이라 "요청"만 남긴다.
-  // 요청이 이미 걸려 있으면 다시 걸 때 요청 시각이 새로 찍힌다. 앱은 처리한 요청 시각과 다르면 새 요청으로 보고
-  // 또 지운다(d2e13d4 gameResetAction). 앱이 지운 뒤 서버에 알리지 못해 표시가 남은 사람도 있으니 먼저 알린다.
+  // 요청이 이미 걸려 있으면 서버가 그 시각을 그대로 둔다(122). 새 앱은 처리한 요청 시각과 같으면 알리기만 다시 하므로
+  // (d2e13d4 gameResetAction) 지운 뒤 알리지 못한 사람이 한 번 더 지워지지 않는다. 옛 앱은 표시가 남아 있으면 켤 때마다 지운다.
   const again = p.reset_requested_at
     ? `\n\n주의: ${fmtDateTime(p.reset_requested_at)}에 건 요청이 아직 남아 있습니다.\n` +
-      `다시 걸면 새 요청이 되어, 앱이 이미 한 번 지웠더라도 그 뒤 쌓은 진행을 한 번 더 지웁니다.`
+      `다시 걸어도 그 요청이 그대로 남고 새 요청이 되지 않습니다. 새 앱은 같은 요청으로 두 번 지우지 않습니다.\n` +
+      `옛 앱(빌드 58 이하)은 요청이 남아 있는 동안 켤 때마다 다시 지웁니다.`
     : "";
   if (!confirm(`${p.username}의 게임 진행을 초기화 요청합니다.\n\n` +
     `레벨·코인·아이템은 기기 안에 있어서 서버가 직접 지울 수 없습니다.\n` +
@@ -1659,13 +1668,13 @@ async function resetAllGames() {
   // 인원수를 먼저 보여주고, 정해진 문구를 직접 입력하게 해서 오조작을 막는다.
   // 전체 인원은 서버 집계로(회원 목록은 50명 한 쪽뿐이다).
   const n = SUMMARY?.members ?? PLAYERS.length;
-  // 이미 요청이 걸린 사람도 요청 시각이 새로 찍혀 앱이 새 요청으로 보고 한 번 더 지운다(d2e13d4 gameResetAction).
+  // 이미 요청이 걸린 사람은 서버가 그 시각을 그대로 둔다(122). 새 앱은 같은 요청으로 두 번 지우지 않는다.
   const waiting = SUMMARY?.reset_waiting ?? PLAYERS.filter((p) => p.reset_requested_at).length;
   const typed = window.prompt(
     `전체 ${n}명의 게임 진행(레벨·코인·아이템)을 초기화합니다.\n\n` +
     `표시만 남기고, 각자 앱을 켜거나 앱으로 돌아올 때 앱이 스스로 초기화합니다.\n` +
     `이미 초기화된 사람은 되돌릴 수 없습니다.\n` +
-    (waiting > 0 ? `요청이 아직 남아 있는 ${waiting}명도 새 요청이 되어, 앱이 이미 지웠더라도 한 번 더 지웁니다.\n` : "") +
+    (waiting > 0 ? `요청이 아직 남아 있는 ${waiting}명은 그 요청을 그대로 둡니다. 새 요청이 되지 않습니다.\n` : "") +
     `\n` +
     `확인을 위해 초기화 라고 입력하세요:`);
   if (typed === null) return;
@@ -2034,6 +2043,8 @@ function openGrant(id) {
     const coins = Number($("#gCoins").value) || 0;
     const hints = Number($("#gHints").value) || 0;
     const autos = Number($("#gAutos").value) || 0;
+    // 음수·소수는 합이 0보다 커도 지나갔다(예: 코인 -1000, 힌트 1001). 칸마다 0 이상의 정수인지 본다.
+    if (![coins, hints, autos].every((x) => Number.isInteger(x) && x >= 0)) { $("#gErr").textContent = "코인, 힌트, 자동배치는 0 이상의 정수로 넣어 주세요"; return; }
     if (coins + hints + autos <= 0) { $("#gErr").textContent = "코인, 힌트, 자동배치 중 하나는 1 이상 넣어 주세요"; return; }
     // datetime-local은 표준시 표기가 없다. 114 브라우저 시간대가 아니라 한국시간으로 읽는다(kstInput).
     const at = (v) => (v ? kstInput(v).toISOString() : null);
@@ -2863,10 +2874,11 @@ function rankRewardEditor(key = "rank_rewards", label = "오늘 점수") {
 /** 편집기 안의 줄을 읽는다. 저장하지 않은 입력이 줄 추가·삭제로 날아가지 않게 그리기 전에도 읽는다. */
 function readTierRows(box) {
   return [...box.querySelectorAll(".tier-body tr[data-tier]")].map((tr) => ({
-    to:    Math.max(1, Number(tr.querySelector(".t-to").value) || 0),
-    coins: Math.max(0, Number(tr.querySelector(".t-coins").value) || 0),
-    hints: Math.max(0, Number(tr.querySelector(".t-hints").value) || 0),
-    autos: Math.max(0, Number(tr.querySelector(".t-autos").value) || 0),
+    // 소수는 버린다. 서버 정산은 (t ->> 'to')::int로 읽어 2.5 같은 값이 오면 실패한다.
+    to:    Math.max(1, Math.floor(Number(tr.querySelector(".t-to").value) || 0)),
+    coins: Math.max(0, Math.floor(Number(tr.querySelector(".t-coins").value) || 0)),
+    hints: Math.max(0, Math.floor(Number(tr.querySelector(".t-hints").value) || 0)),
+    autos: Math.max(0, Math.floor(Number(tr.querySelector(".t-autos").value) || 0)),
   }));
 }
 
@@ -3975,16 +3987,21 @@ function versusTab(err) {
 
   const roomsTable = VS_ROOMS.length ? `
     <h2>지금 열려 있는 방 · ${VS_ROOMS.length}개</h2>
-    <div class="table-scroll"><table style="min-width:680px">
-      <thead><tr><th>방 코드</th><th class="c fit">상태</th><th class="num">판 크기</th><th>승부</th><th class="num">지금 판 / 최대 판</th><th class="num">인원</th>
+    <div class="table-scroll"><table style="min-width:860px">
+      <thead><tr><th>방 코드</th><th class="c fit">상태</th><th>대결 종류</th><th class="num">판 크기</th><th>승부</th><th>제한 시간</th><th class="num">지금 판 / 최대 판</th><th class="num">인원</th>
                  <th class="c fit">장난</th><th>참가자</th><th>만든 날</th><th>관리</th></tr></thead>
       <tbody>${VS_ROOMS.map((r) => `<tr>
         <td><b>${esc(r.code)}</b></td>
         <td class="c fit">${r.status === "playing" ? "대전 중" : "사람 기다리는 중"}</td>
+        <!-- 122 대결 종류와 제한 시간. 122 전 서버는 값이 없어 「—」로 보인다. 대전 중이면 지금 판의 마감 시각을 붙인다. -->
+        <td>${r.mode ? esc(modeLabel(r.mode)) : '<span class="muted">—</span>'}</td>
         <td class="num">${r.board_n ? `${r.board_n}×${r.board_n}` : "—"}</td>
         <td>${esc(VS_SERIES[r.win_target] || `${r.win_target}선승`)}</td>
+        <td>${r.time_factor == null ? '<span class="muted">—</span>'
+              : esc(VS_TIME[r.time_factor] || `×${r.time_factor}`)}${r.status === "playing" && r.round_deadline
+              ? ` <span class="muted">· ${esc(fmtTime(r.round_deadline))}까지</span>` : ""}</td>
         <td class="num">${r.round_no}/${r.win_target * 2 - 1}</td>
-        <td class="num">${r.players}</td>
+        <td class="num">${r.players}${r.capacity ? `/${r.capacity}` : ""}</td>
         <!-- 070. **꺼진 방만 눈에 띄게** 적는다 — 켜진 것이 기본이라 전부 칠하면
              무엇이 예외인지 안 보인다. 070 이전 서버는 값이 없으므로 켜진 것으로 본다. -->
         <td class="c fit">${r.events_on === false
@@ -4035,6 +4052,8 @@ function modeLabel(mode) {
 
 /** 승부 이름. 방의 win_target(이길 판 수)을 앱 문구 versus_series_1~3과 같은 말로 적는다. */
 const VS_SERIES = { 1: "단판", 2: "3판 2선승", 3: "5판 3선승" };
+/** 제한 시간 이름. 방의 time_factor(기준 시간에 곱하는 배수)를 앱 문구 versus_time_1~3과 같은 말로 적는다. */
+const VS_TIME = { 1: "빠름", 2: "보통", 3: "느긋" };
 
 /** 051부터 일자별이 (날짜 × 모드)로 온다. 선 그래프는 날짜 단위라 다시 합친다.
  *  무승부 선을 같이 그리는 이유: 무승부가 갑자기 늘면 제한 시간이 짧다는 신호다. */
@@ -4235,6 +4254,7 @@ function memberEventsRow() {
       <span class="muted" style="font-size:12px;align-self:center">이 회원의 판 기록 보기</span>
       <button class="ghost sm" data-memplay="daily" data-id="${esc(OPEN_MEMBER)}">오늘의 퍼즐 기록</button>
       <button class="ghost sm" data-memplay="number" data-id="${esc(OPEN_MEMBER)}">숫자 퍼즐</button>
+      <button class="ghost sm" data-memplay="two_dog" data-id="${esc(OPEN_MEMBER)}">두 마리</button>
       <button class="ghost sm" data-memplay="event" data-id="${esc(OPEN_MEMBER)}">이벤트 산책길</button></div>`;
   const inner = plays + pays + (MEMBER_EVENTS.length
     ? `<div class="table-scroll" style="max-height:260px;overflow-y:auto">
@@ -4542,6 +4562,9 @@ function checkLiveEvent(v, ev, now, events) {
   if (!def) errors.push(`모르는 종류입니다: ${v.kind}`);
   if (v.kind === "walk2") {
     warns.push("두 마리 산책길은 두 마리 산책길이 들어간 앱에서만 참여할 수 있습니다. 그 전 앱에는 업데이트 안내가 뜹니다. 새 앱이 충분히 퍼진 뒤에 여세요.");
+    if (v.buildIos < WALK2_MIN_BUILD || v.buildAnd < WALK2_MIN_BUILD) {
+      warns.push(`최소 빌드가 ${WALK2_MIN_BUILD}보다 낮습니다. 「참여 안 함」 푸시가 참여하지 못하는 옛 앱 사용자에게도 갑니다.`);
+    }
   }
   if (!v.nameKo.trim()) errors.push("한국어 이름은 비울 수 없습니다.");
   else if (charLen(v.nameKo.trim()) > leNameMax("ko")) errors.push(`한국어 이름은 ${leNameMax("ko")}자까지입니다. 지금 ${charLen(v.nameKo.trim())}자입니다.`);
@@ -4570,6 +4593,7 @@ function checkLiveEvent(v, ev, now, events) {
     if (!(t.to >= 1 && t.to <= 100)) { errors.push("보상 표의 「몇 등까지」는 1~100이어야 합니다. 앱 순위 목록이 100명까지입니다."); break; }
     if (t.to <= prev) { errors.push(`보상 표의 「${t.to}등까지」가 앞 줄과 겹칩니다.`); break; }
     if (t.coins < 0 || t.hints < 0 || t.autos < 0) { errors.push("보상은 0 이상이어야 합니다."); break; }
+    if (![t.to, t.coins, t.hints, t.autos].every(Number.isInteger)) { errors.push("보상 표의 값은 정수여야 합니다."); break; }
     prev = t.to;
   }
   if (!v.tiers.some((t) => t.coins + t.hints + t.autos > 0)) warns.push("보상이 없는 이벤트입니다.");
@@ -4878,7 +4902,7 @@ function pushToEvent(id, start = false) {
 // 보고서의 막대는 모두 { key, label, n, filter }이다. 막대를 누르면 그 filter를 그대로 원본 표 함수에 넘겨
 // 그 갈래의 원본 줄만 본다. 서버가 막대 n과 표 total_count가 같다고 약속한다(107 머리말).
 
-const CHART_VIEWS = [["all", "전체"], ["daily", "오늘의 퍼즐 기록전"], ["number", "숫자 퍼즐"], ["event", "이벤트"]];
+const CHART_VIEWS = [["all", "전체"], ["daily", "오늘의 퍼즐 기록전"], ["number", "숫자 퍼즐"], ["two_dog", "두 마리"], ["event", "이벤트"]];
 /** 날짜별 쌓은 막대와 참여자 선의 색. 모르는 갈래는 PLAY_PALETTE에서 차례로 고른다. */
 const PLAY_COLORS = {
   participants: "#5b4fc4",
@@ -5172,6 +5196,7 @@ function playRowsTable(labels) {
              r.revive_ads ? `광고 부활 ${r.revive_ads}` : "", r.coins_spent ? `코인 ${fmt(r.coins_spent)}` : ""].filter(Boolean).join(" · ")),
         `<td class="c">${r.counted ? "넣음" : '<span class="muted">안 넣음</span>'}`, dev(r), flags(r.flags)],
     },
+    get two_dog() { return this.number; },
     event: {
       head: ["날짜", "닉네임", ["결과", "c"], "끝난 까닭", ["걸은 판 수", "num"], ["순위에 넣은 판", "num"], ["이어 걷기", "num"],
         ["산책 시간", "num"], "마지막 판", "도구", "시작한 때", "기기 · 빌드", "주의 표시"],
@@ -5198,7 +5223,7 @@ function playRowsTable(labels) {
       <div style="flex:1"></div>
       ${PLAY_TOTAL ? '<button class="ghost sm" id="playToPlayers" title="이 조건에 걸린 회원을 회원 목록에서 봅니다">이 회원들을 회원 목록에서 보기</button>' : ""}
     </div>
-    ${PLAY_ROWS_ERR ? loadFail("판 하나하나의 기록을 불러오지 못했습니다.", PLAY_ROWS_ERR, "sql/migrations/107_admin_records.sql")
+    ${PLAY_ROWS_ERR ? loadFail("판 하나하나의 기록을 불러오지 못했습니다.", PLAY_ROWS_ERR, CHART_VIEW === "two_dog" ? "sql/migrations/122_admin_two_dog_reset.sql" : "sql/migrations/107_admin_records.sql")
       : PLAY_ROWS.length ? `<div class="table-scroll"><table><thead><tr>${head}</tr></thead>
         <tbody>${moreRows(playKey, PLAY_ROWS.map((r) => `<tr>${cols.row(r).map(cell).join("")}</tr>`))}</tbody></table></div>${moreBar(playKey, PLAY_ROWS.length)}
         ${pages > 1 ? `<div class="toolbar" style="margin-top:8px">
@@ -5222,7 +5247,7 @@ function playTab() {
         <span class="tgl-track"><span class="tgl-thumb"></span></span><span>시험 계정도 세기</span></label>
       <span class="muted" style="font-size:12.5px">날짜와 시각은 한국시간입니다</span></div>`;
   if (PLAY_ERR) {
-    return head + loadFail("차트를 불러오지 못했습니다.", PLAY_ERR, "sql/migrations/107_admin_records.sql");
+    return head + loadFail("차트를 불러오지 못했습니다.", PLAY_ERR, CHART_VIEW === "two_dog" ? "sql/migrations/122_admin_two_dog_reset.sql" : "sql/migrations/107_admin_records.sql");
   }
   if (CHART_VIEW === "event" && LE_ERR) {
     return head + loadFail("이벤트를 불러오지 못했습니다.", LE_ERR, "sql/migrations/103_live_events.sql");
@@ -5251,12 +5276,15 @@ function playTab() {
       <h3 class="sub">인터넷 없이 한 판</h3>${playBars(R.offline, "인터넷 없이")}
       <h3 class="sub">몇 시에 시작했나</h3>${playHours(R.hours)}
       <div class="muted" style="font-size:12px;margin-top:8px">기록전에는 도구와 부활이 없습니다. 날짜마다 순위는 랭킹 메뉴에서 봅니다.</div>`;
-  } else if (CHART_VIEW === "number") {
+  } else if (CHART_VIEW === "number" || CHART_VIEW === "two_dog") {
+    // 122 두 마리는 숫자 퍼즐과 같은 꼴의 보고서다(admin_two_dog_report). 판 크기는 8~10, 놓은 강아지는 0~20마리다.
     body = `
       ${playCards(R.cards, { participants: "참여자" })}
       <h3 class="sub">날마다 시작 · 성공 · 실패 · 끝내지 않음 · 끝나지 않음</h3>
       ${dayBars(R.daily || [])}${playDayTable(R.daily || [])}
-      <div class="muted" style="font-size:12px;margin-top:6px">「끝나지 않음」은 시작했다는 알림만 온 판입니다. 숫자 퍼즐은 날이 지나도 이어 풀 수 있어서 그만둔 것으로 보지 않습니다.</div>
+      <div class="muted" style="font-size:12px;margin-top:6px">${CHART_VIEW === "two_dog"
+        ? "「끝나지 않음」은 시작했다는 알림만 온 판입니다. 두 마리 랭킹은 한국 날짜로 매일 끊고, 그날 센 판 점수의 합으로 순위를 냅니다."
+        : "「끝나지 않음」은 시작했다는 알림만 온 판입니다. 숫자 퍼즐은 날이 지나도 이어 풀 수 있어서 그만둔 것으로 보지 않습니다."}</div>
       <h3 class="sub">판 크기마다 성공한 비율</h3>
       ${(R.sizes || []).length ? `<div class="table-scroll"><table data-z="rows">
         <thead><tr><th>판 크기</th><th class="num">전체</th><th class="num">성공</th><th class="num">성공 비율</th></tr></thead>
@@ -5643,7 +5671,7 @@ function recordRankingTab() {
       랭킹이 마감되면 보상이 <b>우편함</b>으로 가고, 보낸 날부터 ${RANK_CLAIM_DAYS}일 안에 받아야 합니다. 아직 보상을 보내기 전인 줄의 「받을 보상」은 지금 보상표로 계산한 예상입니다.</div>
     <div class="toolbar">${pick}
       <div style="flex:1"></div>
-      ${kind === "two_dog" ? "" : '<button class="ghost sm" id="recStats" title="차트 메뉴에서 이 기간의 판 하나하나를 봅니다">차트로 보기</button>'}
+      <button class="ghost sm" id="recStats" title="차트 메뉴에서 이 기간의 판 하나하나를 봅니다">차트로 보기</button>
     </div>
     ${sec(`rank.${kind}.list`, `${esc(label)} 참가자 · ${fmt(REC_TOTAL)}명`, `
     ${REC_ERR ? loadFail("랭킹을 불러오지 못했습니다.", REC_ERR, "sql/migrations/107_admin_records.sql")
@@ -6067,7 +6095,7 @@ async function saveMissions() {
     return !p || p.on !== m.on || p.target !== m.target || p.coins !== m.coins || p.kind !== m.kind || p.period !== m.period || (p.order || 0) !== m.order;
   });
   const removed = [...prev.keys()].filter((id) => !list.some((m) => m.id === id));
-  const lines = changed.slice(0, 15).map((m) => `· ${m.on ? "켬" : "끔"} ${MISSION_KIND_LABEL[m.kind].replace("N", fmt(m.target))} · ${m.coins}코인`).join("\n");
+  const lines = changed.slice(0, 15).map((m) => `· ${m.on ? "켬" : "끔"} ${(MISSION_KIND_LABEL[m.kind] || m.kind).replace("N", fmt(m.target))} · ${m.coins}코인`).join("\n");
   const msg = `미션 목록을 저장합니다. 앱은 다음에 서버 설정을 읽을 때부터 따릅니다.\n\n`
     + `바뀐 줄 ${changed.length}개${removed.length ? `, 뺀 줄 ${removed.length}개` : ""}\n${lines}${changed.length > 15 ? "\n…" : ""}\n\n`
     + (removed.length ? `「주의」 뺀 줄: ${removed.join(", ")}\n같은 미션을 다시 더할 거라면 빼지 말고 켬만 끄세요. 새 줄은 id가 달라 오늘 받은 사람이 또 받습니다.\n\n` : "")
@@ -6278,7 +6306,8 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
   }
 
   if (TAB === "ranking") {
-    const reload = async () => { await loadRanking(); render(warn, eventsErr); };
+    // 다시 받다 실패하면 「점수를 낸 사람이 없습니다」로 보이지 않게 오류를 넘긴다.
+    const reload = async () => { const e = await loadRanking(); render(warn, eventsErr, null, null, null, null, null, null, null, null, e); };
     if ($("#rankDate")) {
       $("#rankDate").onchange = async (e) => {
         RANK_DATE = e.target.value || "";
@@ -6311,7 +6340,7 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     if ($("#recStats")) $("#recStats").onclick = () => {
       const per = REC_ROWS[0]?.period_key || REC_PERIOD || (RANK_VIEW === "daily_time" ? kstDate(0) : "");
       const range = RANK_VIEW === "daily_time" ? [per, per] : numberPeriodRange(per);
-      TAB = "charts"; CHART_VIEW = RANK_VIEW === "daily_time" ? "daily" : "number"; PLAY_PAGE = 0;
+      TAB = "charts"; CHART_VIEW = RANK_VIEW === "daily_time" ? "daily" : RANK_VIEW === "two_dog" ? "two_dog" : "number"; PLAY_PAGE = 0;
       PLAY_FILTER = range ? { label: RANK_VIEW === "daily_time" ? `${per} 기록전` : numberPeriodLabel(per),
                               arg: { from: range[0], to: range[1], include_test: PLAY_TEST } } : null;
       refresh();
@@ -6767,4 +6796,5 @@ async function boot() {
   render(warn, eerr, serr, nerr, perr2, aerr, vserr, cfgerr, sverr, pusherr, rkerr);
 }
 
-boot();
+// boot가 RPC 밖의 예외로 던지면 「불러오는 중」에서 멈췄다. 로그인 화면에 까닭을 보인다.
+boot().catch((e) => { console.error(e); renderLogin("화면을 그리다 멈췄습니다. 새로고침해 보세요. " + (e?.message || e)); });
