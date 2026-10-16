@@ -114,7 +114,20 @@ const KIND_DEFAULTS = {
       { to: 10, coins: 100, hints: 0, autos: 0 },
     ],
   },
+  // 두 마리 산책길(121). 줄과 구역마다 강아지 두 마리이고 판이 8×8부터다. 여는 레벨 하한은 산책길과 같은 8이다.
+  // 옛 앱은 모르는 종류라 업데이트 안내를 보여 참여하지 못한다. 그래서 최소 빌드는 산책길과 같게 둔다.
+  walk2: {
+    label: "산책길 두 마리", minLevel: 8, minBuild: { ios: 51, android: 51 },
+    tiers: [
+      { to: 1, coins: 700, hints: 2, autos: 2 },
+      { to: 2, coins: 400, hints: 1, autos: 1 },
+      { to: 3, coins: 300, hints: 1, autos: 0 },
+      { to: 10, coins: 100, hints: 0, autos: 0 },
+    ],
+  },
 };
+/** 산책길 종류. 한 마리와 두 마리. 걸은 판 수 조건과 산책 전용 칸이 둘 다 받는다. */
+const WALK_KINDS = ["walk", "walk2"];
 
 // ------------------------------------------------------------------ 설명 배지
 // 긴 설명과 예는 이름 옆 동그란 「?」 배지에 넣는다(사용자 요청, 2026-10-08). 모든 화면이 이 함수 하나로 만든다.
@@ -2158,7 +2171,9 @@ const COND_TYPES = {
 };
 /** 이벤트 조건의 고를 거리. 서버 push_validate(104)가 취소된 이벤트와 시험 전용 이벤트를 거절하므로 뺀다. */
 function eventCondOpts(kind = null) {
-  return LIVE_EVENTS.filter((e) => !e.cancelled_at && !e.test_only && (!kind || e.kind === kind))
+  // kind "walk"는 산책길 두 종류를 다 고른다. 서버 push_validate도 둘 다 받는다(121).
+  const ok = (k) => !kind || (kind === "walk" ? WALK_KINDS.includes(k) : k === kind);
+  return LIVE_EVENTS.filter((e) => !e.cancelled_at && !e.test_only && ok(e.kind))
     .map((e) => [String(e.id), `#${e.id} ${e.name_ko}`]);
 }
 /** 이벤트 번호를 「#12 가을 산책길」로. 목록에 없으면 번호만. */
@@ -4509,6 +4524,9 @@ function checkLiveEvent(v, ev, now, events) {
   }
   const def = KIND_DEFAULTS[v.kind];
   if (!def) errors.push(`모르는 종류입니다: ${v.kind}`);
+  if (v.kind === "walk2") {
+    warns.push("두 마리 산책길은 두 마리 산책길이 들어간 앱에서만 참여할 수 있습니다. 그 전 앱에는 업데이트 안내가 뜹니다. 새 앱이 충분히 퍼진 뒤에 여세요.");
+  }
   if (!v.nameKo.trim()) errors.push("한국어 이름은 비울 수 없습니다.");
   else if (charLen(v.nameKo.trim()) > leNameMax("ko")) errors.push(`한국어 이름은 ${leNameMax("ko")}자까지입니다. 지금 ${charLen(v.nameKo.trim())}자입니다.`);
   if (!v.start || !v.end || !v.until) errors.push("시작, 끝, 결과 공개 끝을 모두 넣으세요.");
