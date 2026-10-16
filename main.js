@@ -2894,6 +2894,30 @@ async function saveRankRewards(box) {
 }
 
 /**
+ * 빌드 번호 옆에 보일 버전. 회원들이 앱을 켤 때 보낸 버전 기록(admin_app_versions)에서 짝을 찾는다.
+ * 1.6.1(57)까지는 기록에 빌드 번호가 없어 PAST_BUILDS에서 읽는다. 최근 90일 안에 아무도 켜지 않은 새 빌드는 짝을 모른다.
+ * 기기마다 따로 찾는다. iOS와 AOS의 빌드 번호가 다를 수 있다.
+ */
+/** 기록에 빌드 번호가 실리기 전(1.6.1(57)까지) 스토어에 낸 빌드. 두 앱이 같은 번호를 쓴다. 지난 일이라 바뀌지 않는다.
+ *  저장소 커밋 기록에서 옮겼다. 51은 1.4.5로 낸 뒤 1.5.0도 같은 번호였다. 54는 스토어에 내지 않았다. */
+const PAST_BUILDS = { 46: "1.4.0", 47: "1.4.1", 48: "1.4.2", 49: "1.4.3", 50: "1.4.4", 51: "1.4.5, 1.5.0",
+                      52: "1.5.1", 53: "1.6.0", 55: "1.6.1", 56: "1.6.1", 57: "1.6.1" };
+
+function buildVersionText(platform, build) {
+  const b = Number(build);
+  if (!Number.isInteger(b) || b <= 0) return "검사 안 함";
+  if (PAST_BUILDS[b]) return PAST_BUILDS[b];
+  if (APP_VERSIONS === null) return "버전 기록을 못 읽었습니다";
+  const names = new Set();
+  for (const a of Object.values(APP_VERSIONS || {})) {
+    const v = Number(a.version_code);
+    if (a.platform === platform && v >= 1000000 && v % 1000 === b) names.add(versionName(v).replace(/\(\d+\)$/, ""));
+  }
+  if (!names.size) return "버전 모름 · 이 빌드로 켠 기록이 없습니다";
+  return [...names].join(", ");
+}
+
+/**
  * 업데이트 관문. 숫자는 Android versionCode / iOS 빌드 번호다.
  *
  * 사람이 읽는 1.1.2가 아니라 정수로 비교한다 — 문자열 버전 비교는 "1.10 < 1.9"가 되는
@@ -2908,8 +2932,10 @@ function updateTab(err) {
   const row = (p, label) => `
     <tr>
       <td><b>${label}</b></td>
-      <td class="num"><input type="number" id="min_${p}" value="${g("min_version", p)}" style="width:90px"></td>
-      <td class="num"><input type="number" id="latest_${p}" value="${g("latest_version", p)}" style="width:90px"></td>
+      <td class="num"><input type="number" id="min_${p}" value="${g("min_version", p)}" style="width:90px">
+        <div class="muted" id="minv_${p}" style="font-size:12px">${esc(buildVersionText(p, g("min_version", p)))}</div></td>
+      <td class="num"><input type="number" id="latest_${p}" value="${g("latest_version", p)}" style="width:90px">
+        <div class="muted" id="latestv_${p}" style="font-size:12px">${esc(buildVersionText(p, g("latest_version", p)))}</div></td>
       <td><input type="text" id="url_${p}" value="${esc(url(p))}" placeholder="앱 스토어 페이지 주소" style="width:100%"></td>
     </tr>`;
   // 칸이 길어 하위 탭으로 나눴다(2026-10-08). 여섯 칸을 다 그려 두고 고른 칸만 보인다.
@@ -6316,6 +6342,13 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
       };
     });
     $("#saveVersions").onclick = saveVersions;
+    // 빌드 번호를 고치는 대로 옆 버전도 다시 찾는다.
+    for (const p of ["android", "ios"]) {
+      for (const k of ["min", "latest"]) {
+        const input = $(`#${k}_${p}`), out = $(`#${k}v_${p}`);
+        if (input && out) input.oninput = () => { out.textContent = buildVersionText(p, input.value); };
+      }
+    }
     if ($("#saveMaint")) $("#saveMaint").onclick = saveMaintenance;
     if ($("#maintI18n")) {
       MAINT_I18N = i18nBlock($("#maintI18n"), { id: "i18n.maint", emptyTip: TEXTS_EMPTY_TIP,
@@ -6633,6 +6666,8 @@ async function boot() {
   const perr2 = TAB === "purchases" ? await loadPurchases() : null;
   if (TAB === "admob") await loadAdmob();
   if (TAB === "players") await Promise.all([loadPayTotals(), loadAppVersions(), loadCountries()]);
+  // 업데이트 탭의 빌드 번호 옆 버전도 같은 기록에서 찾는다.
+  if (TAB === "update") await loadAppVersions();
   if (TAB === "players") await loadReach();
   if (TAB === "rewards" || TAB === "players") {
     await loadRewards().catch(() => {});
