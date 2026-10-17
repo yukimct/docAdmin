@@ -4326,7 +4326,7 @@ const AUDIT_NAMES = {
 const AUDIT_KEYS = {
   reason: "사유", note: "메모", value: "값", key: "설정", minutes: "분", affected: "대상 수", report: "신고 번호",
   id: "번호", coins: "코인", hints: "힌트", autos: "자동배치", memo: "메모", daily: "오늘 점수", total: "누적 점수",
-  name: "이름", kind: "종류", event_id: "이벤트 번호", started_at: "막은 때", block_reason: "막은 까닭", batch_id: "묶음 번호", notice_id: "공지 번호", code: "코드",
+  name: "이름", kind: "종류", event_id: "이벤트 번호", started_at: "막은 때", block_reason: "막은 까닭", total_offset: "누적 점수에서 빼는 몫", daily_offset: "오늘 점수에서 빼는 몫", batch_id: "묶음 번호", notice_id: "공지 번호", code: "코드",
   // 114 푸시·장난 기록
   title: "제목", target: "대상", target_arg: "대상 값", scheduled_at: "보낼 시각", link: "링크", before: "전", after: "후",
 };
@@ -5543,7 +5543,7 @@ const REC_SIZE = 50;
 /** 시험 계정(107). null이면 못 읽었다(107 전 서버). */
 let TEST_ACCOUNTS = null, TEST_SET = new Set();
 /** 점수 막기(123). 지금 막힌 회원과 최근 30일 안에 푼 기록이다. null이면 못 읽었다. 123 전 서버라 그렇다. */
-let SCORE_BLOCKS = null, BLOCK_SET = new Set();
+let SCORE_BLOCKS = null, BLOCK_SET = new Set(), SCORE_BLOCKS_ERR = null;
 /** 숫자 기간 고르기에 늘어놓을 지난 기간 수. */
 const NUMBER_PERIOD_CHOICES = { week: 8, day: 14 };
 
@@ -5567,7 +5567,8 @@ async function loadTestAccounts() {
 async function loadScoreBlocks() {
   try {
     SCORE_BLOCKS = await rpc("admin_score_blocks") || [];
-  } catch { SCORE_BLOCKS = null; }
+    SCORE_BLOCKS_ERR = null;
+  } catch (e) { SCORE_BLOCKS = null; SCORE_BLOCKS_ERR = e; }
   BLOCK_SET = new Set((SCORE_BLOCKS || []).filter((b) => b.active).map((b) => String(b.profile_id)));
 }
 
@@ -5624,15 +5625,18 @@ function testAccountsSection() {
 /** 점수 막기가 하는 일. 확인창과 표 안내가 같은 말을 쓴다. */
 const SCORE_BLOCK_HOW =
   "게임은 평소처럼 할 수 있고 앱에 막혔다는 안내는 가지 않습니다. 막힌 동안 낸 점수만 랭킹에 오르지 않습니다.\n" +
-  "오늘 점수와 누적 점수는 서버에서 멈추고, 앱에는 평소처럼 자기 점수가 보입니다.\n" +
+  "오늘 점수와 누적 점수는 랭킹에서 멈추고, 앱에는 평소처럼 자기 점수가 보입니다.\n" +
+  "풀면 막힌 동안 앱에 쌓인 몫을 빼고 그 뒤에 오른 만큼만 받습니다. 막힌 동안 앱이 서버에 닿지 못해 보내지 못한 몫은 가려내지 못합니다.\n" +
   "기록전은 앱에 「기록 확인을 통과하지 못했어요」로 보이고, 숫자 퍼즐과 두 마리는 순위 밖으로 보입니다.\n" +
   "산책길 이벤트는 최고 기록이 오르지 않고, 대전과 협동은 막힌 동안의 판이 전적에 들지 않습니다.\n" +
-  "막기 전에 낸 점수는 그대로 남습니다. 지금 기간 점수까지 빼려면 랭킹 메뉴의 「순위에서 빼기」나 「점수 0으로」를 같이 쓰세요.";
+  "막기 전에 낸 점수는 그대로 남습니다. 지금 기간 점수까지 빼려면 랭킹 메뉴의 「순위에서 빼기」나 「점수 0으로」를 같이 쓰세요.\n" +
+  "점수 0으로는 막은 채로 고친 뒤 푸세요. 풀 때 지금 서버 점수를 기준으로 빼는 몫을 정하므로, 막힌 동안 앱이 점수를 한 번이라도 보냈다면 0이 유지됩니다. 막지 않고 고치면 앱이 다음에 보내는 점수로 다시 덮입니다.\n" +
+  "회원이 앱에서 「내 데이터 삭제」를 하면 막기가 풀립니다. 앱이 새 계정으로 다시 시작하는데 서버는 옛 계정과 새 계정을 이을 수 없습니다. 지운 회원의 막기 기록은 「탈퇴」로 남습니다.";
 
 /** 점수 막은 회원 표. 회원 목록 위와 랭킹 세 탭 맨 아래에 같은 것을 둔다. */
 function scoreBlocksSection() {
   if (SCORE_BLOCKS === null) {
-    return sec("players.blocks", "점수 막은 회원", loadFail("점수 막은 회원 목록을 불러오지 못했습니다.", "", "sql/migrations/123_score_block.sql"));
+    return sec("players.blocks", "점수 막은 회원", loadFail("점수 막은 회원 목록을 불러오지 못했습니다.", SCORE_BLOCKS_ERR, "sql/migrations/123_score_block.sql"));
   }
   const on = SCORE_BLOCKS.filter((b) => b.active), off = SCORE_BLOCKS.filter((b) => !b.active);
   const who = (b) => b.profile_id
@@ -5676,7 +5680,7 @@ async function setScoreBlock(id, on, name = "") {
       if (r === "already") alert("이미 점수가 막혀 있는 회원입니다. 건 때와 까닭은 바꾸지 않았습니다.");
     }, refresh);
   } else {
-    if (!confirm(`${who} 회원의 점수 막기를 풉니다.\n\n지금부터 내는 점수는 다시 랭킹에 오릅니다. 막힌 동안 낸 점수는 되살아나지 않습니다.`)) return;
+    if (!confirm(`${who} 회원의 점수 막기를 풉니다.\n\n지금부터 오르는 점수는 다시 랭킹에 오릅니다. 오늘 점수와 누적 점수는 막힌 동안 앱에 쌓인 몫을 빼고 받으므로 되살아나지 않습니다.\n막힌 동안 앱이 서버에 닿지 못해 보내지 못한 몫은 가려내지 못합니다.`)) return;
     const reason = askReason("점수 막기 풀기");
     if (reason === null) return;
     await act(async () => {
