@@ -16,6 +16,8 @@ let PAY_DAILY = [], PAY_MONTHLY = [], PAY_PRODUCT = [], PAY_LEDGER = [], COIN_SI
 let VS_DAILY = [], VS_PLAYERS = [], VS_BOARDS = [], VS_MODES = [], VS_ON = false;
 /** 지금 살아 있는 대전 방 목록. */
 let VS_ROOMS = [];
+/** 날마다 방 수(126 admin_versus_room_daily). 126 전 서버에서는 null과 VS_ROOM_DAILY_ERR. */
+let VS_ROOM_DAILY = null, VS_ROOM_DAILY_ERR = null;
 /** 공개 매칭 — 현황 한 줄과 신고 목록. */
 let MATCH = null, REPORTS = [];
 /** 경제 건강 요약 한 줄과 오늘 코인 이상 획득 계정. */
@@ -91,6 +93,9 @@ let PLAY_REPORT = null, PLAY_ERR = null, PLAY_ROWS = [], PLAY_ROWS_ERR = null, P
 const PLAY_SIZE = 50;
 /** 회원 이력의 모드별 기록 버튼이 넘기는 회원 { id, label }. loadPlay가 바탕 조건을 정한 뒤 PLAY_FILTER로 옮긴다. */
 let PLAY_PENDING_MEMBER = null;
+/** 126 칸 셋. 숫자·두 마리 날마다 점수(admin_mode_day_stats), 랭킹 보상 지급(107 admin_rank_grants를 기간마다 묶음),
+ *  이벤트끼리 견주기(admin_live_event_compare). 칸마다 따로 받아서 하나가 실패해도 그 칸만 「불러오지 못했습니다」다. */
+let PLAY_DAYSTATS = null, PLAY_DAYSTATS_ERR = null, PLAY_GRANTS = null, PLAY_GRANTS_ERR = null, LE_COMPARE = null, LE_COMPARE_ERR = null;
 /** 회원 기록을 볼 때의 기간(일). 서버 보고서 상한 92일 안이다. */
 const PLAY_MEMBER_DAYS = 90;
 /** 보기마다 [보고서, 원본 표] 함수(107). */
@@ -2776,6 +2781,9 @@ async function loadVersus() {
     // 051 — 모드별. 예전 서버(051 미적용)에서는 함수가 없으므로 조용히 빈 배열로 둔다.
     VS_MODES = await rpc("admin_versus_modes", { p_days: 30 }).catch(() => []) || [];
     VS_ROOMS = await rpc("admin_versus_rooms").catch(() => []) || [];
+    // 126. 없는 서버에서는 그 칸만 불러오기 실패로 보인다.
+    VS_ROOM_DAILY_ERR = null;
+    VS_ROOM_DAILY = await rpc("admin_versus_room_daily", { p_days: 30 }).catch((e) => { VS_ROOM_DAILY_ERR = e; return null; });
     MATCH = (await rpc("admin_matching_stats").catch(() => []))[0] || null;
     REPORTS = await rpc("admin_reports", { p_limit: 100 }).catch(() => []) || [];
     // 061 — 이벤트 목록. 아직 안 올린 서버에서는 표가 통째로 빠질 뿐 나머지는 그대로 돈다.
@@ -3398,7 +3406,7 @@ function serverTab(err) {
           `<option value="${d}" ${d === WINNER_DAYS ? "selected" : ""}>최근 ${d}일</option>`).join("")}
       </select>
     </div>
-    ${GRANTS ? grantsTable() : winners}`)}
+    ${GRANTS ? grantKindSummary() + grantsTable() : winners}`)}
 
     ${sec("server.transfers", "기기 옮기기 코드 · 최근 50건", transfers, { note: `${fmt(TRANSFERS.length)}건` })}
 
@@ -3762,6 +3770,10 @@ async function loadAnomalyExtras() {
   COIN_AUDIT = await rpc("admin_coin_audit", { p_min_gap: 2000, p_limit: 100 }).catch(() => []) || [];
   MATCH = (await rpc("admin_matching_stats").catch(() => []))[0] || null;
   REPORTS = await rpc("admin_reports", { p_limit: 100 }).catch(() => []) || [];
+  // 점수 막기 집계(126). 막기마다 줄의 이름과 기간은 admin_score_blocks(123)에서 읽는다.
+  SB_STATS_ERR = null;
+  SB_STATS = await rpc("admin_score_block_stats", { p_days: SB_STATS_DAYS }).catch((e) => { SB_STATS_ERR = e; return null; });
+  await loadScoreBlocks();
 }
 
 /**
@@ -3818,7 +3830,8 @@ function anomalyTab() {
     ${sec("anomaly.audit", "잔액이 안 맞는 계정 · 막지 않고 보여 주기만", `
     <div class="muted" style="margin-bottom:6px">
       앱이 알린 잔액이 기록으로 계산한 잔액보다 2,000 넘게 많은 계정입니다. 휴대폰 시계를 돌렸거나 결제를 취소한 경우가 섞였을 수 있습니다.</div>
-    ${audit}`, { note: `${fmt(COIN_AUDIT.length)}건` })}`;
+    ${audit}`, { note: `${fmt(COIN_AUDIT.length)}건` })}
+    ${scoreBlockStatsSection()}`;
 }
 
 /**
@@ -4023,6 +4036,8 @@ function versusTab(err) {
     </div>
     <h2>날마다 판 수 · 참여한 사람 · 비긴 판</h2>
     ${versusDailyChart()}
+    <h2>날마다 방 수 · 대결 종류마다 · 30일</h2>
+    ${versusRoomDailySection()}
     <h2>대전 방식마다 · 30일</h2>
     ${versusModesSection()}
     <h2>판 크기마다</h2>
@@ -4068,6 +4083,104 @@ function versusDailyChart() {
     { name: "참여한 사람", color: "#7aa2f7", values: pick("players") },
     { name: "비긴 판", color: "#e0af68", values: pick("draws") },
   ]);
+}
+
+/** 대전 날마다 방 수(126 admin_versus_room_daily). 한 판이라도 한 방만 센다. */
+function versusRoomDailySection() {
+  if (VS_ROOM_DAILY_ERR) return loadFail("날마다 방 수를 불러오지 못했습니다.", VS_ROOM_DAILY_ERR, "sql/migrations/126_admin_stats.sql");
+  const rows = VS_ROOM_DAILY || [];
+  const note = `<div class="muted" style="font-size:12px;margin-top:6px">방은 닫히면 지워져서 판 기록에 남은 방 번호로 셉니다. 자정을 넘긴 방은 두 날에 한 번씩 셀 수 있습니다.
+    제한 시간, 승부, 장난 켬 여부는 방에만 적혀 있어 닫힌 방은 셀 수 없습니다. 지금 열린 방의 값은 위 「지금 열려 있는 방」 표에 있습니다.</div>`;
+  if (!rows.length) return `<div class="empty">최근 30일 동안 한 판이라도 한 방이 없습니다</div>${note}`;
+  const days = Array.from({ length: 30 }, (_, i) => kstDate(i - 29));
+  const modes = [...new Set(rows.map((r) => r.mode || ""))].sort();
+  const colors = ["#7aa2f7", "#d9a441", "#b07cc6", "#d95757", "#8a96a3"];
+  const val = (d, m, f) => rows.filter((r) => String(r.day) === d && (m == null || (r.mode || "") === m))
+    .reduce((a, r) => a + (Number(r[f]) || 0), 0);
+  const per = modes.map((m) => {
+    const list = rows.filter((r) => (r.mode || "") === m);
+    const s = (f) => list.reduce((a, r) => a + (Number(r[f]) || 0), 0);
+    return { mode: m, rooms: s("rooms"), matches: s("matches"), multi: s("multi_round_rooms") };
+  });
+  return `${lineChart(days, [
+      { name: "전체 방", color: "#17b3a8", values: days.map((d) => val(d, null, "rooms")) },
+      ...modes.map((m, i) => ({ name: modeLabel(m), color: colors[i % colors.length], values: days.map((d) => val(d, m, "rooms")) })),
+    ])}
+    <div class="table-scroll" style="margin-top:8px"><table data-z="rows">
+      <thead><tr><th>대결 종류</th><th class="num">방</th><th class="num">판</th><th class="num">방마다 판</th><th class="num">두 판 넘게 한 방</th></tr></thead>
+      <tbody>${per.map((r) => `<tr><td>${esc(modeLabel(r.mode))}</td><td class="num">${fmt(r.rooms)}</td><td class="num">${fmt(r.matches)}</td>
+        <td class="num">${r.rooms ? fmt(Math.round((r.matches / r.rooms) * 10) / 10) : "—"}</td><td class="num">${fmt(r.multi)}</td></tr>`).join("")}</tbody></table></div>
+    ${note}`;
+}
+
+/** 점수 막기 집계(126 admin_score_block_stats). 이상 징후 메뉴에 둔다. */
+const SB_HELD = [["daily", "기록전"], ["number", "숫자 퍼즐"], ["two_dog", "두 마리"], ["walk", "산책길"], ["versus", "대전·협동"]];
+function scoreBlockStatsSection() {
+  if (SB_STATS_ERR) {
+    return sec("anomaly.blocks", "점수 막기 집계", loadFail("점수 막기 집계를 불러오지 못했습니다.", SB_STATS_ERR, "sql/migrations/126_admin_stats.sql"));
+  }
+  const S = SB_STATS;
+  if (!S) return sec("anomaly.blocks", "점수 막기 집계", '<div class="empty">받아 온 내용이 비어 있습니다. 관리자로 등록된 계정인지 확인하세요.</div>');
+  const days = (S.days || []).map((d) => String(d.day));
+  const held = (d, k) => Number(d.held?.[k]) || 0;
+  const heldSum = SB_HELD.reduce((a, [k]) => a + (Number(S.held_since?.[k]) || 0), 0);
+  const span = `${lcShortDate(S.from)} ~ ${lcShortDate(S.to)}`;
+  // 표에 보일 막기 줄은 admin_score_blocks와 같은 줄이다. 이름과 기간은 그쪽에서 읽는다.
+  const info = new Map((SCORE_BLOCKS || []).map((b) => [String(b.id), b]));
+  const blocks = (S.blocks || []).map((x) => ({ ...x, b: info.get(String(x.id)) })).filter((x) => x.b)
+    .sort((a, c) => (a.b.active === c.b.active ? String(c.b.started_at).localeCompare(String(a.b.started_at)) : a.b.active ? -1 : 1));
+  const who = (b) => (b.profile_id
+    ? `<button class="plink" data-member="${esc(b.profile_id)}">${esc(b.username || String(b.profile_id).slice(0, 8))}</button>`
+    : '<span class="muted">탈퇴</span>');
+  const table = blocks.length ? `<div class="table-scroll"><table data-z="cols">
+      <thead><tr><th>닉네임</th><th>막은 기간</th>${SB_HELD.map(([, l]) => `<th class="num">${l}</th>`).join("")}
+        <th class="num">막힌 동안 가장 큰 누적 점수</th><th class="num">막힌 동안 가장 큰 오늘 점수</th></tr></thead>
+      <tbody>${blocks.map(({ b, held: h, blocked_total_max: tmax, blocked_daily_max: dmax, blocked_daily_day: dday }) => `<tr>
+        <td>${who(b)}${b.active ? '<span class="pill heart" style="margin-left:4px">막는 중</span>' : ""}</td>
+        <td class="muted">${esc(fmtDateTime(b.started_at))} ~ ${b.ended_at ? esc(fmtDateTime(b.ended_at)) : "지금"}</td>
+        ${SB_HELD.map(([k]) => `<td class="num">${fmt(Number(h?.[k]) || 0)}</td>`).join("")}
+        <td class="num">${numOrDash(tmax)}</td>
+        <td class="num">${dmax == null ? "—" : `${fmt(Number(dmax))}${dday ? ` <span class="muted">${esc(lcShortDate(dday))}</span>` : ""}`}</td>
+      </tr>`).join("")}</tbody></table></div>` : '<div class="empty">지금 막은 회원도, 최근 30일 안에 푼 기록도 없습니다</div>';
+  return sec("anomaly.blocks", `점수 막기 집계 · ${span}`, `
+    <div class="cards">
+      <div class="card"><div class="label">지금 점수 막힌 회원</div><div class="value">${fmt(S.active_now)}</div></div>
+      <div class="card"><div class="label">지금까지 건 막기</div><div class="value">${fmt(S.total)}</div></div>
+      <div class="card"><div class="label">이 기간 순위에서 뺀 기록</div><div class="value">${fmt(heldSum)}</div></div>
+    </div>
+    <h3 class="sub" style="margin:10px 0 6px">날마다 건 막기 · 푼 막기 · 그날 끝에 막혀 있던 회원</h3>
+    ${lineChart(days, [
+      { name: "건 막기", color: "#d95757", values: (S.days || []).map((d) => Number(d.started) || 0) },
+      { name: "푼 막기", color: "#17b3a8", values: (S.days || []).map((d) => Number(d.ended) || 0) },
+      { name: "막혀 있던 회원", color: "#5b4fc4", values: (S.days || []).map((d) => Number(d.active) || 0) },
+    ])}
+    <h3 class="sub" style="margin:10px 0 6px">막힌 동안 순위에서 뺀 기록 · 서버가 받은 날</h3>
+    ${lineChart(days, SB_HELD.map(([k, l], i) => ({
+      name: l, color: ["#7aa2f7", "#17b3a8", "#b07cc6", "#d9a441", "#8a96a3"][i], values: (S.days || []).map((d) => held(d, k)),
+    })))}
+    <h3 class="sub" style="margin:10px 0 6px">막기마다 · 지금 막은 것과 최근 30일 안에 푼 것</h3>
+    ${table}
+    <div class="muted" style="font-size:12px;margin-top:6px">기록전, 숫자 퍼즐, 두 마리, 산책길은 서버가 받고 사유 「점수 막기」로 순위에서 뺀 기록 수입니다.
+      대전·협동은 판을 버리지 않고 그 사람 전적에서만 빼므로 막은 기간에 든 판 결과를 셉니다.
+      오늘 점수와 누적 점수는 제출을 하나하나 적어 두지 않아 몇 번 막았는지 셀 수 없습니다. 막힌 동안 앱이 보낸 가장 큰 값만 오른쪽 두 칸에 남습니다.
+      막기를 걸고 푸는 것은 회원 목록에서 합니다.</div>`, { note: `${fmt(S.active_now)}명 막는 중` });
+}
+
+/** 서버 상태의 랭킹 보상 표 위에 두는 종류마다 합. 지금 받아 둔 GRANTS를 묶기만 한다. */
+function grantKindSummary() {
+  const rows = grantRollup(GRANTS, null);
+  if (!rows.length) return "";
+  const kinds = [...new Set(rows.map((r) => r.kind))];
+  const sum = (list, k) => list.reduce((a, r) => a + r[k], 0);
+  return `<div class="table-scroll" style="margin-bottom:8px"><table data-z="cols">
+    <thead><tr><th>랭킹</th><th class="num">기간</th><th class="num">받은 사람</th><th class="num">보낸 코인</th><th class="num">힌트</th><th class="num">자동배치</th>
+      <th class="num">받아 간 코인</th><th class="num">우편함에 있음</th><th class="num">기한 지남</th></tr></thead>
+    <tbody>${kinds.map((k) => {
+      const list = rows.filter((r) => r.kind === k);
+      return `<tr><td>${esc(GRANT_KIND[k] || k)}</td><td class="num">${fmt(list.length)}</td><td class="num">${fmt(sum(list, "people"))}</td>
+        <td class="num">${fmt(sum(list, "coins"))}</td><td class="num">${fmt(sum(list, "hints"))}</td><td class="num">${fmt(sum(list, "autos"))}</td>
+        <td class="num">${fmt(sum(list, "claimedCoins"))}</td><td class="num">${fmt(sum(list, "waiting"))}</td><td class="num">${fmt(sum(list, "expired"))}</td></tr>`;
+    }).join("")}</tbody></table></div>`;
 }
 
 /** 모드별 — "협동을 붙였는데 사람들이 하기는 하나"에 답하는 자리.
@@ -4928,6 +5041,8 @@ function defaultPlayEvent() {
 
 async function loadPlay() {
   const [repFn] = PLAY_RPC[CHART_VIEW];
+  // 견주기 표는 이벤트를 고르기 전에도 보이게 먼저 받는다(126).
+  if (CHART_VIEW === "event") await loadEventCompare();
   if (CHART_VIEW === "event" && !LIVE_EVENTS.some((e) => String(e.id) === String(PLAY_EVENT))) {
     PLAY_EVENT = defaultPlayEvent();
     PLAY_FILTER = null;
@@ -4948,6 +5063,7 @@ async function loadPlay() {
   const [rep] = await Promise.all([
     rpc(repFn, args).then((r) => ({ r }), (e) => ({ e })),
     loadPlayRows(),
+    loadPlayExtras(),
   ]);
   PLAY_REPORT = rep.e ? null : rep.r;
   PLAY_ERR = rep.e || null;
@@ -5276,6 +5392,7 @@ function playTab() {
       <h3 class="sub">판 크기마다 실수</h3>${playMistakeTable(R.mistakes)}
       <h3 class="sub">랭킹에서 빠진 까닭</h3>${R.exclusions?.length ? playBars(R.exclusions, "빠진 까닭") : '<div class="empty">랭킹에서 빠진 기록이 없습니다</div>'}
       <h3 class="sub">인터넷 없이 한 판</h3>${playBars(R.offline, "인터넷 없이")}
+      <h3 class="sub">랭킹 보상 지급</h3>${playGrantsView()}
       <h3 class="sub">몇 시에 시작했나</h3>${playHours(R.hours)}
       <div class="muted" style="font-size:12px;margin-top:8px">기록전에는 도구와 부활이 없습니다. 날짜마다 순위는 랭킹 메뉴에서 봅니다.</div>`;
   } else if (CHART_VIEW === "number" || CHART_VIEW === "two_dog") {
@@ -5287,6 +5404,7 @@ function playTab() {
       <div class="muted" style="font-size:12px;margin-top:6px">${CHART_VIEW === "two_dog"
         ? "「끝나지 않음」은 시작했다는 알림만 온 판입니다. 두 마리 랭킹은 한국 날짜로 매일 끊고, 그날 센 판 점수의 합으로 순위를 냅니다."
         : "「끝나지 않음」은 시작했다는 알림만 온 판입니다. 숫자 퍼즐은 날이 지나도 이어 풀 수 있어서 그만둔 것으로 보지 않습니다."}</div>
+      <h3 class="sub">날마다 점수 · 주의 표시 비율</h3>${modeDayStatsView()}
       <h3 class="sub">판 크기마다 성공한 비율</h3>
       ${(R.sizes || []).length ? `<div class="table-scroll"><table data-z="rows">
         <thead><tr><th>판 크기</th><th class="num">전체</th><th class="num">성공</th><th class="num">성공 비율</th></tr></thead>
@@ -5299,6 +5417,7 @@ function playTab() {
       <h3 class="sub">판 크기마다 실수</h3>${playMistakeTable(R.mistakes)}
       <h3 class="sub">도구 · 부활 · 코인 쓴 것</h3>${playBars(R.tools, "도구")}
       <h3 class="sub">랭킹에서 빠짐 · 인터넷 없이 한 판</h3>${playBars(R.exclusions, "빠짐")}
+      <h3 class="sub">랭킹 보상 지급</h3>${playGrantsView()}
       <h3 class="sub">몇 시에 시작했나</h3>${playHours(R.hours)}`;
   } else {
     const ev = LIVE_EVENTS.find((e) => String(e.id) === String(PLAY_EVENT));
@@ -5319,9 +5438,207 @@ function playTab() {
       <div class="muted" style="font-size:12px;margin-bottom:6px">「판 수」와 「판마다 실수」는 판을 셉니다. 구간 칸의 숫자는 그 크기 판에서 실수가 그만큼 나온 산책의 수입니다.</div>
       ${playMistakeTable(R.mistakes)}
       <h3 class="sub">받지 않은 까닭 · 인터넷 없이 · 주의 표시</h3>${playBars(R.exclusions, "받지 않음 · 주의 표시")}
-      <h3 class="sub">몇 시에 시작했나</h3>${playHours(R.hours)}`;
+      <h3 class="sub">몇 시에 시작했나</h3>${playHours(R.hours)}
+      <h3 class="sub">이벤트끼리 견주기 · 산책길과 산책길 두 마리</h3>${eventCompareView()}`;
   }
   return head + subSecs(`play.${CHART_VIEW}`, body) + playRowsTable(labels);
+}
+
+// ------------------------------------------------------------------ 차트 보기에 더한 칸 (126)
+// 숫자·두 마리의 날마다 점수와 주의 표시, 기록전·숫자·두 마리의 랭킹 보상 지급, 이벤트끼리 견주기.
+// 칸마다 따로 받는다. 126 전 서버(운영 루트)에서는 새 함수가 없어 그 칸만 「불러오지 못했습니다」가 뜨고 나머지는 그대로다.
+
+/** 차트 보기 → 랭킹 보상 종류(107 rank_reward_grants.kind). 이벤트 보상은 이벤트끼리 견주기 표에 있다. */
+const GRANT_KIND_OF_VIEW = { daily: "daily_time", number: "number", two_dog: "two_dog" };
+
+/** 보기마다 더 받는 것. 보고서·원본 표와 같이 기다린다. */
+async function loadPlayExtras() {
+  PLAY_DAYSTATS = null; PLAY_DAYSTATS_ERR = null; PLAY_GRANTS = null; PLAY_GRANTS_ERR = null;
+  const jobs = [];
+  if (CHART_VIEW === "number" || CHART_VIEW === "two_dog") {
+    jobs.push(rpc("admin_mode_day_stats", {
+      p_mode: CHART_VIEW, p_from: kstDate(-(PLAY_DAYS - 1)), p_to: kstDate(0), p_include_test: PLAY_TEST,
+    }).then((r) => { PLAY_DAYSTATS = r || []; }, (e) => { PLAY_DAYSTATS_ERR = e; }));
+  }
+  if (GRANT_KIND_OF_VIEW[CHART_VIEW]) {
+    jobs.push(rpc("admin_rank_grants", { p_days: PLAY_DAYS })
+      .then((r) => { PLAY_GRANTS = r || []; }, (e) => { PLAY_GRANTS_ERR = e; }));
+  }
+  await Promise.all(jobs);
+}
+
+/** 이벤트 보기의 견주기 표. 이벤트를 하나도 안 골랐어도 받는다. */
+async function loadEventCompare() {
+  try {
+    LE_COMPARE = await rpc("admin_live_event_compare", { p_limit: 20, p_include_test: PLAY_TEST }) || [];
+    LE_COMPARE_ERR = null;
+  } catch (e) { LE_COMPARE = null; LE_COMPARE_ERR = e; }
+}
+
+/** 숫자 칸에 쓸 값. 서버 numeric은 글자로 오므로 숫자로 바꾸고, 값이 없으면 「—」. */
+const numOrDash = (v, f = fmt) => (v == null || v === "" ? "—" : f(Number(v)));
+
+/** 숫자·두 마리 날마다 점수와 주의 표시(126 admin_mode_day_stats). */
+function modeDayStatsView() {
+  if (PLAY_DAYSTATS_ERR) return loadFail("날마다 점수를 불러오지 못했습니다.", PLAY_DAYSTATS_ERR, "sql/migrations/126_admin_stats.sql");
+  const rows = PLAY_DAYSTATS || [];
+  if (!rows.length) return EMPTY_LINE;
+  const days = rows.map((r) => String(r.day));
+  const n = (v) => Number(v) || 0;
+  const rate = (a, b) => (n(b) ? Math.round((n(a) / n(b)) * 1000) / 10 : 0);
+  const two = CHART_VIEW === "two_dog";
+  const note = two
+    ? "「한 사람 하루 합」은 그날 점수에 든 판 점수를 사람마다 더한 값이라 두 마리 하루 랭킹 점수와 같습니다."
+    : "「한 사람 하루 합」은 그날 점수에 든 판 점수를 사람마다 더한 값입니다. 숫자 퍼즐 랭킹 점수는 「랭킹 점수 세는 법」과 기간을 따르므로 이 합과 다를 수 있습니다.";
+  const body = [...rows].reverse().map((r) => `<tr>
+      <td>${esc(r.day)}</td>
+      <td class="num">${fmt(r.players)}</td>
+      <td class="num">${fmt(r.boards)}</td>
+      <td class="num">${fmt(r.cleared)}</td>
+      <td class="num">${fmt(r.counted)}</td>
+      <td class="num">${fmt(r.rankers)}</td>
+      <td class="num">${numOrDash(r.avg_score)}</td>
+      <td class="num">${numOrDash(r.avg_day_total)}</td>
+      <td class="num">${numOrDash(r.median_day_total)}</td>
+      <td class="num">${numOrDash(r.top_day_total)}</td>
+      <td class="num">${r.avg_clear_ms == null ? "—" : fmtDur(Number(r.avg_clear_ms))}</td>
+      <td class="num">${fmt(r.excluded)}</td>
+      <td class="num">${fmt(r.flagged)}${n(r.flagged) ? ` <span class="muted">${pct(n(r.flagged), n(r.boards))}</span>` : ""}</td>
+      <td class="num">${fmt(r.offline)}</td>
+      <td class="num">${fmt(r.score_blocked)}</td>
+    </tr>`).join("");
+  return `
+    <div class="muted" style="font-size:12px;margin-bottom:6px">${esc(note)} 판 평균 점수는 점수에 든 판만 셉니다.</div>
+    ${lineChart(days, [
+      { name: "판 평균 점수", color: "#17b3a8", values: rows.map((r) => n(r.avg_score)) },
+      { name: "한 사람 하루 합 가운데 값", color: "#5b4fc4", values: rows.map((r) => n(r.median_day_total)) },
+      { name: "한 사람 하루 합 최고", color: "#d9a441", values: rows.map((r) => n(r.top_day_total)) },
+    ])}
+    <div class="muted" style="font-size:12px;margin:10px 0 6px">주의 표시 비율과 제외 비율 · 그날 판 가운데 몇 %인지</div>
+    ${lineChart(days, [
+      { name: "주의 표시가 붙은 판 %", color: "#d95757", values: rows.map((r) => rate(r.flagged, r.boards)) },
+      { name: "랭킹에서 빠진 판 %", color: "#8a96a3", values: rows.map((r) => rate(r.excluded, r.boards)) },
+    ])}
+    <div class="table-scroll" style="margin-top:8px;max-height:320px;overflow-y:auto"><table data-z="rows cols">
+      <thead><tr><th>날짜</th><th class="num">참여자</th><th class="num">판</th><th class="num">성공</th><th class="num">점수에 든 판</th>
+        <th class="num">점수 받은 사람</th><th class="num">판 평균 점수</th><th class="num">하루 합 평균</th><th class="num">하루 합 가운데</th>
+        <th class="num">하루 합 최고</th><th class="num">성공 판 평균 시간</th><th class="num">랭킹에서 빠진 판</th>
+        <th class="num">주의 표시${infoTip("빠름, 판 겹침, 시계 어긋남처럼 서버가 판에 붙인 표시가 하나라도 있는 판입니다. 표시만 하고 막지는 않습니다. 옆 숫자는 그날 판 가운데 비율입니다.")}</th>
+        <th class="num">오프라인</th><th class="num">점수 막기로 빠짐</th></tr></thead>
+      <tbody>${body}</tbody></table></div>`;
+}
+
+/** admin_rank_grants 줄을 기간마다 묶는다. 받음, 우편함에 있음, 기한 지남으로 나눈다. */
+function grantRollup(rows, kind) {
+  const now = Date.now(), by = new Map();
+  for (const g of rows || []) {
+    if (kind && g.kind !== kind) continue;
+    const key = `${g.kind}|${g.period_key}`;
+    const r = by.get(key) || { kind: g.kind, period: g.period_key, name: g.event_name || "", sent: g.created_at,
+      people: 0, coins: 0, hints: 0, autos: 0, claimed: 0, claimedCoins: 0, waiting: 0, expired: 0 };
+    const c = Number(g.coins) || 0;
+    r.people += 1; r.coins += c; r.hints += Number(g.hints) || 0; r.autos += Number(g.autos) || 0;
+    if (g.claimed_at) { r.claimed += 1; r.claimedCoins += c; }
+    else if (g.claim_until && new Date(g.claim_until).getTime() <= now) r.expired += 1;
+    else r.waiting += 1;
+    if (String(g.created_at) > String(r.sent)) r.sent = g.created_at;
+    by.set(key, r);
+  }
+  return [...by.values()].sort((a, b) => String(b.sent).localeCompare(String(a.sent)));
+}
+
+/** 기간 열쇠를 사람이 읽는 말로. 숫자·두 마리는 d:/w: 열쇠, 이벤트는 번호, 나머지는 날짜다. */
+function grantPeriodText(r) {
+  if (r.kind === "event") return `#${r.period} ${r.name}`;
+  if (r.kind === "number" || r.kind === "two_dog") return numberPeriodLabel(r.period);
+  return r.period;
+}
+
+/** 기록전·숫자·두 마리 보기의 랭킹 보상 지급. 보상을 보낸 날 기준으로 지금 고른 기간 안이다. */
+function playGrantsView() {
+  const kind = GRANT_KIND_OF_VIEW[CHART_VIEW];
+  if (PLAY_GRANTS_ERR) return loadFail("랭킹 보상 지급을 불러오지 못했습니다.", PLAY_GRANTS_ERR, "sql/migrations/107_admin_records.sql");
+  const rows = grantRollup(PLAY_GRANTS, kind);
+  if (!rows.length) return `<div class="empty">최근 ${PLAY_DAYS}일 동안 보낸 ${esc(GRANT_KIND[kind] || kind)} 랭킹 보상이 없습니다</div>`;
+  const sum = (k) => rows.reduce((a, r) => a + r[k], 0);
+  return `
+    <div class="cards">
+      <div class="card" data-z><div class="label">보상 받은 사람 · 줄 수</div><div class="value">${fmt(sum("people"))}</div></div>
+      <div class="card" data-z><div class="label">보낸 코인</div><div class="value">${fmt(sum("coins"))}</div></div>
+      <div class="card" data-z><div class="label">받아 간 코인</div><div class="value">${fmt(sum("claimedCoins"))}</div></div>
+      <div class="card" data-z><div class="label">우편함에 있음</div><div class="value">${fmt(sum("waiting"))}</div></div>
+      <div class="card" data-z><div class="label">기한 지남</div><div class="value">${fmt(sum("expired"))}</div></div>
+    </div>
+    <div class="table-scroll"><table data-z="cols">
+      <thead><tr><th>기간</th><th>보낸 날</th><th class="num">받은 사람</th><th class="num">코인</th><th class="num">힌트</th><th class="num">자동배치</th>
+        <th class="num">받아 감</th><th class="num">받아 간 코인</th><th class="num">우편함에 있음</th><th class="num">기한 지남</th></tr></thead>
+      <tbody>${rows.map((r) => `<tr>
+        <td>${esc(grantPeriodText(r))}</td><td class="muted">${esc(fmtDate(r.sent))}</td>
+        <td class="num">${fmt(r.people)}</td><td class="num">${fmt(r.coins)}</td><td class="num">${fmt(r.hints)}</td><td class="num">${fmt(r.autos)}</td>
+        <td class="num">${fmt(r.claimed)}</td><td class="num">${fmt(r.claimedCoins)}</td><td class="num">${fmt(r.waiting)}</td><td class="num">${fmt(r.expired)}</td>
+      </tr>`).join("")}</tbody></table></div>
+    <div class="muted" style="font-size:12px;margin-top:6px">보상을 보낸 날 기준 최근 ${PLAY_DAYS}일입니다. 우편함에서 ${RANK_CLAIM_DAYS}일 안에 받지 않으면 기한 지남이 됩니다. 줄 하나하나는 운영 → 서버 상태의 「최근에 나간 랭킹 보상」에 있습니다.</div>`;
+}
+
+/** 이벤트끼리 견주기(126 admin_live_event_compare). 산책길과 산책길 두 마리를 나란히 본다. */
+function eventCompareView() {
+  if (LE_COMPARE_ERR) return loadFail("이벤트끼리 견주는 표를 불러오지 못했습니다.", LE_COMPARE_ERR, "sql/migrations/126_admin_stats.sql");
+  const rows = LE_COMPARE || [];
+  if (!rows.length) return '<div class="empty">아직 만든 이벤트가 없습니다</div>';
+  const n = (v) => Number(v) || 0;
+  const kindName = (k) => KIND_DEFAULTS[k]?.label || k;
+  // 종류마다 합. 취소와 시험 전용은 뺀다. 평균 판 수는 이벤트마다 평균을 끝난 산책 수로 가중해 다시 낸다.
+  const real = rows.filter((r) => !r.cancelled && !r.test_only);
+  const kinds = [...new Set(real.map((r) => r.kind))];
+  const byKind = kinds.map((k) => {
+    const list = real.filter((r) => r.kind === k);
+    const s = (f) => list.reduce((a, r) => a + n(r[f]), 0);
+    const ended = s("ended_runs");
+    return {
+      kind: k, events: list.length, people: s("participants"), runs: s("runs"), ended,
+      avgBoards: ended ? Math.round((list.reduce((a, r) => a + n(r.avg_boards) * n(r.ended_runs), 0) / ended) * 10) / 10 : null,
+      ranked: s("ranked_people"), coins: s("reward_coins"), claimedCoins: s("claimed_coins"),
+    };
+  });
+  const kindTable = byKind.length ? `<div class="table-scroll"><table>
+      <thead><tr><th>종류</th><th class="num">이벤트</th><th class="num">이벤트마다 참여한 사람</th><th class="num">이벤트마다 산책</th>
+        <th class="num">끝난 산책의 평균 판 수</th><th class="num">순위에 든 비율</th><th class="num">보낸 코인</th><th class="num">받아 간 비율</th></tr></thead>
+      <tbody>${byKind.map((k) => `<tr><td>${esc(kindName(k.kind))}</td><td class="num">${fmt(k.events)}</td>
+        <td class="num">${fmt(Math.round((k.people / Math.max(1, k.events)) * 10) / 10)}</td>
+        <td class="num">${fmt(Math.round((k.runs / Math.max(1, k.events)) * 10) / 10)}</td>
+        <td class="num">${k.avgBoards == null ? "—" : fmt(k.avgBoards)}</td>
+        <td class="num">${pct(k.ranked, k.people)}</td><td class="num">${fmt(k.coins)}</td><td class="num">${pct(k.claimedCoins, k.coins)}</td></tr>`).join("")}</tbody></table></div>
+      <div class="muted" style="font-size:12px;margin:4px 0 10px">취소한 이벤트와 시험 전용 이벤트는 위 합에서 뺍니다. 한 사람이 여러 이벤트에 들어오면 이벤트마다 셉니다.</div>` : "";
+  const body = rows.map((r) => `<tr>
+      <td class="num fit"><button class="plink" data-playevent="${esc(r.id)}" title="이 이벤트의 차트를 봅니다">#${esc(r.id)}</button></td>
+      <td>${esc(r.name_ko)}${String(r.id) === String(PLAY_EVENT) ? '<span class="pill today" style="margin-left:4px">지금 보는 이벤트</span>' : ""}<div class="muted" style="font-size:11.5px">${esc(kindName(r.kind))}${r.test_only ? " · 시험 전용" : ""}${r.cancelled ? " · 취소" : ""}</div></td>
+      <td class="muted">${esc(fmtDate(r.starts_at))} ~ ${esc(fmtDate(r.effective_end))}</td>
+      <td class="num">${fmt(r.participants)}</td>
+      <td class="num">${fmt(r.runs)}</td>
+      <td class="num">${fmt(r.ended_runs)}</td>
+      <td class="num">${numOrDash(r.avg_boards)}</td>
+      <td class="num">${numOrDash(r.median_boards)}</td>
+      <td class="num">${numOrDash(r.max_boards)}</td>
+      <td class="num">${r.avg_walk_ms == null ? "—" : fmtDur(Number(r.avg_walk_ms))}</td>
+      <td class="num">${fmt(r.ranked_people)}</td>
+      <td class="num">${fmt(r.continued_runs)}</td>
+      <td class="num">${fmt(r.rejected_runs)}</td>
+      <td class="num">${fmt(r.flagged_runs)}</td>
+      <td class="num">${fmt(r.offline_runs)}</td>
+      <td class="num">${fmt(r.rewarded)}</td>
+      <td class="num">${fmt(r.reward_coins)}</td>
+      <td class="num">${fmt(r.claimed)}</td>
+      <td class="num">${fmt(r.claimed_coins)}</td>
+    </tr>`).join("");
+  return `${kindTable}
+    <div class="table-scroll"><table data-z="cols">
+      <thead><tr><th class="num fit">번호</th><th>이름 · 종류</th><th>기간</th><th class="num">참여한 사람</th><th class="num">산책</th><th class="num">끝난 산책</th>
+        <th class="num">평균 판 수</th><th class="num">가운데 판 수</th><th class="num">최고 판 수</th><th class="num">평균 산책 길이</th>
+        <th class="num">순위에 든 사람</th><th class="num">이어 걷기 한 산책</th><th class="num">받지 않은 산책</th><th class="num">주의 표시</th><th class="num">오프라인</th>
+        <th class="num">보상 받은 사람</th><th class="num">보낸 코인</th><th class="num">받아 감</th><th class="num">받아 간 코인</th></tr></thead>
+      <tbody>${body}</tbody></table></div>
+    <div class="muted" style="font-size:12px;margin-top:6px">최근에 시작한 이벤트 20개입니다. 판 수와 산책 길이는 끝난 산책만 셉니다. 「시험 계정도 세기」를 따릅니다. 번호를 누르면 그 이벤트의 차트로 바뀝니다.
+      산책길은 정해진 끝이 없고 그만두거나 뼈다귀가 떨어질 때까지 걷는 방식이라 완주 수는 없습니다.</div>`;
 }
 
 /**
@@ -5544,6 +5861,9 @@ const REC_SIZE = 50;
 let TEST_ACCOUNTS = null, TEST_SET = new Set();
 /** 점수 막기(123). 지금 막힌 회원과 최근 30일 안에 푼 기록이다. null이면 못 읽었다. 123 전 서버라 그렇다. */
 let SCORE_BLOCKS = null, BLOCK_SET = new Set(), SCORE_BLOCKS_ERR = null;
+/** 점수 막기 집계(126 admin_score_block_stats)와 그 기간(일). 이상 징후 메뉴가 쓴다. */
+let SB_STATS = null, SB_STATS_ERR = null;
+const SB_STATS_DAYS = 30;
 /** 숫자 기간 고르기에 늘어놓을 지난 기간 수. */
 const NUMBER_PERIOD_CHOICES = { week: 8, day: 14 };
 
@@ -6469,6 +6789,10 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     if ($("#playDays")) $("#playDays").onchange = (e) => { PLAY_DAYS = Number(e.target.value) || 14; reloadPlay(); };
     if ($("#playEvent")) $("#playEvent").onchange = (e) => { PLAY_EVENT = e.target.value ? Number(e.target.value) : null; reloadPlay(); };
     if ($("#playTest")) $("#playTest").onchange = (e) => { PLAY_TEST = e.target.checked; reloadPlay(); };
+    // 이벤트끼리 견주기 표의 번호(126). 위 이벤트 고르기와 같다.
+    document.querySelectorAll("[data-playevent]").forEach((b) => {
+      b.onclick = () => { PLAY_EVENT = Number(b.dataset.playevent); reloadPlay(); };
+    });
     // 막대·칸·카드·표 숫자를 누르면 그 filter로 원본 표만 다시 받고 표로 내려간다.
     // 쌓은 막대는 칸이 기둥 안에 있어서, 칸을 누르면 기둥(그날 전체)까지 올라가지 않게 막는다.
     const rowsAgain = async (scroll) => {
