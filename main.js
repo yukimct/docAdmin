@@ -1179,11 +1179,40 @@ const money = (v, cur) => `${fmt(Math.round(Number(v) || 0))} ${esc(cur || "")}`
 /** 일자별 표와 그래프가 보는 날 수. 28일 카드보다 넉넉하게 받는다. */
 const ADMOB_DAYS = 60;
 let ADMOB = [], ADMOB_ERR = null;
+// 127 광고 단위·형식까지 쪼갠 줄. 합계로 보면 어느 광고가 안 채워졌는지 안 보인다 —
+// 1.7.0에서 배너만 일치율이 샜는데 합계로는 묻혀 한동안 못 봤다.
+let ADMOB_UNIT = [], ADMOB_UNIT_ERR = null;
 
 async function loadAdmob() {
-  ADMOB_ERR = null;
-  ADMOB = await rpc("admin_admob_daily", { p_days: ADMOB_DAYS }).catch((e) => { ADMOB_ERR = e; return []; }) || [];
+  ADMOB_ERR = null; ADMOB_UNIT_ERR = null;
+  // 쪼갠 쪽이 실패해도 합계는 보여 준다. 127이 아직 없는 서버에서도 화면이 뜨게.
+  const [sum, unit] = await Promise.all([
+    rpc("admin_admob_daily", { p_days: ADMOB_DAYS }).catch((e) => { ADMOB_ERR = e; return []; }),
+    rpc("admin_admob_daily_unit", { p_days: ADMOB_DAYS }).catch((e) => { ADMOB_UNIT_ERR = e; return []; }),
+  ]);
+  ADMOB = sum || [];
+  ADMOB_UNIT = unit || [];
 }
+
+/** AdMob 형식 값(banner, rewarded_interstitial ...)을 사람이 읽는 말로. */
+const AD_FORMAT_LABEL = {
+  banner: "배너",
+  interstitial: "전면",
+  rewarded: "보상형",
+  rewarded_interstitial: "보상형 전면",
+  native: "네이티브",
+  app_open: "앱 열기",
+};
+const adFormatText = (f) => AD_FORMAT_LABEL[String(f || "").toLowerCase()] || String(f || "(형식 없음)");
+/** 플랫폼과 형식을 섞은 선 색. 플랫폼으로 색을 나누고 형식으로 진하기를 나눈다. */
+const ADMOB_UNIT_COLORS = {
+  "Android|banner": "#17b3a8",
+  "Android|rewarded_interstitial": "#0b6d66",
+  "iOS|banner": "#7aa2f7",
+  "iOS|rewarded_interstitial": "#3f63c9",
+};
+const unitColor = (platform, format) =>
+  ADMOB_UNIT_COLORS[`${platform}|${String(format || "").toLowerCase()}`] || "#9b8bb4";
 
 /** 달러 금액을 $1,234.56 꼴로. */
 function usdText(dollars) {
@@ -1289,6 +1318,135 @@ function admobByDay() {
   return m;
 }
 
+/**
+ * 127 쪼갠 줄을 플랫폼·형식 조합으로 묶는다.
+ * 조합마다 날짜별 요청·일치를 들고 있어야 일치율 추이를 그릴 수 있다.
+ */
+function admobUnitGroups() {
+  const m = new Map();
+  for (const r of ADMOB_UNIT) {
+    const fmtKey = String(r.format || "").toLowerCase();
+    const key = `${r.platform}|${fmtKey}`;
+    const g = m.get(key) || {
+      key, platform: r.platform, format: fmtKey,
+      req: 0, matched: 0, imp: 0, earn: 0, clicks: 0, byDay: new Map(),
+    };
+    const req = Number(r.requests || 0), matched = Number(r.matched || 0);
+    g.req += req; g.matched += matched;
+    g.imp += Number(r.impressions || 0);
+    g.earn += Number(r.earnings_micros || 0);
+    g.clicks += Number(r.clicks || 0);
+    // 같은 날 같은 조합에 광고 단위가 여럿일 수 있다. 단위를 합쳐 조합 하나로 본다.
+    const d = String(r.day);
+    const a = g.byDay.get(d) || { req: 0, matched: 0, imp: 0, earn: 0 };
+    a.req += req; a.matched += matched;
+    a.imp += Number(r.impressions || 0);
+    a.earn += Number(r.earnings_micros || 0);
+    g.byDay.set(d, a);
+    m.set(key, g);
+  }
+  // 요청이 많은 조합을 위에 둔다.
+  return [...m.values()].sort((a, b) => b.req - a.req);
+}
+
+/** 광고 종류별 섹션. 표 둘과 일치율 추이 그래프 하나. */
+function admobUnitSection() {
+  if (ADMOB_UNIT_ERR) {
+    return sec("admob.unit", "광고 종류별", loadFail(
+      "광고 종류별 기록을 불러오지 못했습니다.", ADMOB_UNIT_ERR,
+      "127_admob_unit.sql · admin_admob_daily_unit"), { open: true });
+  }
+  const groups = admobUnitGroups();
+  if (!groups.length) {
+    return sec("admob.unit", "광고 종류별",
+      `<div class="empty">아직 쪼개 쌓은 기록이 없습니다. 127을 적용한 뒤 admob-sync가 한 번 돌면 채워집니다</div>`,
+      { open: true });
+  }
+
+  const pct = (a, b) => (b ? Math.round((a / b) * 1000) / 10 : null);
+  const pctText = (a, b) => { const v = pct(a, b); return v == null ? "—" : v + "%"; };
+  // 일치율이 낮으면 눈에 띄게. 요청이 적은 날은 한두 건으로 크게 흔들려 색을 입히지 않는다.
+  const pctCell = (a, b) => {
+    const v = pct(a, b);
+    if (v == null) return '<span class="muted">—</span>';
+    if (b >= 20 && v < 70) return `<b style="color:#c0392b">${v}%</b>`;
+    if (b >= 20 && v < 90) return `<b style="color:#b7791f">${v}%</b>`;
+    return `${v}%`;
+  };
+
+  // 오늘부터 n일 동안(오늘 포함)의 조합별 합
+  const span = (g, n) => {
+    const t = { req: 0, matched: 0, earn: 0 };
+    for (let i = 0; i < n; i++) {
+      const a = g.byDay.get(kstDate(-i));
+      if (a) { t.req += a.req; t.matched += a.matched; t.earn += a.earn; }
+    }
+    return t;
+  };
+
+  const summary = `<div class="table-scroll"><table style="min-width:680px">
+    <thead><tr><th>플랫폼</th><th>종류</th>
+      <th class="num">최근 7일 요청</th><th class="num">일치율</th>
+      <th class="num">최근 28일 요청</th><th class="num">일치율</th>
+      <th class="num">28일 예상 수익</th></tr></thead>
+    <tbody>${groups.map((g) => {
+      const w = span(g, 7), m = span(g, 28);
+      return `<tr>
+        <td class="nowrap"><i style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${unitColor(g.platform, g.format)};margin-right:6px"></i>${esc(g.platform)}</td>
+        <td class="nowrap">${esc(adFormatText(g.format))}</td>
+        <td class="num">${fmt(w.req)}</td><td class="num">${pctCell(w.matched, w.req)}</td>
+        <td class="num">${fmt(m.req)}</td><td class="num">${pctCell(m.matched, m.req)}</td>
+        <td class="num">${m.earn ? usd(m.earn) : '<span class="muted">—</span>'}</td>
+      </tr>`;
+    }).join("")}</tbody></table></div>`;
+
+  // 일치율 추이. 요청이 없는 날은 선을 끊지 않고 0으로 두면 거짓으로 떨어져 보여서, 그날 값을 직전 값으로 잇지 않고 null 대신 0을 쓰되 표로 요청 수를 같이 본다.
+  const days = Array.from({ length: 28 }, (_, i) => kstDate(i - 27));
+  const series = groups.map((g) => ({
+    name: `${g.platform} ${adFormatText(g.format)}`,
+    color: unitColor(g.platform, g.format),
+    values: days.map((d) => {
+      const a = g.byDay.get(d);
+      return a && a.req ? Math.round((a.matched / a.req) * 1000) / 10 : 0;
+    }),
+  }));
+
+  // 일자별 줄. 날짜 × 조합이라 줄이 많아진다. 접어 둔다.
+  const rows = [];
+  for (const d of [...new Set(ADMOB_UNIT.map((r) => String(r.day)))].sort().reverse()) {
+    for (const g of groups) {
+      const a = g.byDay.get(d);
+      if (!a || (!a.req && !a.imp)) continue;
+      rows.push({ day: d, platform: g.platform, format: g.format, ...a });
+    }
+  }
+  const daily = rows.length ? `<div class="table-scroll"><table style="min-width:760px">
+    <thead><tr><th>날짜</th><th>플랫폼</th><th>종류</th>
+      <th class="num">요청</th><th class="num">일치</th>
+      <th class="num">일치율${infoTip("광고를 달라고 한 요청 중 광고가 실제로 돌아온 비율입니다. 요청이 스무 건이 안 되는 날은 한두 건으로 크게 흔들립니다.")}</th>
+      <th class="num">노출</th><th class="num">예상 수익</th></tr></thead>
+    <tbody>${moreRows("admobUnit", rows.map((r) => `<tr>
+      <td class="nowrap">${esc(dayWithWeekday(r.day))}${r.day === kstDate(0) ? ' <span class="pill today">오늘</span>' : ""}</td>
+      <td class="nowrap"><i style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${unitColor(r.platform, r.format)};margin-right:6px"></i>${esc(r.platform)}</td>
+      <td class="nowrap">${esc(adFormatText(r.format))}</td>
+      <td class="num">${fmt(r.req)}</td>
+      <td class="num">${fmt(r.matched)}</td>
+      <td class="num">${pctCell(r.matched, r.req)}</td>
+      <td class="num">${fmt(r.imp)}</td>
+      <td class="num">${r.earn ? usd(r.earn) : '<span class="muted">—</span>'}</td>
+    </tr>`))}</tbody></table></div>${moreBar("admobUnit", rows.length)}`
+    : `<div class="empty">쪼개 쌓은 줄이 없습니다</div>`;
+
+  const note = `<div class="muted" style="font-size:12.5px;margin-bottom:var(--gap)">
+    <b>일치율이 낮으면 그만큼 수익이 샙니다.</b> 합계로 보면 종류가 섞여 묻히므로 여기서 갈라 봅니다.
+    요청이 스무 건이 안 되는 날은 한두 건으로 크게 흔들리니 요청 수를 같이 보십시오.</div>`;
+
+  return sec("admob.unit", "광고 종류별 · 플랫폼과 형식", `${note}${summary}
+    ${sec("admob.unitChart", "일치율 추이 · 최근 28일", lineChart(days.map(dayWithWeekday), series), { open: true, sub: true })}
+    ${sec("admob.unitDaily", `일자별 표 · 최근 ${ADMOB_DAYS}일`, daily, { note: `${fmt(rows.length)}줄`, sub: true })}`,
+    { open: true });
+}
+
 function admobTab(err) {
   if (err) return loadFail("광고 수익을 불러오지 못했습니다.", err, "117_admob_daily.sql · Edge Function admob-sync");
   const by = admobByDay();
@@ -1352,6 +1510,7 @@ function admobTab(err) {
       { name: "Android", color: ADMOB_COLORS.Android, values: days.map((d) => val(d, "Android")) },
       { name: "iOS", color: ADMOB_COLORS.iOS, values: days.map((d) => val(d, "iOS")) },
     ]), { open: true })}
+    ${admobUnitSection()}
     ${sec("admob.daily", `일자별 표 · 최근 ${ADMOB_DAYS}일`, table, { open: true, note: `${fmt(rows.length)}일` })}`;
 }
 
