@@ -1229,7 +1229,12 @@ const unitColor = (platform, format) =>
 
 /** 달러 금액을 $1,234.56 꼴로. */
 function usdText(dollars) {
-  return "$" + Number(dollars || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const v = Number(dollars || 0);
+  // **센트보다 작은 금액은 0으로 반올림하지 않는다.** 하루 몇 명이 보는 광고는 수익이
+  // $0.0016처럼 나오는데, 두 자리로 자르면 $0.00이 되어 「한 푼도 못 벌었다」로 읽힌다
+  // (사용자 질문, 2026-10-19). 0이 아닌데 0으로 보이는 것이 가장 나쁘다.
+  const digits = v !== 0 && Math.abs(v) < 0.01 ? 4 : 2;
+  return "$" + v.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
 }
 /** AdMob 마이크로 단위(1달러 = 1,000,000)를 $ 글자로. */
 const usd = (micros) => usdText(Number(micros || 0) / 1e6);
