@@ -6366,6 +6366,40 @@ const MISSION_KIND_LABEL = {
   walkJoined: "산책길 이벤트 N번 참가", walkBoards: "산책길 N판 걷기", todayTop10: "오늘 랭킹 10위 안에 N번",
 };
 const MISSION_PERIODS = [["daily", "일일"], ["weekly", "주간"], ["monthly", "월간"]];
+
+/**
+ * 미션 편집기의 하위 탭. 기간 셋이 한 표에 다 들어 있어 찾기 어려웠다(사용자 지시, 2026-10-18).
+ *
+ * 업데이트 탭(UPD_VIEWS)과 같은 방식이다. **줄은 전부 문서에 남겨 두고 고른 기간만 보인다.**
+ * 그래서 저장(readMissions)과 합계(missionTotalsText)는 예전 그대로 모든 줄을 읽는다.
+ * 탭을 옮겨도 아직 저장하지 않은 입력이 사라지지 않는다.
+ */
+const MISSION_STORE = "dogadm.missionView";
+let MISSION_VIEW = (() => {
+  const v = loadStore(MISSION_STORE, "daily");
+  return MISSION_PERIODS.some(([k]) => k === v) ? v : "daily";
+})();
+
+/** 고른 기간의 줄만 보인다. 기간을 바꾼 줄을 따라가느라 부를 때도 있다. */
+function setMissionView(k) {
+  MISSION_VIEW = k;
+  saveStore(MISSION_STORE, k);
+  document.querySelectorAll("[data-mview]").forEach((b) => b.classList.toggle("on", b.dataset.mview === k));
+  document.querySelectorAll("#missionRows [data-mrow]").forEach((tr) => {
+    tr.hidden = (tr.dataset.mperiod || "daily") !== k;
+  });
+  missionViewCounts();
+}
+
+/** 탭마다 그 기간의 줄 수를 적는다. 줄을 더하거나 빼면 다시 센다. */
+function missionViewCounts() {
+  const rows = [...document.querySelectorAll("#missionRows [data-mrow]")];
+  document.querySelectorAll("[data-mview]").forEach((b) => {
+    const n = rows.filter((tr) => (tr.dataset.mperiod || "daily") === b.dataset.mview).length;
+    const slot = b.querySelector("b");
+    if (slot) slot.textContent = n;
+  });
+}
 const MISSION_REQ = { number_mode: "숫자 모드가 켜져 있을 때만", live_event: "산책길 이벤트 기간에만" };
 /** 이 종류는 앱이 조건을 붙인다. 새 줄을 더할 때 자동으로 채운다. 기본 목록과 같다. */
 const MISSION_KIND_REQ = { numberCleared: "number_mode", numberBigCleared: "number_mode", walkJoined: "live_event", walkBoards: "live_event" };
@@ -6386,7 +6420,8 @@ function missionRowHtml(m) {
   // id가 있는 줄은 기간·종류도 잠근다. 받은 기록이 id로 남아 있어, 같은 id로 기간을 바꾸면
   // 일일에 받은 사람이 주간으로 또 받는다. 바꾸려면 줄을 빼고 새 줄을 더한다.
   const lock = m.id ? 'disabled title="이미 내보낸 미션은 기간·종류를 바꿀 수 없습니다. 새 줄을 더하세요"' : "";
-  return `<tr data-mrow>
+  const rowPeriod = m.period || "daily";
+  return `<tr data-mrow data-mperiod="${esc(rowPeriod)}"${rowPeriod === MISSION_VIEW ? "" : " hidden"}>
     <td class="c fit"><input type="checkbox" data-m="on" ${m.on === false ? "" : "checked"}></td>
     <td><select data-m="period" ${lock}>${periods}</select></td>
     <td><select data-m="kind" style="max-width:260px" ${lock}>${kinds}</select>
@@ -6408,6 +6443,9 @@ function missionsEditor() {
       <b>이미 내보낸 미션은 id를 바꾸지 마세요.</b> 받은 기록이 id로 남아 있어 바꾸면 같은 날 다시 받을 수 있습니다.
       새 종류는 앱 업데이트가 필요해 여기서는 앱이 아는 종류만 고를 수 있습니다.
     </div>
+    <div class="subtabs stick">${MISSION_PERIODS.map(([k, l]) =>
+      `<button type="button" class="${MISSION_VIEW === k ? "on" : ""}" data-mview="${k}">${l} <b>${
+        missionsCurrent().filter((m) => (m.period || "daily") === k).length}</b></button>`).join("")}</div>
     <div class="toolbar" id="missionTotals"></div>
     <div class="table-scroll"><table>
       <thead><tr><th class="c fit">켬</th><th>기간</th><th>미션</th><th class="num">목표</th><th class="num">보상</th><th class="num">순서</th><th>id</th><th></th></tr></thead>
@@ -6469,21 +6507,38 @@ function wireMissions() {
       const tr = e.target.closest("[data-mrow]");
       tr.querySelector('[data-m="req"]').textContent = MISSION_REQ[MISSION_KIND_REQ[e.target.value]] || "";
     }
+    // 기간을 바꾸면 그 줄이 지금 탭에서 빠진다. 바꾼 줄을 계속 볼 수 있게 그 기간 탭으로 옮겨 간다.
+    if (e.target.dataset.m === "period") {
+      const tr = e.target.closest("[data-mrow]");
+      tr.dataset.mperiod = e.target.value;
+      setMissionView(e.target.value);
+    }
     totals();
   });
   body.addEventListener("click", (e) => {
-    if (e.target.matches("[data-mdel]")) { e.target.closest("[data-mrow]").remove(); totals(); }
+    if (e.target.matches("[data-mdel]")) {
+      e.target.closest("[data-mrow]").remove();
+      missionViewCounts();
+      totals();
+    }
+  });
+  document.querySelectorAll("[data-mview]").forEach((b) => {
+    b.onclick = () => setMissionView(b.dataset.mview);
   });
   $("#missionAdd").onclick = () => {
-    body.insertAdjacentHTML("beforeend", missionRowHtml({ period: "daily", kind: "cleared", target: 1, coins: 10, order: 999, on: false }));
+    // 지금 보는 탭의 기간으로 더한다. 다른 기간으로 넣으면 더하자마자 숨어 버린다.
+    body.insertAdjacentHTML("beforeend", missionRowHtml({ period: MISSION_VIEW, kind: "cleared", target: 1, coins: 10, order: 999, on: false }));
+    missionViewCounts();
     totals();
   };
   $("#missionReset").onclick = () => {
     if (!confirm("표를 앱 기본 목록으로 바꿉니다. 저장을 눌러야 서버에 올라갑니다. 바꿀까요?")) return;
     body.innerHTML = MISSION_DEFAULTS.map(missionRowHtml).join("");
+    missionViewCounts();
     totals();
   };
   $("#missionSave").onclick = saveMissions;
+  missionViewCounts();
   totals();
 }
 
