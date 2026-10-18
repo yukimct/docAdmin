@@ -1400,8 +1400,13 @@ function admobUnitSection() {
       </tr>`;
     }).join("")}</tbody></table></div>`;
 
-  // 일치율 추이. 요청이 없는 날은 선을 끊지 않고 0으로 두면 거짓으로 떨어져 보여서, 그날 값을 직전 값으로 잇지 않고 null 대신 0을 쓰되 표로 요청 수를 같이 본다.
-  const days = Array.from({ length: 28 }, (_, i) => kstDate(i - 27));
+  // 일치율 추이.
+  // **쌓이기 시작한 날부터만 그린다.** 28일로 고정하면 127을 넣기 전 날들이 0%로 그려져,
+  // 그때 일치율이 0이었던 것처럼 보인다. 처음 그렇게 그렸다가 화면에서 바로 드러났다.
+  const firstDay = [...new Set(ADMOB_UNIT.map((r) => String(r.day)))].sort()[0] || kstDate(0);
+  let span = 1;
+  while (span < 28 && kstDate(-span) >= firstDay) span++;
+  const days = Array.from({ length: span }, (_, i) => kstDate(i - (span - 1)));
   const series = groups.map((g) => ({
     name: `${g.platform} ${adFormatText(g.format)}`,
     color: unitColor(g.platform, g.format),
@@ -1442,7 +1447,7 @@ function admobUnitSection() {
     요청이 스무 건이 안 되는 날은 한두 건으로 크게 흔들리니 요청 수를 같이 보십시오.</div>`;
 
   return sec("admob.unit", "광고 종류별 · 플랫폼과 형식", `${note}${summary}
-    ${sec("admob.unitChart", "일치율 추이 · 최근 28일", lineChart(days.map(dayWithWeekday), series), { open: true, sub: true })}
+    ${sec("admob.unitChart", `일치율 추이 · 쌓인 ${span}일`, lineChart(days.map(dayWithWeekday), series), { open: true, sub: true })}
     ${sec("admob.unitDaily", `일자별 표 · 최근 ${ADMOB_DAYS}일`, daily, { note: `${fmt(rows.length)}줄`, sub: true })}`,
     { open: true });
 }
