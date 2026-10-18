@@ -767,8 +767,10 @@ function lineChart(labels, series, height = 160) {
   const n = labels.length;
   // 가운데 눈금이 반올림으로 틀리지 않게, 정수만 있는 계열은 꼭대기를 짝수로 올린다.
   // 값이 다 0이면 눈금이 0, 1, 1로 적혀 있었다. 이제 0, 1, 2다.
-  const top = Math.max(0, ...series.flatMap((s) => s.values));
-  const ints = series.every((s) => s.values.every((v) => Number.isInteger(v)));
+  // null은 「그날 잴 것이 없었다」는 뜻이다. 꼭대기와 정수 판정에서 뺀다.
+  const nums = series.flatMap((s) => s.values).filter((v) => v != null);
+  const top = Math.max(0, ...nums);
+  const ints = nums.every((v) => Number.isInteger(v));
   const max = ints ? Math.max(2, top + (top % 2)) : Math.max(1, top);
   const x = (i) => (n < 2 ? W / 2 : (i * W) / (n - 1));
   const y = (v) => PAD.t + ih - (v / max) * ih;
@@ -785,14 +787,22 @@ function lineChart(labels, series, height = 160) {
 
   // 늘어난 비율대로 선이 굵어지거나 가늘어지지 않게 non-scaling-stroke를 건다.
   const paths = series.map((s) => {
-    const d = s.values.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
-    return `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2"
+    // **값이 null인 날은 선을 끊는다.** 0으로 이으면 그날 수치가 0이었던 것처럼 보여 거짓이 된다.
+    let d = "", pen = false;
+    s.values.forEach((v, i) => {
+      if (v == null) { pen = false; return; }
+      d += `${pen ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)} `;
+      pen = true;
+    });
+    if (!d) return "";
+    return `<path d="${d.trim()}" fill="none" stroke="${s.color}" stroke-width="2"
                   vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/>`;
   }).join("");
   // 마지막 날의 점. SVG circle은 같이 늘어나 타원이 되므로 HTML로 올린다.
   const ends = series.map((s) => {
     const last = s.values.length - 1;
-    return last < 0 ? "" : `<i class="lc-end" style="left:${px(last)}%;top:${py(s.values[last] || 0)}%;background:${s.color}"></i>`;
+    if (last < 0 || s.values[last] == null) return "";
+    return `<i class="lc-end" style="left:${px(last)}%;top:${py(s.values[last])}%;background:${s.color}"></i>`;
   }).join("");
 
   // 좁은 화면에서는 lc-minor를 숨겨 하나 걸러 적는다. 처음과 끝은 남기고, 끝과 붙는 바로 앞 눈금도 숨긴다.
@@ -812,7 +822,7 @@ function lineChart(labels, series, height = 160) {
   const data = {
     labels: labels.map(String),
     xs: labels.map((_, i) => px(i)),
-    series: series.map((s) => ({ values: s.values, ys: s.values.map((v) => py(v || 0)) })),
+    series: series.map((s) => ({ values: s.values, ys: s.values.map((v) => (v == null ? null : py(v))) })),
   };
 
   return `<div class="chart lc" data-lc="${esc(JSON.stringify(data))}">
@@ -897,7 +907,10 @@ function lcShow(chart, clientX) {
     p.style.visibility = top == null ? "hidden" : "";
   });
   chart.querySelector(".lc-date").textContent = lcLongDate(d.labels[i]);
-  chart.querySelectorAll(".lc-row b").forEach((b, k) => { b.textContent = d.money ? usdText(d.series[k].values[i]) : fmt(d.series[k].values[i]); });
+  chart.querySelectorAll(".lc-row b").forEach((b, k) => {
+    const v = d.series[k].values[i];
+    b.textContent = v == null ? "—" : (d.money ? usdText(v) : fmt(v));
+  });
 
   // 아래 축의 날짜 칩. 안내선과 같은 left를 써서 바로 밑에 온다. 칩에 가리는 눈금 글자는 잠깐 숨긴다.
   const chip = chart.querySelector(".lc-chip");
@@ -1410,9 +1423,10 @@ function admobUnitSection() {
   const series = groups.map((g) => ({
     name: `${g.platform} ${adFormatText(g.format)}`,
     color: unitColor(g.platform, g.format),
+    // 요청이 없던 날은 null이다. 0%로 두면 그날 하나도 안 채워진 것처럼 보인다.
     values: days.map((d) => {
       const a = g.byDay.get(d);
-      return a && a.req ? Math.round((a.matched / a.req) * 1000) / 10 : 0;
+      return a && a.req ? Math.round((a.matched / a.req) * 1000) / 10 : null;
     }),
   }));
 
