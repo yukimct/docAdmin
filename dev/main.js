@@ -2956,7 +2956,10 @@ async function revokeBatch(id) {
  */
 async function revokeReward(id) {
   const m = REWARDS.find((x) => x.id === id);
-  const who = PLAYERS.find((x) => x.id === m?.profile_id)?.username || "이 회원";
+  // 이름을 못 찾으면 표와 같은 꼴로 id 앞자리를 쓴다. 표에는 id가, 확인 창에는 「이 회원」이
+  // 나오면 같은 줄을 말하는지 알기 어렵다.
+  const who = PLAYERS.find((x) => x.id === m?.profile_id)?.username
+            || (m?.profile_id || "").slice(0, 8) || "이 회원";
   const what = [m?.coins ? `코인 ${fmt(m.coins)}` : "", m?.hints ? `힌트 ${fmt(m.hints)}` : "",
                 m?.autos ? `자동배치 ${fmt(m.autos)}` : ""].filter(Boolean).join(" · ") || "빈 보상";
   if (!confirm(`${who}에게 준 보상을 거둬들입니다.\n\n${what}\n\n` +

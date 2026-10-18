@@ -2950,6 +2950,30 @@ async function revokeBatch(id) {
   }, refresh);
 }
 
+/**
+ * 한 사람에게 준 보상 한 건을 거둔다(132). 묶음 쪽 revokeBatch와 같은 결이다.
+ * **받아 간 것은 서버가 거절한다.** 코인이 이미 그 사람 휴대폰에 들어가 있다.
+ */
+async function revokeReward(id) {
+  const m = REWARDS.find((x) => x.id === id);
+  // 이름을 못 찾으면 표와 같은 꼴로 id 앞자리를 쓴다. 표에는 id가, 확인 창에는 「이 회원」이
+  // 나오면 같은 줄을 말하는지 알기 어렵다.
+  const who = PLAYERS.find((x) => x.id === m?.profile_id)?.username
+            || (m?.profile_id || "").slice(0, 8) || "이 회원";
+  const what = [m?.coins ? `코인 ${fmt(m.coins)}` : "", m?.hints ? `힌트 ${fmt(m.hints)}` : "",
+                m?.autos ? `자동배치 ${fmt(m.autos)}` : ""].filter(Boolean).join(" · ") || "빈 보상";
+  if (!confirm(`${who}에게 준 보상을 거둬들입니다.\n\n${what}\n\n` +
+    `아직 받아 가지 않은 것만 거둘 수 있습니다.`)) return;
+  const reason = askReason("한 사람에게 준 보상 거둬들이기");
+  if (reason === null) return;
+  await act(async () => {
+    const r = await rpc("admin_revoke_reward", { p_id: id, p_reason: reason });
+    alert(r === "ok" ? "거둬들였습니다"
+        : r === "claimed" ? "이미 받아 간 보상이라 거둘 수 없습니다"
+        : "그 보상을 찾지 못했습니다");
+  }, refresh);
+}
+
 // ------------------------------------------------------------------ 표
 async function loadVersus() {
   try {
@@ -4760,7 +4784,7 @@ function rewardsRows(shown) {
   return `<h2>한 사람에게 준 보상</h2><div class="table-scroll"><table>
     <thead><tr><th>준 때</th><th>받는 사람</th><th class="num">코인</th>
       <th class="num">힌트</th><th class="num">자동배치</th>
-      <th>메모</th><th class="c fit">상태</th></tr></thead>
+      <th>메모</th><th class="c fit">상태</th><th>관리</th></tr></thead>
     <tbody>${shown.map(({ r, st }) => {
       const who = PLAYERS.find((p) => p.id === r.profile_id);
       return `<tr>
@@ -4771,8 +4795,27 @@ function rewardsRows(shown) {
         <td class="c fit"><span class="pill ${st.cls}">${st.label}</span>${
           r.claimed_at ? `<div class="muted" style="font-size:11px;margin-top:3px">${
             fmtDate(r.claimed_at)}</div>` : ""}</td>
+        <td>${r.claimed_at ? "" : `<button class="danger sm" data-revokeone="${r.id}"
+             title="아직 받아 가지 않은 보상을 거둬들입니다">거두기</button>`}</td>
       </tr>`;
     }).join("")}</tbody></table></div>`;
+}
+
+/**
+ * 보상 탭 아래에 붙는 랭킹 보상(132). 랭킹 탭이 쓰는 표를 그대로 쓴다.
+ * 접어 두는 것은 위의 「준 보상」이 이 탭의 본디 내용이기 때문이다.
+ */
+function rewardsGrantsSection() {
+  if (GRANTS == null) {
+    return sec("rewards.grants", "랭킹 보상",
+      `<div class="empty">랭킹 보상 기록을 불러오지 못했습니다. 107 admin_rank_grants가 없는 서버일 수 있습니다</div>`,
+      { note: "못 읽음" });
+  }
+  return sec("rewards.grants", `랭킹 보상 · 최근 ${WINNER_DAYS}일`,
+    `<div class="muted" style="font-size:12.5px;margin-bottom:var(--gap)">
+       순위에 들어 자동으로 나간 보상입니다. 관리자가 준 것이 아니라 서버가 정산해 보냅니다.
+       같은 표를 랭킹 탭에서도 봅니다.</div>` + grantKindSummary() + grantsTable(),
+    { note: `${fmt(GRANTS.length)}건` });
 }
 
 function rewardsTable() {
@@ -6824,7 +6867,7 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     ${TAB === "ranking" ? rankingView(rkErr) : ""}
     ${TAB === "liveevents" ? liveEventsTab() : ""}
     ${TAB === "events" ? eventsTable(eventsErr) : ""}
-    ${TAB === "rewards" ? rewardsTable() : ""}
+    ${TAB === "rewards" ? rewardsTable() + rewardsGrantsSection() : ""}
     ${TAB === "purchases" ? purchasesTab(payErr) : ""}
     ${TAB === "admob" ? admobTab(ADMOB_ERR) : ""}
     ${TAB === "versus" ? versusTab(vsErr) : ""}
@@ -7178,6 +7221,9 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     document.querySelectorAll("[data-revoke]").forEach((b) => {
       b.onclick = () => revokeBatch(Number(b.dataset.revoke));
     });
+    document.querySelectorAll("[data-revokeone]").forEach((b) => {
+      b.onclick = () => revokeReward(Number(b.dataset.revokeone));
+    });
   }
 
   if (TAB === "players") {
@@ -7425,6 +7471,11 @@ async function boot() {
   if (TAB === "rewards" || TAB === "players") {
     await loadRewards().catch(() => {});
     await loadBatches().catch(() => {});
+  }
+  // 랭킹 보상도 보상 탭에서 같이 본다(사용자 요청, 2026-10-18). 랭킹 탭과 같은 자료다.
+  // 「보상」을 찾는 사람이 랭킹 탭까지 가야 하는 것이 어색했다.
+  if (TAB === "rewards") {
+    GRANTS = await rpc("admin_rank_grants", { p_days: WINNER_DAYS }).catch(() => null);
   }
   const aerr = TAB === "audit" ? await loadAudit().catch((e) => e) : null;
   const vserr = TAB === "versus" ? await loadVersus() : null;
