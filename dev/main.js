@@ -6427,7 +6427,9 @@ const CFG_EDITORS = {
       { k: "min_build.ios", type: "int", label: "iOS 앱 최소 빌드 번호", help: "이 번호보다 낮은 앱에서 깬 판은 랭킹에 넣지 않습니다", tip: BUILD_TIP },
       { k: "min_build.android", type: "int", label: "AOS 앱 최소 빌드 번호", help: "이 번호보다 낮은 앱에서 깬 판은 랭킹에 넣지 않습니다", tip: BUILD_TIP },
       { k: "period", type: "select", label: "랭킹 기간", opts: [["week", "매주 · 한국시간 월요일 0시 마감"], ["day", "매일 · 한국시간 0시 마감"]],
-        help: "한 랭킹이 이어지는 기간입니다", tip: "기간이 끝나면 순위대로 보상을 우편함으로 보냅니다. 보상표는 랭킹 메뉴의 숫자 퍼즐 탭 아래에 있습니다." },
+        help: "한 랭킹이 이어지는 기간입니다",
+        tip: "기간이 끝나면 순위대로 보상을 우편함으로 보냅니다. 보상표는 랭킹 메뉴의 숫자 퍼즐 탭 아래에 있습니다. "
+          + "기간을 바꾸면 그 순간부터 랭킹을 묶는 열쇠가 달라집니다. 그때까지 쌓인 판은 옛 기간에 남아, 앱에서는 순위가 새로 시작한 것처럼 보입니다. 기간이 끝나는 때에 맞춰 바꾸는 편이 낫습니다." },
       { k: "rank_basis", type: "select", label: "랭킹 점수 세는 법", def: NUMBER_BASIS_DEFAULT, examples: NUMBER_BASIS_EXAMPLES, exampleHead: NUMBER_BASIS_WEEK,
         opts: [["per_size", "① 크기마다 최고점 하나씩"], ["sum", "② 전부 더하기"], ["best_n", "③ 상위 몇 판만 더하기"], ["day_best", "④ 최고점 한 판"]],
         help: "기간 동안 깬 판의 점수를 어떻게 모아 랭킹 점수로 만들지 정합니다",
@@ -6454,11 +6456,18 @@ const CFG_EDITORS = {
   // 120. 앱이 enabled·score_pct·coin_pct를 읽고, 서버 two_dog_board_put과 점수 상한 two_dog_score_cap이 같은 값을 읽는다.
   two_dog_mode: {
     title: "두 마리",
-    note: "줄과 구역마다 강아지를 두 마리씩 놓는 모드의 설정입니다. 판은 모두 10×10입니다. 랭킹은 매일 그날 점수의 합이고 기간은 바꿀 수 없습니다. 칸을 비우면 기본값을 씁니다.",
+    note: "줄과 구역마다 강아지를 두 마리씩 놓는 모드의 설정입니다. 판은 모두 10×10입니다. 랭킹은 그 기간 점수의 합입니다. 칸을 비우면 기본값을 씁니다.",
     fields: [
       { k: "enabled", type: "bool", label: "두 마리 켜기", help: "끄면 앱 설정에서 고르는 줄이 사라지고 PLAY가 한 마리로 갑니다. 새로 깬 판은 랭킹에 들어가지 않습니다" },
       { k: "min_build.ios", type: "int", label: "iOS 앱 최소 빌드 번호", help: "이 번호보다 낮은 앱에서 깬 판은 랭킹에 넣지 않습니다", tip: BUILD_TIP },
       { k: "min_build.android", type: "int", label: "AOS 앱 최소 빌드 번호", help: "이 번호보다 낮은 앱에서 깬 판은 랭킹에 넣지 않습니다", tip: BUILD_TIP },
+      // 133. 숫자 퍼즐과 같은 칸이지만 **기본값이 매일**이다 — 120부터 하루로 돌던 랭킹이라
+      // 칸을 비웠을 때 주간으로 바뀌면 안 된다.
+      { k: "period", type: "select", label: "랭킹 기간", def: "day",
+        opts: [["day", "매일 · 한국시간 0시 마감"], ["week", "매주 · 한국시간 월요일 0시 마감"]],
+        help: "한 랭킹이 이어지는 기간입니다. 비우면 매일입니다",
+        tip: "기간이 끝나면 순위대로 보상을 우편함으로 보냅니다. 보상표는 랭킹 메뉴의 두 마리 쪽에 있습니다. "
+          + "기간을 바꾸면 그 순간부터 랭킹을 묶는 열쇠가 달라집니다. 그때까지 쌓인 판은 옛 기간에 남아, 앱에서는 순위가 새로 시작한 것처럼 보입니다. 기간이 끝나는 때에 맞춰 바꾸는 편이 낫습니다." },
       { k: "score_pct", type: "int", label: "판 점수 비율 (%)", def: 100,
         help: "100이면 한 마리와 같은 식으로 점수를 셉니다",
         tip: "점수는 판 크기, 남은 뼈다귀, 빈칸, 콤보, 시간으로 한 마리와 같은 식으로 센 뒤 이 비율을 곱합니다. "
