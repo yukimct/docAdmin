@@ -2978,7 +2978,10 @@ function updateTab(err) {
     <tr>
       <td><b>${label}</b></td>
       <td class="num"><input type="number" id="min_${p}" value="${g("min_version", p)}" style="width:90px">
-        <div class="muted" id="minv_${p}" style="font-size:12px">${esc(buildVersionText(p, g("min_version", p)))}</div></td>
+        <div class="muted" id="minv_${p}" style="font-size:12px">${esc(buildVersionText(p, g("min_version", p)))}</div>
+        <label class="muted" style="font-size:12px; display:block; margin-top:4px">
+          <input type="checkbox" id="hard_${p}" ${CONFIG?.min_version_hard?.[p] ? "checked" : ""}> 전체 막기
+        </label></td>
       <td class="num"><input type="number" id="latest_${p}" value="${g("latest_version", p)}" style="width:90px">
         <div class="muted" id="latestv_${p}" style="font-size:12px">${esc(buildVersionText(p, g("latest_version", p)))}</div></td>
       <td><input type="text" id="url_${p}" value="${esc(url(p))}" placeholder="앱 스토어 페이지 주소" style="width:100%"></td>
@@ -2993,6 +2996,8 @@ function updateTab(err) {
     <h2>앱 업데이트 요구</h2>
     <div class="notice">
       <b>업데이트 강제는 되돌리기 어렵습니다.</b>
+      「전체 막기」를 끄면 혼자 하는 것(레벨·연습·숫자 퍼즐·두 마리)은 그대로 할 수 있고,
+      랭킹·같이하기·우편함·기록전·산책길·상점만 잠깁니다. <b>이 설정은 1.8.0(59) 이상 앱에만 듣습니다.</b>
       「꼭 있어야 하는 최소 빌드」를 지금 스토어에 나간 앱보다 높게 넣으면 <b>모든 사람이 앱을 못 씁니다.</b>
       새 버전이 스토어 심사를 통과해 내려받을 수 있게 된 뒤에 올리세요. 0이면 검사하지 않습니다.
     </div>
@@ -3677,15 +3682,20 @@ async function saveVersions() {
   const min = { android: num("min_android"), ios: num("min_ios") };
   const latest = { android: num("latest_android"), ios: num("latest_ios") };
   const store = { android: $("#url_android").value.trim(), ios: $("#url_ios").value.trim() };
+  // 130 「전체 막기」. 끄면 혼자 하는 것(레벨·연습·숫자·두 마리)은 열어 두고 서버와 맞물린 것만 잠근다.
+  // 「주의」 **1.8.0(59) 이상에만 듣는다.** 그 아래 앱에는 전체 막기 코드밖에 없어서 끄더라도 통째로 막힌다.
+  const hard = { android: $("#hard_android").checked, ios: $("#hard_ios").checked };
 
   const on = Math.max(min.android, min.ios) > 0;
   if (on && !confirm(
     `꼭 있어야 하는 최소 빌드를 AOS ${min.android}, iOS ${min.ios}로 정합니다.\n\n` +
-    `이 번호보다 낮은 앱은 바로 쓸 수 없게 됩니다.\n` +
+    `이 번호보다 낮은 앱은 ${hard.android || hard.ios ? "바로 쓸 수 없게 됩니다" : "혼자 하는 것만 할 수 있게 됩니다(전체 막기 꺼짐)"}.\n` +
+    `전체 막기 설정은 1.8.0(59) 이상 앱에만 듣습니다. 그 아래는 늘 통째로 막힙니다.\n` +
     `새 버전이 스토어에서 내려받을 수 있는 상태인지 확인하셨나요?`)) return;
 
   await act(async () => {
     await rpc("admin_set_config", { p_key: "min_version", p_value: min });
+    await rpc("admin_set_config", { p_key: "min_version_hard", p_value: hard });
     await rpc("admin_set_config", { p_key: "latest_version", p_value: latest });
     await rpc("admin_set_config", { p_key: "store_url", p_value: store });
   }, refresh);
