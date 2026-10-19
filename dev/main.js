@@ -1191,6 +1191,9 @@ const money = (v, cur) => `${fmt(Math.round(Number(v) || 0))} ${esc(cur || "")}`
 
 /** 일자별 표와 그래프가 보는 날 수. 28일 카드보다 넉넉하게 받는다. */
 const ADMOB_DAYS = 60;
+/** 「총 예상 수익」을 내려고 **전부** 받는다. 광고 줄은 하루 한 개라 몇 해치도 가볍다.
+ *  표와 차트는 지금처럼 최근 ADMOB_DAYS일만 보여 준다. */
+const ADMOB_ALL_DAYS = 3650;
 let ADMOB = [], ADMOB_ERR = null;
 // 127 광고 단위·형식까지 쪼갠 줄. 합계로 보면 어느 광고가 안 채워졌는지 안 보인다 —
 // 1.7.0에서 배너만 일치율이 샜는데 합계로는 묻혀 한동안 못 봤다.
@@ -1200,7 +1203,7 @@ async function loadAdmob() {
   ADMOB_ERR = null; ADMOB_UNIT_ERR = null;
   // 쪼갠 쪽이 실패해도 합계는 보여 준다. 127이 아직 없는 서버에서도 화면이 뜨게.
   const [sum, unit] = await Promise.all([
-    rpc("admin_admob_daily", { p_days: ADMOB_DAYS }).catch((e) => { ADMOB_ERR = e; return []; }),
+    rpc("admin_admob_daily", { p_days: ADMOB_ALL_DAYS }).catch((e) => { ADMOB_ERR = e; return []; }),
     rpc("admin_admob_daily_unit", { p_days: ADMOB_DAYS }).catch((e) => { ADMOB_UNIT_ERR = e; return []; }),
   ]);
   ADMOB = sum || [];
@@ -1484,12 +1487,22 @@ function admobTab(err) {
     return t;
   };
   const split = (t) => `<div class="muted" style="font-size:12px;margin-top:4px">Android ${usd(t.Android)} · iOS ${usd(t.iOS)} · 노출 ${fmt(t.imp)}</div>`;
+  // **받은 줄 전부의 합**(사용자 요청, 2026-10-20). 기간 카드와 달리 견줄 상대가 없다.
+  // 집계가 시작된 날을 같이 적어 「언제부터의 합인지」 알 수 있게 한다.
+  const all = { earn: 0, imp: 0, Android: 0, iOS: 0 };
+  let since = null;
+  for (const a of by.values()) {
+    all.earn += a.earn; all.imp += a.imp; all.Android += a.Android; all.iOS += a.iOS;
+    if (a.earn || a.imp) { if (!since || a.day < since) since = a.day; }
+  }
+
   // [이름, 이 기간, 견줄 기간, 견줄 기간 이름]. 오늘은 아직 하루가 덜 지나 견주지 않는다.
   const cards = [
     ["오늘 예상 수익", span(0, 1), null, "아직 집계 중"],
     ["어제 예상 수익", span(1, 1), span(2, 1), "그저께 대비"],
     ["최근 7일 예상 수익", span(0, 7), span(7, 7), "그 전 7일 대비"],
     ["최근 28일 예상 수익", span(0, 28), span(28, 28), "그 전 28일 대비"],
+    ["총 예상 수익", all, null, since ? `${since}부터` : "아직 쌓인 날이 없습니다"],
   ];
   // 비율이 아니라 달러 차이로 적는다. 수익이 아주 작은 날과 견주면 ▲17942%처럼 뜻 없는 비율이 나왔다.
   const vs = (t, b, label) => {
@@ -1504,7 +1517,9 @@ function admobTab(err) {
   const days = Array.from({ length: 28 }, (_, i) => kstDate(i - 27));
   const val = (d, k) => Math.round(((by.get(d)?.[k] || 0) / 1e6) * 100) / 100;
 
-  const rows = [...by.values()].sort((a, b) => (a.day < b.day ? 1 : -1));
+  // 표는 지금처럼 최근 ADMOB_DAYS일만 본다. 총 수익을 내려고 전부 받지만 표까지 길어질 이유는 없다.
+  const tableFrom = kstDate(-(ADMOB_DAYS - 1));
+  const rows = [...by.values()].filter((a) => a.day >= tableFrom).sort((a, b) => (a.day < b.day ? 1 : -1));
   const pct = (a, b) => (b ? Math.round((a / b) * 1000) / 10 + "%" : "—");
   const table = rows.length ? `<div class="table-scroll"><table style="min-width:720px">
     <thead><tr><th>날짜</th><th class="num">예상 수익</th><th class="num">Android</th><th class="num">iOS</th>
