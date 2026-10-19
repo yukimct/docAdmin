@@ -3597,7 +3597,7 @@ async function editPassMonth(month) {
  */
 function passTab() {
   if (PASS_ERR) return loadFail("월간 패스 자료를 불러오지 못했습니다.", PASS_ERR,
-                                "131_monthly_pass.sql · board_themes · monthly_passes");
+                                "131_monthly_pass.sql · 134_admin_pass_read.sql");
 
   const esc2 = (v) => esc(String(v ?? ""));
   const nameOf = (names) => (names && (names.ko || names.en)) || "";
@@ -3665,18 +3665,16 @@ let PASS_THEMES = [], PASS_MONTHS = [], PASS_STATS = [], PASS_ERR = null;
 async function loadPassAdmin() {
   PASS_ERR = null;
   try {
-    // 131 표를 직접 읽는다. RLS를 켜고 정책을 두지 않아 관리자 함수로만 읽히는 것은 통계뿐이고,
-    // 정의 두 표는 관리자 화면이 직접 본다(service_role이 아니라 로그인한 관리자 권한).
+    // **표를 직접 읽지 않는다.** 131이 세 표에 RLS를 켜고 정책을 두지 않아 관리자도 막힌다
+    // (permission denied for table board_themes, 2026-10-19). 134가 읽기 함수를 준다.
     const [themes, months, stats] = await Promise.all([
-      sb.from("board_themes").select("*").order("id"),
-      sb.from("monthly_passes").select("*").order("month", { ascending: false }),
+      rpc("admin_board_themes", {}),
+      rpc("admin_passes", {}),
       rpc("admin_pass_stats", {}).catch(() => []),
     ]);
-    PASS_THEMES = themes.data || [];
-    PASS_MONTHS = months.data || [];
+    PASS_THEMES = themes || [];
+    PASS_MONTHS = months || [];
     PASS_STATS = stats || [];
-    if (themes.error) PASS_ERR = themes.error;
-    else if (months.error) PASS_ERR = months.error;
   } catch (e) { PASS_ERR = e; }
 }
 
