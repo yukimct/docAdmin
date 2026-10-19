@@ -3326,7 +3326,8 @@ const NAV = [
   { label: "회원", items: [["players", "회원 목록"], ["rewards", "보상"]] },
   { label: "기록", items: [["events", "앱 사용 기록"], ["audit", "관리 기록"]] },
   { label: "운영", items: [["anomaly", "이상 징후"], ["update", "업데이트·게임 설정"],
-                          ["notices", "공지"], ["push", "푸시"], ["server", "서버 상태"]] },
+                          ["notices", "공지"], ["push", "푸시"], ["pass", "월간 패스"],
+                          ["server", "서버 상태"]] },
 ];
 
 let SRV = null, WINNERS = [], TRANSFERS = [], COIN_AUDIT = [];
@@ -3512,6 +3513,173 @@ async function loadRanking() {
 
 /** 052·054가 있어야 채워진다. 없는 서버에서는 조용히 빈 값으로 두고 안내만 띄운다 —
  *  관리자 페이지는 서버보다 먼저 배포될 수 있다. */
+/**
+ * 판 테마 고치기(1.8.1). 색 스무 칸을 한 줄로 받는다.
+ *
+ * **스무 개가 아니면 저장하지 않는다.** 서버도 막지만 여기서 먼저 알려 주는 편이 빠르다.
+ * 색을 바꾸면 서버가 version을 올려 앱이 다시 받아 간다.
+ */
+async function editTheme(id) {
+  const t = PASS_THEMES.find((x) => x.id === id);
+  const isNew = !t;
+  const newId = isNew ? prompt("새 테마 id (영문 소문자·숫자·밑줄)", "") : id;
+  if (newId === null || !newId.trim()) return;
+  const ko = prompt("한국어 이름", t ? (t.names?.ko || "") : "");
+  if (ko === null) return;
+  const en = prompt("영어 이름 (비우면 한국어를 씁니다)", t ? (t.names?.en || "") : "");
+  if (en === null) return;
+  const cur = Array.isArray(t?.colors) ? t.colors.join(", ") : "";
+  const raw = prompt("색 스무 개를 쉼표로 (#RRGGBB)", cur);
+  if (raw === null) return;
+
+  const colors = raw.split(",").map((c) => c.trim()).filter(Boolean);
+  if (colors.length !== 20) { alert(`색이 스무 개여야 합니다. 지금 ${colors.length}개입니다`); return; }
+  const bad = colors.find((c) => !/^#[0-9a-fA-F]{6}$/.test(c));
+  if (bad) { alert(`색 꼴이 틀립니다: ${bad}\n#RRGGBB로 적어 주세요`); return; }
+
+  const names = { ko };
+  if (en.trim()) names.en = en.trim();
+  await act(async () => {
+    const r = await rpc("admin_board_theme_save", {
+      p_id: newId.trim(), p_names: names, p_colors: colors, p_retired: t?.retired ?? false,
+    });
+    alert(r === "created" ? "새 테마를 만들었습니다"
+        : r === "updated_colors" ? "색을 바꿨습니다. 앱이 다시 받아 갑니다"
+        : r === "updated" ? "저장했습니다"
+        : r === "need_20_colors" ? "색이 스무 개가 아닙니다"
+        : r === "bad_color" ? "색 꼴이 틀립니다"
+        : r === "need_ko_name" ? "한국어 이름이 필요합니다"
+        : r === "invalid_id" ? "id는 영문 소문자로 시작하고 소문자·숫자·밑줄만 씁니다"
+        : "관리자만 할 수 있습니다");
+  }, refresh);
+}
+
+/**
+ * 달 패스 고치기(1.8.1).
+ * **그달이 시작된 뒤에는 한정 강아지와 테마를 바꾸지 못한다** — 서버가 거절한다.
+ * 파는 것을 멈추는 것은 언제든 된다.
+ */
+async function editPassMonth(month) {
+  const m = PASS_MONTHS.find((x) => x.month === month);
+  const isNew = !m;
+  const mon = isNew ? prompt("달 (yyyy-MM)", "") : month;
+  if (mon === null || !/^[0-9]{4}-(0[1-9]|1[0-2])$/.test(mon.trim())) {
+    if (mon !== null) alert("달은 yyyy-MM 꼴로 적어 주세요");
+    return;
+  }
+  const dog = prompt("한정 강아지 키 (limited_01 ~ limited_99)", m?.dog_key || "limited_01");
+  if (dog === null) return;
+  const live = PASS_THEMES.filter((t) => !t.retired).map((t) => t.id);
+  if (!live.length) { alert("먼저 판 테마를 하나 만들어 주세요"); return; }
+  const theme = prompt(`판 테마 id\n\n쓸 수 있는 것: ${live.join(", ")}`, m?.theme_id || live[0]);
+  if (theme === null) return;
+  const onSale = confirm("지금부터 파시겠습니까?\n\n확인을 누르면 앱 상점에 바로 보입니다.");
+
+  await act(async () => {
+    const r = await rpc("admin_pass_save", {
+      p_month: mon.trim(), p_dog_key: dog.trim(), p_theme_id: theme.trim(), p_on_sale: onSale,
+    });
+    alert(r === "created" ? "새 달 패스를 만들었습니다"
+        : r === "updated" ? "저장했습니다"
+        : r === "started" ? "그달이 이미 시작돼 한정 강아지와 테마는 바꿀 수 없습니다"
+        : r === "no_theme" ? "그 테마가 없거나 감춰져 있습니다"
+        : r === "invalid_dog" ? "강아지 키는 limited_01 꼴입니다"
+        : r === "invalid_month" ? "달은 yyyy-MM 꼴입니다"
+        : "관리자만 할 수 있습니다");
+  }, refresh);
+}
+
+/**
+ * 월간 패스 탭(1.8.1, 계획 7절). 판 테마, 달 패스, 산 사람 통계.
+ *
+ * **색은 스무 개여야 한다.** 서버 admin_board_theme_save가 하나라도 꼴이 틀리면 저장하지 않고,
+ * 앱도 스무 개가 아니면 그 테마를 버리고 기본 색을 쓴다. 여기서도 같은 기준으로 막는다.
+ */
+function passTab() {
+  if (PASS_ERR) return loadFail("월간 패스 자료를 불러오지 못했습니다.", PASS_ERR,
+                                "131_monthly_pass.sql · board_themes · monthly_passes");
+
+  const esc2 = (v) => esc(String(v ?? ""));
+  const nameOf = (names) => (names && (names.ko || names.en)) || "";
+
+  // 테마 한 줄의 미리보기. **앱과 같은 자리 셈을 쓰지 않는다** — 여기서는 색이 고루 보이면 된다.
+  const swatches = (colors) => (Array.isArray(colors) ? colors : []).slice(0, 20)
+    .map((c) => `<i style="display:inline-block;width:14px;height:14px;border-radius:3px;
+         background:${/^#[0-9a-fA-F]{6}$/.test(c) ? c : "#ccc"};margin-right:2px"></i>`).join("");
+
+  const themeRows = PASS_THEMES.length ? PASS_THEMES.map((t) => {
+    const n = Array.isArray(t.colors) ? t.colors.length : 0;
+    const bad = n !== 20;
+    return `<tr${t.retired ? ' class="muted"' : ""}>
+      <td class="nowrap"><b>${esc2(t.id)}</b></td>
+      <td>${esc2(nameOf(t.names))}</td>
+      <td style="white-space:nowrap">${swatches(t.colors)}</td>
+      <td class="num">${bad ? `<b style="color:#c0392b">${n}</b>` : n}</td>
+      <td class="num">v${esc2(t.version)}</td>
+      <td class="c">${t.retired ? "감춤" : "쓰는 중"}</td>
+      <td><button class="ghost sm" data-themeedit="${esc2(t.id)}">고치기</button></td>
+    </tr>`;
+  }).join("") : "";
+
+  const themes = `<div class="table-scroll"><table style="min-width:720px">
+    <thead><tr><th>id</th><th>이름</th><th>색</th><th class="num">개수</th><th class="num">판</th>
+      <th class="c">상태</th><th>관리</th></tr></thead>
+    <tbody>${themeRows || `<tr><td colspan="7" class="muted">아직 만든 판 테마가 없습니다</td></tr>`}</tbody>
+    </table></div>
+    <div style="margin-top:10px"><button class="ghost sm" data-themeedit="">새 테마 만들기</button></div>`;
+
+  const statByMonth = Object.fromEntries(PASS_STATS.map((r) => [r.month, r]));
+  const monthRows = PASS_MONTHS.length ? PASS_MONTHS.map((m) => {
+    const st = statByMonth[m.month];
+    const theme = PASS_THEMES.find((t) => t.id === m.theme_id);
+    return `<tr>
+      <td class="nowrap"><b>${esc2(m.month)}</b></td>
+      <td class="nowrap">${esc2(m.dog_key)}</td>
+      <td class="nowrap">${esc2(m.theme_id)}${theme ? ` <span class="muted">${esc2(nameOf(theme.names))}</span>` : ""}</td>
+      <td class="c">${m.on_sale ? '<span class="pill today">파는 중</span>' : '<span class="muted">꺼짐</span>'}</td>
+      <td class="num">${st ? fmt(st.buyers) : 0}</td>
+      <td class="num">${st ? fmt(st.android) : 0} / ${st ? fmt(st.ios) : 0}</td>
+      <td><button class="ghost sm" data-passedit="${esc2(m.month)}">고치기</button></td>
+    </tr>`;
+  }).join("") : "";
+
+  const months = `<div class="table-scroll"><table style="min-width:720px">
+    <thead><tr><th>달</th><th>한정 강아지</th><th>판 테마</th><th class="c">파는 중</th>
+      <th class="num">산 사람</th><th class="num">And / iOS</th><th>관리</th></tr></thead>
+    <tbody>${monthRows || `<tr><td colspan="7" class="muted">아직 만든 달 패스가 없습니다</td></tr>`}</tbody>
+    </table></div>
+    <div style="margin-top:10px"><button class="ghost sm" data-passedit="">새 달 만들기</button></div>`;
+
+  const note = `<div class="muted" style="font-size:12.5px;margin-bottom:var(--gap)">
+    앱은 <b>파는 중</b>인 이번 달 패스만 봅니다. 값과 켜기는 「업데이트·게임 설정」의 월간 패스 칸에 있습니다.
+    <b>그달이 시작된 뒤에는 한정 강아지와 테마를 바꿀 수 없습니다</b> — 이미 받은 사람과 다른 것을 주게 됩니다.</div>`;
+
+  return note
+    + sec("pass.themes", "판 테마", themes, { open: true, note: `${fmt(PASS_THEMES.length)}개` })
+    + sec("pass.months", "달 패스", months, { open: true, note: `${fmt(PASS_MONTHS.length)}달` });
+}
+
+/** 월간 패스 관리(1.8.1). 테마 목록, 달 패스, 산 사람 통계. */
+let PASS_THEMES = [], PASS_MONTHS = [], PASS_STATS = [], PASS_ERR = null;
+
+async function loadPassAdmin() {
+  PASS_ERR = null;
+  try {
+    // 131 표를 직접 읽는다. RLS를 켜고 정책을 두지 않아 관리자 함수로만 읽히는 것은 통계뿐이고,
+    // 정의 두 표는 관리자 화면이 직접 본다(service_role이 아니라 로그인한 관리자 권한).
+    const [themes, months, stats] = await Promise.all([
+      sb.from("board_themes").select("*").order("id"),
+      sb.from("monthly_passes").select("*").order("month", { ascending: false }),
+      rpc("admin_pass_stats", {}).catch(() => []),
+    ]);
+    PASS_THEMES = themes.data || [];
+    PASS_MONTHS = months.data || [];
+    PASS_STATS = stats || [];
+    if (themes.error) PASS_ERR = themes.error;
+    else if (months.error) PASS_ERR = months.error;
+  } catch (e) { PASS_ERR = e; }
+}
+
 async function loadServer() {
   try {
     SRV = (await rpc("admin_server_status").catch(() => []))[0] || null;
@@ -6891,7 +7059,8 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     ${TAB === "notices" ? noticesTab(noticesErr) : ""}
     ${TAB === "push" ? pushTab(pushErr) : ""}
     ${TAB === "audit" ? auditTable(auditErr) : ""}
-    ${TAB === "server" ? serverTab(serverErr) : ""}`;
+    ${TAB === "server" ? serverTab(serverErr) : ""}
+    ${TAB === "pass" ? passTab() : ""}`;
 
   // 0뿐인 줄·칸·카드를 숨기고, 붙는 하위 탭이 머리 아래에 오게 머리 높이를 알린다(2026-10-08).
   pruneZeros($("#app"));
@@ -7240,6 +7409,15 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     });
   }
 
+  if (TAB === "pass") {
+    document.querySelectorAll("[data-themeedit]").forEach((b) => {
+      b.onclick = () => editTheme(b.dataset.themeedit);
+    });
+    document.querySelectorAll("[data-passedit]").forEach((b) => {
+      b.onclick = () => editPassMonth(b.dataset.passedit);
+    });
+  }
+
   if (TAB === "players") {
     document.querySelectorAll("[data-blockoff]").forEach((b) => {
       b.onclick = () => setScoreBlock(b.dataset.blockoff, false, b.dataset.name);
@@ -7491,6 +7669,7 @@ async function boot() {
   if (TAB === "rewards") {
     GRANTS = await rpc("admin_rank_grants", { p_days: WINNER_DAYS }).catch(() => null);
   }
+  if (TAB === "pass") await loadPassAdmin();
   const aerr = TAB === "audit" ? await loadAudit().catch((e) => e) : null;
   const vserr = TAB === "versus" ? await loadVersus() : null;
   // 설정 탭도 개별 사건 표를 그린다. 이 목록을 안 가져오면 versusEventsTable이 「장난 정의가 없습니다」로 잘못 알린다.
