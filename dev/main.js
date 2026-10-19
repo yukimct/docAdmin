@@ -4678,6 +4678,7 @@ function playersTable() {
         <td class="num muted fit">${i + 1}</td>
         <td class="pin">${esc(p.username || "(이름 없음)")}
           ${p.supporter ? '<span class="pill heart">응원</span>' : ""}
+          ${p.no_ads ? '<span class="pill" title="광고 제거를 가지고 있습니다. 복원으로 켜진 것도 포함이라 결제 원장과 다를 수 있습니다">광고 제거</span>' : ""}
           ${played ? '<span class="pill today">오늘</span>' : ""}
           ${p.reset_requested_at ? '<span class="pill heart" title="다음에 앱을 켜면 게임이 처음부터 시작됩니다">게임 초기화 요청됨</span>' : ""}
           ${TEST_SET.has(String(p.id)) ? '<span class="pill dim">시험 계정</span>' : ""}
