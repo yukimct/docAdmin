@@ -1,5 +1,5 @@
 // 관리자 화면 — 회원·점수 관리 / 이벤트 집계 / 보상 지급.
-import { sb, $, fmt, fmtDate, fmtDateTime, fmtTime, esc, kstToday, askReason, askReasonRequired, rpc } from "./app.js";
+import { sb, $, fmt, fmtDate, fmtDateTime, fmtTime, esc, kstToday, askReason, askReasonRequired, rpc, IS_DEV } from "./app.js";
 // 미션 기본 목록(1.7.0). 생성 파일이다. 원본은 missions/defaults.json이다.
 import { MISSION_DEFAULTS, MISSION_KINDS } from "./missions_defaults.js";
 
@@ -7,6 +7,8 @@ import { MISSION_DEFAULTS, MISSION_KINDS } from "./missions_defaults.js";
  *  개별 회원이 아니라 "어제 오늘 뭐가 달라졌나"이기 때문이다. */
 let TAB = "charts";
 let PLAYERS = [], EVENTS = [], AUDIT = [], REWARDS = [], BATCHES = [], STATS = [], BUCKETS = [];
+/** AdMob이 달마다 확정한 지급액(136). API에 없어 손으로 적는다. */
+let PAYOUTS = [];
 let FUNNEL = [], RETENTION = [], NOTICES = [], PUSHES = [];
 let DAILY_BUCKETS = [];
 // 푸시 집계(089). 기간과, 시간대 표를 볼 발송(null이면 전체).
@@ -1201,6 +1203,8 @@ let ADMOB_UNIT = [], ADMOB_UNIT_ERR = null;
 
 async function loadAdmob() {
   ADMOB_ERR = null; ADMOB_UNIT_ERR = null;
+  // 확정 수익은 **API가 주지 않아** 관리자가 손으로 적은 것이다(136). 못 읽어도 화면은 뜬다.
+  PAYOUTS = await rpc("admin_admob_payouts", {}).catch(() => []) || [];
   // 쪼갠 쪽이 실패해도 합계는 보여 준다. 127이 아직 없는 서버에서도 화면이 뜨게.
   const [sum, unit] = await Promise.all([
     rpc("admin_admob_daily", { p_days: ADMOB_ALL_DAYS }).catch((e) => { ADMOB_ERR = e; return []; }),
@@ -1474,6 +1478,90 @@ function admobUnitSection() {
     { open: true });
 }
 
+/**
+ * 확정 수익 적어 두기(136). **AdMob API가 주지 않는 값**이라 손으로 넣는다.
+ *
+ * 달마다 그달의 예상 합을 같이 보여 준다 — 예상이 실제와 얼마나 어긋나는지가 여기서 보인다.
+ * 「주의」 단위는 admob_daily와 같은 마이크로다. 화면은 달러로 받아 1e6을 곱해 보낸다.
+ */
+function payoutSection(by) {
+  // 그달의 예상 합. 달 키는 YYYY-MM이고 admob_daily의 day는 YYYY-MM-DD다.
+  const estByMonth = new Map();
+  for (const a of by.values()) {
+    const m = String(a.day).slice(0, 7);
+    estByMonth.set(m, (estByMonth.get(m) || 0) + a.earn);
+  }
+  // 적을 수 있는 달: 자료가 있는 달과 이미 적은 달을 합친다. 최근 달이 위로.
+  const months = [...new Set([...estByMonth.keys(), ...PAYOUTS.map((p) => p.month)])].sort().reverse();
+  const paidBy = new Map(PAYOUTS.map((p) => [p.month, p]));
+
+  const rows = months.length ? months.map((m) => {
+    const est = estByMonth.get(m) || 0;
+    const p = paidBy.get(m);
+    const diff = p ? Number(p.amount_micros || 0) - est : null;
+    return `<tr>
+      <td class="nowrap"><b>${esc(m)}</b></td>
+      <td class="num muted">${usd(est)}</td>
+      <td class="num">${p ? `<b>${usd(p.amount_micros)}</b>` : '<span class="muted">—</span>'}</td>
+      <td class="num">${diff == null ? '<span class="muted">—</span>'
+        : diff === 0 ? "같음"
+        : `<span class="muted">${diff > 0 ? "▲ +" : "▼ −"}${usd(Math.abs(diff))}</span>`}</td>
+      <td class="muted">${p?.note ? esc(p.note) : ""}</td>
+      <td class="nowrap">
+        <button class="ghost sm" data-payoutedit="${esc(m)}">${p ? "고치기" : "적기"}</button>
+        ${p ? `<button class="ghost sm" data-payoutdel="${esc(m)}">지우기</button>` : ""}
+      </td>
+    </tr>`;
+  }).join("") : "";
+
+  const note = `<div class="muted" style="font-size:12.5px;margin-bottom:var(--gap)">
+    AdMob 결제 화면에서 그달이 확정되면 여기에 적습니다. <b>리포트 API에는 예상치뿐이라 자동으로 가져올 수 없습니다.</b>
+    적지 않은 달은 「총 확정 수익」에서 빠집니다.</div>`;
+
+  const body = `${note}<div class="table-scroll"><table style="min-width:640px">
+    <thead><tr><th>달</th><th class="num">예상</th><th class="num">확정</th>
+      <th class="num">차이${infoTip("확정에서 예상을 뺀 값입니다. 예상이 더 높았으면 아래로 내려갑니다.")}</th>
+      <th>메모</th><th>관리</th></tr></thead>
+    <tbody>${rows || `<tr><td colspan="6" class="muted">아직 쌓인 달이 없습니다</td></tr>`}</tbody>
+    </table></div>`;
+
+  return sec("admob.payouts", "확정 수익 적어 두기", body,
+             { note: PAYOUTS.length ? `${fmt(PAYOUTS.length)}달 적음` : "아직 없음" });
+}
+
+/** 한 달의 확정액을 적거나 고친다. 달러로 받아 마이크로로 보낸다. */
+async function editPayout(month) {
+  const cur = PAYOUTS.find((p) => p.month === month);
+  const before = cur ? (Number(cur.amount_micros) / 1e6).toFixed(2) : "";
+  const raw = prompt(`${month} 확정 수익 (USD)\n\nAdMob 결제 화면의 그달 확정 금액을 적습니다.`, before);
+  if (raw === null) return;
+  const amount = Number(String(raw).replace(/[^0-9.]/g, ""));
+  if (!Number.isFinite(amount) || amount < 0) { alert("숫자로 적어 주세요"); return; }
+  const memo = prompt("메모 (비워도 됩니다)", cur?.note || "");
+  if (memo === null) return;
+
+  await act(async () => {
+    const r = await rpc("admin_admob_payout_save", {
+      p_month: month,
+      p_amount_micros: Math.round(amount * 1e6),
+      p_currency: "USD",
+      p_note: memo,
+    });
+    alert(r === "ok" ? "적었습니다"
+        : r === "invalid_month" ? "달은 yyyy-MM 꼴입니다"
+        : r === "invalid_amount" ? "금액이 올바르지 않습니다"
+        : "관리자만 할 수 있습니다");
+  }, refresh);
+}
+
+async function deletePayout(month) {
+  if (!confirm(`${month} 확정 수익을 지울까요?\n\n총 확정 수익에서 빠집니다.`)) return;
+  await act(async () => {
+    const r = await rpc("admin_admob_payout_delete", { p_month: month });
+    alert(r === "ok" ? "지웠습니다" : r === "not_found" ? "적힌 것이 없습니다" : "관리자만 할 수 있습니다");
+  }, refresh);
+}
+
 function admobTab(err) {
   if (err) return loadFail("광고 수익을 불러오지 못했습니다.", err, "117_admob_daily.sql · Edge Function admob-sync");
   const by = admobByDay();
@@ -1497,12 +1585,20 @@ function admobTab(err) {
   }
 
   // [이름, 이 기간, 견줄 기간, 견줄 기간 이름]. 오늘은 아직 하루가 덜 지나 견주지 않는다.
+  // 확정 수익(136). **AdMob API가 주지 않아 관리자가 손으로 적은 값**이다.
+  // 적힌 달이 하나도 없으면 0이고, 그래도 카드는 보여 준다 — 아직 못 받았다는 것도 알 일이다.
+  const paidMicros = PAYOUTS.reduce((a, r) => a + Number(r.amount_micros || 0), 0);
+  const paid = { earn: paidMicros, imp: 0, Android: 0, iOS: 0 };
+  const lastPaidMonth = PAYOUTS.reduce((a, r) => (!a || r.month > a ? r.month : a), null);
+
   const cards = [
     ["오늘 예상 수익", span(0, 1), null, "아직 집계 중"],
     ["어제 예상 수익", span(1, 1), span(2, 1), "그저께 대비"],
     ["최근 7일 예상 수익", span(0, 7), span(7, 7), "그 전 7일 대비"],
     ["최근 28일 예상 수익", span(0, 28), span(28, 28), "그 전 28일 대비"],
     ["총 예상 수익", all, null, since ? `${since}부터` : "아직 쌓인 날이 없습니다"],
+    ["총 확정 수익", paid, null,
+     lastPaidMonth ? `${lastPaidMonth}까지 적음` : "아직 적은 달이 없습니다", "paid"],
   ];
   // 비율이 아니라 달러 차이로 적는다. 수익이 아주 작은 날과 견주면 ▲17942%처럼 뜻 없는 비율이 나왔다.
   const vs = (t, b, label) => {
@@ -1540,17 +1636,20 @@ function admobTab(err) {
 
   return `
     <div class="muted" style="font-size:12.5px;margin-bottom:var(--gap)">
-      AdMob이 추정한 <b>예상 수익</b>입니다(USD, 서울 날짜). 실제로 받는 확정 금액은 다음 달 초 AdMob 결제 화면에서 정해지며 조금 다를 수 있습니다.
-      1시간마다 새로 받습니다${last ? ` · 마지막으로 받은 시각 ${esc(fmtDateTime(last))}` : ""}.</div>
-    <div class="cards">${cards.map(([label, t, b, vsLabel]) => `
+      AdMob이 추정한 <b>예상 수익</b>입니다(USD, 서울 날짜). 1시간마다 새로 받습니다${last ? ` · 마지막으로 받은 시각 ${esc(fmtDateTime(last))}` : ""}.<br>
+      <b>확정 수익은 AdMob API가 주지 않습니다.</b> 리포트에는 예상치뿐이라 결제 화면에서 확정되면 아래 「확정 수익 적어 두기」에 손으로 적습니다.</div>
+    <div class="cards">${cards.map(([label, t, b, vsLabel, kind]) => `
       <div class="card"><div class="label">${label}</div><div class="value">${usd(t.earn)}</div>
-        <div style="margin-top:2px">${vs(t, b, vsLabel)}</div>${split(t)}</div>`).join("")}</div>
+        <div style="margin-top:2px">${vs(t, b, vsLabel)}</div>${kind === "paid"
+          ? `<div class="muted" style="font-size:12px;margin-top:4px">아직 확정 안 된 몫 ${usd(Math.max(0, all.earn - t.earn))}</div>`
+          : split(t)}</div>`).join("")}</div>
     ${sec("admob.chart", "일자별 예상 수익 · 최근 28일", moneyBars(days, [
       { name: "Android", color: ADMOB_COLORS.Android, values: days.map((d) => val(d, "Android")) },
       { name: "iOS", color: ADMOB_COLORS.iOS, values: days.map((d) => val(d, "iOS")) },
     ]), { open: true })}
     ${admobUnitSection()}
-    ${sec("admob.daily", `일자별 표 · 최근 ${ADMOB_DAYS}일`, table, { open: true, note: `${fmt(rows.length)}일` })}`;
+    ${sec("admob.daily", `일자별 표 · 최근 ${ADMOB_DAYS}일`, table, { open: true, note: `${fmt(rows.length)}일` })}
+    ${payoutSection(by)}`;
 }
 
 function purchasesTab(err) {
@@ -3340,8 +3439,11 @@ const NAV = [
   { label: "같이하기", items: [["versus", "현황"], ["versusset", "설정"]] },
   { label: "회원", items: [["players", "회원 목록"], ["rewards", "보상"]] },
   { label: "기록", items: [["events", "앱 사용 기록"], ["audit", "관리 기록"]] },
+  // 「주의」 **월간 패스는 131·134가 들어간 서버에서만 보인다.** 지금은 개발 서버뿐이다.
+  // 운영에 그 둘을 넣으면 이 조건을 빼고 늘 보이게 한다(1.8.1 출시와 함께).
   { label: "운영", items: [["anomaly", "이상 징후"], ["update", "업데이트·게임 설정"],
-                          ["notices", "공지"], ["push", "푸시"], ["pass", "월간 패스"],
+                          ["notices", "공지"], ["push", "푸시"],
+                          ...(IS_DEV ? [["pass", "월간 패스"]] : []),
                           ["server", "서버 상태"]] },
 ];
 
@@ -7420,6 +7522,15 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     });
     document.querySelectorAll("[data-revokeone]").forEach((b) => {
       b.onclick = () => revokeReward(Number(b.dataset.revokeone));
+    });
+  }
+
+  if (TAB === "admob") {
+    document.querySelectorAll("[data-payoutedit]").forEach((b) => {
+      b.onclick = () => editPayout(b.dataset.payoutedit);
+    });
+    document.querySelectorAll("[data-payoutdel]").forEach((b) => {
+      b.onclick = () => deletePayout(b.dataset.payoutdel);
     });
   }
 
