@@ -1,5 +1,5 @@
 // 관리자 화면 — 회원·점수 관리 / 이벤트 집계 / 보상 지급.
-import { sb, $, fmt, fmtDate, fmtDateTime, fmtTime, esc, kstToday, askReason, askReasonRequired, rpc } from "./app.js";
+import { sb, $, fmt, fmtDate, fmtDateTime, fmtTime, esc, kstToday, askReason, askReasonRequired, rpc, IS_DEV } from "./app.js";
 // 미션 기본 목록(1.7.0). 생성 파일이다. 원본은 missions/defaults.json이다.
 import { MISSION_DEFAULTS, MISSION_KINDS } from "./missions_defaults.js";
 
@@ -7,6 +7,8 @@ import { MISSION_DEFAULTS, MISSION_KINDS } from "./missions_defaults.js";
  *  개별 회원이 아니라 "어제 오늘 뭐가 달라졌나"이기 때문이다. */
 let TAB = "charts";
 let PLAYERS = [], EVENTS = [], AUDIT = [], REWARDS = [], BATCHES = [], STATS = [], BUCKETS = [];
+/** AdMob이 달마다 확정한 지급액(136). API에 없어 손으로 적는다. */
+let PAYOUTS = [];
 let FUNNEL = [], RETENTION = [], NOTICES = [], PUSHES = [];
 let DAILY_BUCKETS = [];
 // 푸시 집계(089). 기간과, 시간대 표를 볼 발송(null이면 전체).
@@ -1191,6 +1193,9 @@ const money = (v, cur) => `${fmt(Math.round(Number(v) || 0))} ${esc(cur || "")}`
 
 /** 일자별 표와 그래프가 보는 날 수. 28일 카드보다 넉넉하게 받는다. */
 const ADMOB_DAYS = 60;
+/** 「총 예상 수익」을 내려고 **전부** 받는다. 광고 줄은 하루 한 개라 몇 해치도 가볍다.
+ *  표와 차트는 지금처럼 최근 ADMOB_DAYS일만 보여 준다. */
+const ADMOB_ALL_DAYS = 3650;
 let ADMOB = [], ADMOB_ERR = null;
 // 127 광고 단위·형식까지 쪼갠 줄. 합계로 보면 어느 광고가 안 채워졌는지 안 보인다 —
 // 1.7.0에서 배너만 일치율이 샜는데 합계로는 묻혀 한동안 못 봤다.
@@ -1198,9 +1203,11 @@ let ADMOB_UNIT = [], ADMOB_UNIT_ERR = null;
 
 async function loadAdmob() {
   ADMOB_ERR = null; ADMOB_UNIT_ERR = null;
+  // 확정 수익은 **API가 주지 않아** 관리자가 손으로 적은 것이다(136). 못 읽어도 화면은 뜬다.
+  PAYOUTS = await rpc("admin_admob_payouts", {}).catch(() => []) || [];
   // 쪼갠 쪽이 실패해도 합계는 보여 준다. 127이 아직 없는 서버에서도 화면이 뜨게.
   const [sum, unit] = await Promise.all([
-    rpc("admin_admob_daily", { p_days: ADMOB_DAYS }).catch((e) => { ADMOB_ERR = e; return []; }),
+    rpc("admin_admob_daily", { p_days: ADMOB_ALL_DAYS }).catch((e) => { ADMOB_ERR = e; return []; }),
     rpc("admin_admob_daily_unit", { p_days: ADMOB_DAYS }).catch((e) => { ADMOB_UNIT_ERR = e; return []; }),
   ]);
   ADMOB = sum || [];
@@ -1471,6 +1478,90 @@ function admobUnitSection() {
     { open: true });
 }
 
+/**
+ * 확정 수익 적어 두기(136). **AdMob API가 주지 않는 값**이라 손으로 넣는다.
+ *
+ * 달마다 그달의 예상 합을 같이 보여 준다 — 예상이 실제와 얼마나 어긋나는지가 여기서 보인다.
+ * 「주의」 단위는 admob_daily와 같은 마이크로다. 화면은 달러로 받아 1e6을 곱해 보낸다.
+ */
+function payoutSection(by) {
+  // 그달의 예상 합. 달 키는 YYYY-MM이고 admob_daily의 day는 YYYY-MM-DD다.
+  const estByMonth = new Map();
+  for (const a of by.values()) {
+    const m = String(a.day).slice(0, 7);
+    estByMonth.set(m, (estByMonth.get(m) || 0) + a.earn);
+  }
+  // 적을 수 있는 달: 자료가 있는 달과 이미 적은 달을 합친다. 최근 달이 위로.
+  const months = [...new Set([...estByMonth.keys(), ...PAYOUTS.map((p) => p.month)])].sort().reverse();
+  const paidBy = new Map(PAYOUTS.map((p) => [p.month, p]));
+
+  const rows = months.length ? months.map((m) => {
+    const est = estByMonth.get(m) || 0;
+    const p = paidBy.get(m);
+    const diff = p ? Number(p.amount_micros || 0) - est : null;
+    return `<tr>
+      <td class="nowrap"><b>${esc(m)}</b></td>
+      <td class="num muted">${usd(est)}</td>
+      <td class="num">${p ? `<b>${usd(p.amount_micros)}</b>` : '<span class="muted">—</span>'}</td>
+      <td class="num">${diff == null ? '<span class="muted">—</span>'
+        : diff === 0 ? "같음"
+        : `<span class="muted">${diff > 0 ? "▲ +" : "▼ −"}${usd(Math.abs(diff))}</span>`}</td>
+      <td class="muted">${p?.note ? esc(p.note) : ""}</td>
+      <td class="nowrap">
+        <button class="ghost sm" data-payoutedit="${esc(m)}">${p ? "고치기" : "적기"}</button>
+        ${p ? `<button class="ghost sm" data-payoutdel="${esc(m)}">지우기</button>` : ""}
+      </td>
+    </tr>`;
+  }).join("") : "";
+
+  const note = `<div class="muted" style="font-size:12.5px;margin-bottom:var(--gap)">
+    AdMob 결제 화면에서 그달이 확정되면 여기에 적습니다. <b>리포트 API에는 예상치뿐이라 자동으로 가져올 수 없습니다.</b>
+    적지 않은 달은 「총 확정 수익」에서 빠집니다.</div>`;
+
+  const body = `${note}<div class="table-scroll"><table style="min-width:640px">
+    <thead><tr><th>달</th><th class="num">예상</th><th class="num">확정</th>
+      <th class="num">차이${infoTip("확정에서 예상을 뺀 값입니다. 예상이 더 높았으면 아래로 내려갑니다.")}</th>
+      <th>메모</th><th>관리</th></tr></thead>
+    <tbody>${rows || `<tr><td colspan="6" class="muted">아직 쌓인 달이 없습니다</td></tr>`}</tbody>
+    </table></div>`;
+
+  return sec("admob.payouts", "확정 수익 적어 두기", body,
+             { note: PAYOUTS.length ? `${fmt(PAYOUTS.length)}달 적음` : "아직 없음" });
+}
+
+/** 한 달의 확정액을 적거나 고친다. 달러로 받아 마이크로로 보낸다. */
+async function editPayout(month) {
+  const cur = PAYOUTS.find((p) => p.month === month);
+  const before = cur ? (Number(cur.amount_micros) / 1e6).toFixed(2) : "";
+  const raw = prompt(`${month} 확정 수익 (USD)\n\nAdMob 결제 화면의 그달 확정 금액을 적습니다.`, before);
+  if (raw === null) return;
+  const amount = Number(String(raw).replace(/[^0-9.]/g, ""));
+  if (!Number.isFinite(amount) || amount < 0) { alert("숫자로 적어 주세요"); return; }
+  const memo = prompt("메모 (비워도 됩니다)", cur?.note || "");
+  if (memo === null) return;
+
+  await act(async () => {
+    const r = await rpc("admin_admob_payout_save", {
+      p_month: month,
+      p_amount_micros: Math.round(amount * 1e6),
+      p_currency: "USD",
+      p_note: memo,
+    });
+    alert(r === "ok" ? "적었습니다"
+        : r === "invalid_month" ? "달은 yyyy-MM 꼴입니다"
+        : r === "invalid_amount" ? "금액이 올바르지 않습니다"
+        : "관리자만 할 수 있습니다");
+  }, refresh);
+}
+
+async function deletePayout(month) {
+  if (!confirm(`${month} 확정 수익을 지울까요?\n\n총 확정 수익에서 빠집니다.`)) return;
+  await act(async () => {
+    const r = await rpc("admin_admob_payout_delete", { p_month: month });
+    alert(r === "ok" ? "지웠습니다" : r === "not_found" ? "적힌 것이 없습니다" : "관리자만 할 수 있습니다");
+  }, refresh);
+}
+
 function admobTab(err) {
   if (err) return loadFail("광고 수익을 불러오지 못했습니다.", err, "117_admob_daily.sql · Edge Function admob-sync");
   const by = admobByDay();
@@ -1484,12 +1575,30 @@ function admobTab(err) {
     return t;
   };
   const split = (t) => `<div class="muted" style="font-size:12px;margin-top:4px">Android ${usd(t.Android)} · iOS ${usd(t.iOS)} · 노출 ${fmt(t.imp)}</div>`;
+  // **받은 줄 전부의 합**(사용자 요청, 2026-10-20). 기간 카드와 달리 견줄 상대가 없다.
+  // 집계가 시작된 날을 같이 적어 「언제부터의 합인지」 알 수 있게 한다.
+  const all = { earn: 0, imp: 0, Android: 0, iOS: 0 };
+  let since = null;
+  for (const a of by.values()) {
+    all.earn += a.earn; all.imp += a.imp; all.Android += a.Android; all.iOS += a.iOS;
+    if (a.earn || a.imp) { if (!since || a.day < since) since = a.day; }
+  }
+
   // [이름, 이 기간, 견줄 기간, 견줄 기간 이름]. 오늘은 아직 하루가 덜 지나 견주지 않는다.
+  // 확정 수익(136). **AdMob API가 주지 않아 관리자가 손으로 적은 값**이다.
+  // 적힌 달이 하나도 없으면 0이고, 그래도 카드는 보여 준다 — 아직 못 받았다는 것도 알 일이다.
+  const paidMicros = PAYOUTS.reduce((a, r) => a + Number(r.amount_micros || 0), 0);
+  const paid = { earn: paidMicros, imp: 0, Android: 0, iOS: 0 };
+  const lastPaidMonth = PAYOUTS.reduce((a, r) => (!a || r.month > a ? r.month : a), null);
+
   const cards = [
     ["오늘 예상 수익", span(0, 1), null, "아직 집계 중"],
     ["어제 예상 수익", span(1, 1), span(2, 1), "그저께 대비"],
     ["최근 7일 예상 수익", span(0, 7), span(7, 7), "그 전 7일 대비"],
     ["최근 28일 예상 수익", span(0, 28), span(28, 28), "그 전 28일 대비"],
+    ["총 예상 수익", all, null, since ? `${since}부터` : "아직 쌓인 날이 없습니다"],
+    ["총 확정 수익", paid, null,
+     lastPaidMonth ? `${lastPaidMonth}까지 적음` : "아직 적은 달이 없습니다", "paid"],
   ];
   // 비율이 아니라 달러 차이로 적는다. 수익이 아주 작은 날과 견주면 ▲17942%처럼 뜻 없는 비율이 나왔다.
   const vs = (t, b, label) => {
@@ -1504,7 +1613,9 @@ function admobTab(err) {
   const days = Array.from({ length: 28 }, (_, i) => kstDate(i - 27));
   const val = (d, k) => Math.round(((by.get(d)?.[k] || 0) / 1e6) * 100) / 100;
 
-  const rows = [...by.values()].sort((a, b) => (a.day < b.day ? 1 : -1));
+  // 표는 지금처럼 최근 ADMOB_DAYS일만 본다. 총 수익을 내려고 전부 받지만 표까지 길어질 이유는 없다.
+  const tableFrom = kstDate(-(ADMOB_DAYS - 1));
+  const rows = [...by.values()].filter((a) => a.day >= tableFrom).sort((a, b) => (a.day < b.day ? 1 : -1));
   const pct = (a, b) => (b ? Math.round((a / b) * 1000) / 10 + "%" : "—");
   const table = rows.length ? `<div class="table-scroll"><table style="min-width:720px">
     <thead><tr><th>날짜</th><th class="num">예상 수익</th><th class="num">Android</th><th class="num">iOS</th>
@@ -1525,17 +1636,20 @@ function admobTab(err) {
 
   return `
     <div class="muted" style="font-size:12.5px;margin-bottom:var(--gap)">
-      AdMob이 추정한 <b>예상 수익</b>입니다(USD, 서울 날짜). 실제로 받는 확정 금액은 다음 달 초 AdMob 결제 화면에서 정해지며 조금 다를 수 있습니다.
-      1시간마다 새로 받습니다${last ? ` · 마지막으로 받은 시각 ${esc(fmtDateTime(last))}` : ""}.</div>
-    <div class="cards">${cards.map(([label, t, b, vsLabel]) => `
+      AdMob이 추정한 <b>예상 수익</b>입니다(USD, 서울 날짜). 1시간마다 새로 받습니다${last ? ` · 마지막으로 받은 시각 ${esc(fmtDateTime(last))}` : ""}.<br>
+      <b>확정 수익은 AdMob API가 주지 않습니다.</b> 리포트에는 예상치뿐이라 결제 화면에서 확정되면 아래 「확정 수익 적어 두기」에 손으로 적습니다.</div>
+    <div class="cards">${cards.map(([label, t, b, vsLabel, kind]) => `
       <div class="card"><div class="label">${label}</div><div class="value">${usd(t.earn)}</div>
-        <div style="margin-top:2px">${vs(t, b, vsLabel)}</div>${split(t)}</div>`).join("")}</div>
+        <div style="margin-top:2px">${vs(t, b, vsLabel)}</div>${kind === "paid"
+          ? `<div class="muted" style="font-size:12px;margin-top:4px">아직 확정 안 된 몫 ${usd(Math.max(0, all.earn - t.earn))}</div>`
+          : split(t)}</div>`).join("")}</div>
     ${sec("admob.chart", "일자별 예상 수익 · 최근 28일", moneyBars(days, [
       { name: "Android", color: ADMOB_COLORS.Android, values: days.map((d) => val(d, "Android")) },
       { name: "iOS", color: ADMOB_COLORS.iOS, values: days.map((d) => val(d, "iOS")) },
     ]), { open: true })}
     ${admobUnitSection()}
-    ${sec("admob.daily", `일자별 표 · 최근 ${ADMOB_DAYS}일`, table, { open: true, note: `${fmt(rows.length)}일` })}`;
+    ${sec("admob.daily", `일자별 표 · 최근 ${ADMOB_DAYS}일`, table, { open: true, note: `${fmt(rows.length)}일` })}
+    ${payoutSection(by)}`;
 }
 
 function purchasesTab(err) {
@@ -3325,8 +3439,12 @@ const NAV = [
   { label: "같이하기", items: [["versus", "현황"], ["versusset", "설정"]] },
   { label: "회원", items: [["players", "회원 목록"], ["rewards", "보상"]] },
   { label: "기록", items: [["events", "앱 사용 기록"], ["audit", "관리 기록"]] },
+  // 「주의」 **월간 패스는 131·134가 들어간 서버에서만 보인다.** 지금은 개발 서버뿐이다.
+  // 운영에 그 둘을 넣으면 이 조건을 빼고 늘 보이게 한다(1.8.1 출시와 함께).
   { label: "운영", items: [["anomaly", "이상 징후"], ["update", "업데이트·게임 설정"],
-                          ["notices", "공지"], ["push", "푸시"], ["server", "서버 상태"]] },
+                          ["notices", "공지"], ["push", "푸시"],
+                          ...(IS_DEV ? [["pass", "월간 패스"]] : []),
+                          ["server", "서버 상태"]] },
 ];
 
 let SRV = null, WINNERS = [], TRANSFERS = [], COIN_AUDIT = [];
@@ -3512,6 +3630,171 @@ async function loadRanking() {
 
 /** 052·054가 있어야 채워진다. 없는 서버에서는 조용히 빈 값으로 두고 안내만 띄운다 —
  *  관리자 페이지는 서버보다 먼저 배포될 수 있다. */
+/**
+ * 판 테마 고치기(1.8.1). 색 스무 칸을 한 줄로 받는다.
+ *
+ * **스무 개가 아니면 저장하지 않는다.** 서버도 막지만 여기서 먼저 알려 주는 편이 빠르다.
+ * 색을 바꾸면 서버가 version을 올려 앱이 다시 받아 간다.
+ */
+async function editTheme(id) {
+  const t = PASS_THEMES.find((x) => x.id === id);
+  const isNew = !t;
+  const newId = isNew ? prompt("새 테마 id (영문 소문자·숫자·밑줄)", "") : id;
+  if (newId === null || !newId.trim()) return;
+  const ko = prompt("한국어 이름", t ? (t.names?.ko || "") : "");
+  if (ko === null) return;
+  const en = prompt("영어 이름 (비우면 한국어를 씁니다)", t ? (t.names?.en || "") : "");
+  if (en === null) return;
+  const cur = Array.isArray(t?.colors) ? t.colors.join(", ") : "";
+  const raw = prompt("색 스무 개를 쉼표로 (#RRGGBB)", cur);
+  if (raw === null) return;
+
+  const colors = raw.split(",").map((c) => c.trim()).filter(Boolean);
+  if (colors.length !== 20) { alert(`색이 스무 개여야 합니다. 지금 ${colors.length}개입니다`); return; }
+  const bad = colors.find((c) => !/^#[0-9a-fA-F]{6}$/.test(c));
+  if (bad) { alert(`색 꼴이 틀립니다: ${bad}\n#RRGGBB로 적어 주세요`); return; }
+
+  const names = { ko };
+  if (en.trim()) names.en = en.trim();
+  await act(async () => {
+    const r = await rpc("admin_board_theme_save", {
+      p_id: newId.trim(), p_names: names, p_colors: colors, p_retired: t?.retired ?? false,
+    });
+    alert(r === "created" ? "새 테마를 만들었습니다"
+        : r === "updated_colors" ? "색을 바꿨습니다. 앱이 다시 받아 갑니다"
+        : r === "updated" ? "저장했습니다"
+        : r === "need_20_colors" ? "색이 스무 개가 아닙니다"
+        : r === "bad_color" ? "색 꼴이 틀립니다"
+        : r === "need_ko_name" ? "한국어 이름이 필요합니다"
+        : r === "invalid_id" ? "id는 영문 소문자로 시작하고 소문자·숫자·밑줄만 씁니다"
+        : "관리자만 할 수 있습니다");
+  }, refresh);
+}
+
+/**
+ * 달 패스 고치기(1.8.1).
+ * **그달이 시작된 뒤에는 한정 강아지와 테마를 바꾸지 못한다** — 서버가 거절한다.
+ * 파는 것을 멈추는 것은 언제든 된다.
+ */
+async function editPassMonth(month) {
+  const m = PASS_MONTHS.find((x) => x.month === month);
+  const isNew = !m;
+  const mon = isNew ? prompt("달 (yyyy-MM)", "") : month;
+  if (mon === null || !/^[0-9]{4}-(0[1-9]|1[0-2])$/.test(mon.trim())) {
+    if (mon !== null) alert("달은 yyyy-MM 꼴로 적어 주세요");
+    return;
+  }
+  const dog = prompt("한정 강아지 키 (limited_01 ~ limited_99)", m?.dog_key || "limited_01");
+  if (dog === null) return;
+  const live = PASS_THEMES.filter((t) => !t.retired).map((t) => t.id);
+  if (!live.length) { alert("먼저 판 테마를 하나 만들어 주세요"); return; }
+  const theme = prompt(`판 테마 id\n\n쓸 수 있는 것: ${live.join(", ")}`, m?.theme_id || live[0]);
+  if (theme === null) return;
+  const onSale = confirm("지금부터 파시겠습니까?\n\n확인을 누르면 앱 상점에 바로 보입니다.");
+
+  await act(async () => {
+    const r = await rpc("admin_pass_save", {
+      p_month: mon.trim(), p_dog_key: dog.trim(), p_theme_id: theme.trim(), p_on_sale: onSale,
+    });
+    alert(r === "created" ? "새 달 패스를 만들었습니다"
+        : r === "updated" ? "저장했습니다"
+        : r === "started" ? "그달이 이미 시작돼 한정 강아지와 테마는 바꿀 수 없습니다"
+        : r === "no_theme" ? "그 테마가 없거나 감춰져 있습니다"
+        : r === "invalid_dog" ? "강아지 키는 limited_01 꼴입니다"
+        : r === "invalid_month" ? "달은 yyyy-MM 꼴입니다"
+        : "관리자만 할 수 있습니다");
+  }, refresh);
+}
+
+/**
+ * 월간 패스 탭(1.8.1, 계획 7절). 판 테마, 달 패스, 산 사람 통계.
+ *
+ * **색은 스무 개여야 한다.** 서버 admin_board_theme_save가 하나라도 꼴이 틀리면 저장하지 않고,
+ * 앱도 스무 개가 아니면 그 테마를 버리고 기본 색을 쓴다. 여기서도 같은 기준으로 막는다.
+ */
+function passTab() {
+  if (PASS_ERR) return loadFail("월간 패스 자료를 불러오지 못했습니다.", PASS_ERR,
+                                "131_monthly_pass.sql · 134_admin_pass_read.sql");
+
+  const esc2 = (v) => esc(String(v ?? ""));
+  const nameOf = (names) => (names && (names.ko || names.en)) || "";
+
+  // 테마 한 줄의 미리보기. **앱과 같은 자리 셈을 쓰지 않는다** — 여기서는 색이 고루 보이면 된다.
+  const swatches = (colors) => (Array.isArray(colors) ? colors : []).slice(0, 20)
+    .map((c) => `<i style="display:inline-block;width:14px;height:14px;border-radius:3px;
+         background:${/^#[0-9a-fA-F]{6}$/.test(c) ? c : "#ccc"};margin-right:2px"></i>`).join("");
+
+  const themeRows = PASS_THEMES.length ? PASS_THEMES.map((t) => {
+    const n = Array.isArray(t.colors) ? t.colors.length : 0;
+    const bad = n !== 20;
+    return `<tr${t.retired ? ' class="muted"' : ""}>
+      <td class="nowrap"><b>${esc2(t.id)}</b></td>
+      <td>${esc2(nameOf(t.names))}</td>
+      <td style="white-space:nowrap">${swatches(t.colors)}</td>
+      <td class="num">${bad ? `<b style="color:#c0392b">${n}</b>` : n}</td>
+      <td class="num">v${esc2(t.version)}</td>
+      <td class="c">${t.retired ? "감춤" : "쓰는 중"}</td>
+      <td><button class="ghost sm" data-themeedit="${esc2(t.id)}">고치기</button></td>
+    </tr>`;
+  }).join("") : "";
+
+  const themes = `<div class="table-scroll"><table style="min-width:720px">
+    <thead><tr><th>id</th><th>이름</th><th>색</th><th class="num">개수</th><th class="num">판</th>
+      <th class="c">상태</th><th>관리</th></tr></thead>
+    <tbody>${themeRows || `<tr><td colspan="7" class="muted">아직 만든 판 테마가 없습니다</td></tr>`}</tbody>
+    </table></div>
+    <div style="margin-top:10px"><button class="ghost sm" data-themeedit="">새 테마 만들기</button></div>`;
+
+  const statByMonth = Object.fromEntries(PASS_STATS.map((r) => [r.month, r]));
+  const monthRows = PASS_MONTHS.length ? PASS_MONTHS.map((m) => {
+    const st = statByMonth[m.month];
+    const theme = PASS_THEMES.find((t) => t.id === m.theme_id);
+    return `<tr>
+      <td class="nowrap"><b>${esc2(m.month)}</b></td>
+      <td class="nowrap">${esc2(m.dog_key)}</td>
+      <td class="nowrap">${esc2(m.theme_id)}${theme ? ` <span class="muted">${esc2(nameOf(theme.names))}</span>` : ""}</td>
+      <td class="c">${m.on_sale ? '<span class="pill today">파는 중</span>' : '<span class="muted">꺼짐</span>'}</td>
+      <td class="num">${st ? fmt(st.buyers) : 0}</td>
+      <td class="num">${st ? fmt(st.android) : 0} / ${st ? fmt(st.ios) : 0}</td>
+      <td><button class="ghost sm" data-passedit="${esc2(m.month)}">고치기</button></td>
+    </tr>`;
+  }).join("") : "";
+
+  const months = `<div class="table-scroll"><table style="min-width:720px">
+    <thead><tr><th>달</th><th>한정 강아지</th><th>판 테마</th><th class="c">파는 중</th>
+      <th class="num">산 사람</th><th class="num">And / iOS</th><th>관리</th></tr></thead>
+    <tbody>${monthRows || `<tr><td colspan="7" class="muted">아직 만든 달 패스가 없습니다</td></tr>`}</tbody>
+    </table></div>
+    <div style="margin-top:10px"><button class="ghost sm" data-passedit="">새 달 만들기</button></div>`;
+
+  const note = `<div class="muted" style="font-size:12.5px;margin-bottom:var(--gap)">
+    앱은 <b>파는 중</b>인 이번 달 패스만 봅니다. 값과 켜기는 「업데이트·게임 설정」의 월간 패스 칸에 있습니다.
+    <b>그달이 시작된 뒤에는 한정 강아지와 테마를 바꿀 수 없습니다</b> — 이미 받은 사람과 다른 것을 주게 됩니다.</div>`;
+
+  return note
+    + sec("pass.themes", "판 테마", themes, { open: true, note: `${fmt(PASS_THEMES.length)}개` })
+    + sec("pass.months", "달 패스", months, { open: true, note: `${fmt(PASS_MONTHS.length)}달` });
+}
+
+/** 월간 패스 관리(1.8.1). 테마 목록, 달 패스, 산 사람 통계. */
+let PASS_THEMES = [], PASS_MONTHS = [], PASS_STATS = [], PASS_ERR = null;
+
+async function loadPassAdmin() {
+  PASS_ERR = null;
+  try {
+    // **표를 직접 읽지 않는다.** 131이 세 표에 RLS를 켜고 정책을 두지 않아 관리자도 막힌다
+    // (permission denied for table board_themes, 2026-10-19). 134가 읽기 함수를 준다.
+    const [themes, months, stats] = await Promise.all([
+      rpc("admin_board_themes", {}),
+      rpc("admin_passes", {}),
+      rpc("admin_pass_stats", {}).catch(() => []),
+    ]);
+    PASS_THEMES = themes || [];
+    PASS_MONTHS = months || [];
+    PASS_STATS = stats || [];
+  } catch (e) { PASS_ERR = e; }
+}
+
 async function loadServer() {
   try {
     SRV = (await rpc("admin_server_status").catch(() => []))[0] || null;
@@ -4512,6 +4795,7 @@ function playersTable() {
         <td class="num muted fit">${i + 1}</td>
         <td class="pin">${esc(p.username || "(이름 없음)")}
           ${p.supporter ? '<span class="pill heart">응원</span>' : ""}
+          ${p.no_ads ? '<span class="pill" title="광고 제거를 가지고 있습니다. 복원으로 켜진 것도 포함이라 결제 원장과 다를 수 있습니다">광고 제거</span>' : ""}
           ${played ? '<span class="pill today">오늘</span>' : ""}
           ${p.reset_requested_at ? '<span class="pill heart" title="다음에 앱을 켜면 게임이 처음부터 시작됩니다">게임 초기화 요청됨</span>' : ""}
           ${TEST_SET.has(String(p.id)) ? '<span class="pill dim">시험 계정</span>' : ""}
@@ -6891,7 +7175,8 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     ${TAB === "notices" ? noticesTab(noticesErr) : ""}
     ${TAB === "push" ? pushTab(pushErr) : ""}
     ${TAB === "audit" ? auditTable(auditErr) : ""}
-    ${TAB === "server" ? serverTab(serverErr) : ""}`;
+    ${TAB === "server" ? serverTab(serverErr) : ""}
+    ${TAB === "pass" ? passTab() : ""}`;
 
   // 0뿐인 줄·칸·카드를 숨기고, 붙는 하위 탭이 머리 아래에 오게 머리 높이를 알린다(2026-10-08).
   pruneZeros($("#app"));
@@ -7240,6 +7525,24 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     });
   }
 
+  if (TAB === "admob") {
+    document.querySelectorAll("[data-payoutedit]").forEach((b) => {
+      b.onclick = () => editPayout(b.dataset.payoutedit);
+    });
+    document.querySelectorAll("[data-payoutdel]").forEach((b) => {
+      b.onclick = () => deletePayout(b.dataset.payoutdel);
+    });
+  }
+
+  if (TAB === "pass") {
+    document.querySelectorAll("[data-themeedit]").forEach((b) => {
+      b.onclick = () => editTheme(b.dataset.themeedit);
+    });
+    document.querySelectorAll("[data-passedit]").forEach((b) => {
+      b.onclick = () => editPassMonth(b.dataset.passedit);
+    });
+  }
+
   if (TAB === "players") {
     document.querySelectorAll("[data-blockoff]").forEach((b) => {
       b.onclick = () => setScoreBlock(b.dataset.blockoff, false, b.dataset.name);
@@ -7491,6 +7794,7 @@ async function boot() {
   if (TAB === "rewards") {
     GRANTS = await rpc("admin_rank_grants", { p_days: WINNER_DAYS }).catch(() => null);
   }
+  if (TAB === "pass") await loadPassAdmin();
   const aerr = TAB === "audit" ? await loadAudit().catch((e) => e) : null;
   const vserr = TAB === "versus" ? await loadVersus() : null;
   // 설정 탭도 개별 사건 표를 그린다. 이 목록을 안 가져오면 versusEventsTable이 「장난 정의가 없습니다」로 잘못 알린다.
