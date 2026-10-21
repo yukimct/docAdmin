@@ -3437,7 +3437,7 @@ const NAV = [
   // 결제도 자주 본다. 광고 수익 옆으로 꺼냈다(사용자 지시, 2026-10-15). 두 메뉴 옆에 오늘 금액을 붙인다(navToday).
   { id: "purchases", label: "결제", today: "pay" },
   { label: "같이하기", items: [["versus", "현황"], ["versusset", "설정"]] },
-  { label: "회원", items: [["players", "회원 목록"], ["rewards", "보상"]] },
+  { label: "회원", items: [["players", "회원 목록"], ["rewards", "보상"], ["admins", "관리 계정"]] },
   { label: "기록", items: [["events", "앱 사용 기록"], ["audit", "관리 기록"]] },
   // 「주의」 **월간 패스는 131·134가 들어간 서버에서만 보인다.** 지금은 개발 서버뿐이다.
   // 운영에 그 둘을 넣으면 이 조건을 빼고 늘 보이게 한다(1.8.1 출시와 함께).
@@ -3712,6 +3712,74 @@ async function editPassMonth(month) {
  * **색은 스무 개여야 한다.** 서버 admin_board_theme_save가 하나라도 꼴이 틀리면 저장하지 않고,
  * 앱도 스무 개가 아니면 그 테마를 버리고 기본 색을 쓴다. 여기서도 같은 기준으로 막는다.
  */
+let ADMINS = [], ADMINS_ERR = null;
+
+async function loadAdmins() {
+  ADMINS_ERR = null;
+  try { ADMINS = (await rpc("admin_admins", {})) || []; }
+  catch (e) { ADMINS_ERR = e; }
+}
+
+/**
+ * 관리 계정 화면(137).
+ *
+ * admins 표는 **아무도 못 읽는다**(002에서 RLS를 켜고 정책을 두지 않았다).
+ * 그래서 표를 직접 읽지 않고 admin_admins()로만 본다.
+ *
+ * 「주의」 **마지막 한 명은 해제 단추를 감춘다.** 서버도 막지만, 눌러 보고 거절당하는 것보다
+ * 처음부터 없는 편이 낫다. 전부 빠지면 is_admin()이 늘 거짓이 되어 관리 화면 전체가 막힌다.
+ */
+function adminsTab() {
+  if (ADMINS_ERR) return loadFail("관리 계정을 불러오지 못했습니다.", ADMINS_ERR, "137_admin_accounts.sql");
+
+  const last = ADMINS.length <= 1;
+  const rows = ADMINS.length ? ADMINS.map((a) => `<tr>
+      <td>${esc(a.username || "—")}</td>
+      <td class="c">${a.is_anonymous ? "게임 앱" : "이메일"}</td>
+      <td class="nowrap"><code>${esc(a.user_id)}</code></td>
+      <td>${esc(a.note || "")}</td>
+      <td class="nowrap">${fmtDate(a.created_at)}</td>
+      <td>${last ? '<span class="muted">마지막 한 명</span>'
+                 : `<button class="ghost sm" data-adminoff="${esc(a.user_id)}">해제</button>`}</td>
+    </tr>`).join("") : '<tr><td colspan="6" class="empty">관리 계정이 없습니다</td></tr>';
+
+  const table = `<table class="tbl"><thead><tr>
+      <th>닉네임</th><th>들어온 길</th><th>계정 id</th><th>메모</th><th>등록</th><th></th>
+    </tr></thead><tbody>${rows}</tbody></table>`;
+
+  const add = `<div class="row">
+      <button class="primary" data-adminadd="1">관리 계정 등록</button>
+      <span class="muted">회원 목록에서 계정 id를 복사해 넣습니다. 게임 앱 계정도 됩니다.</span>
+    </div>`;
+
+  return sec("admins.list", "관리 계정", table + add, { open: true, note: `${fmt(ADMINS.length)}명` });
+}
+
+// 서버가 막으면 rpc가 예외를 던지고 act가 알아듣는 말로 알린다(「마지막 관리 계정은 해제할 수
+// 없습니다」처럼 서버 쪽 문구가 이미 한국어다). 그래서 여기서 결과를 따로 보지 않는다.
+async function addAdmin() {
+  const id = prompt("등록할 계정 id (uuid)", "");
+  if (id === null || !id.trim()) return;
+  const note = prompt("메모 (누구의 계정인지 적어 두면 나중에 압니다)", "");
+  if (note === null) return;
+  await act(() => rpc("admin_admin_add", { p_user: id.trim(), p_note: note }), refresh);
+}
+
+/** 회원 목록 행 메뉴에서 바로 등록한다. uuid를 손으로 옮겨 적지 않아도 된다. */
+async function addAdminFor(id) {
+  const who = findPlayer(id)?.username || id.slice(0, 8);
+  if (!confirm(`${who}을(를) 관리 계정으로 등록합니다.\n\n이 계정으로 관리 화면에 들어올 수 있게 됩니다.`)) return;
+  const note = prompt("메모 (누구의 계정인지 적어 두면 나중에 압니다)", who);
+  if (note === null) return;
+  await act(() => rpc("admin_admin_add", { p_user: id, p_note: note }), refresh);
+}
+
+async function removeAdmin(id) {
+  const a = ADMINS.find((x) => x.user_id === id);
+  if (!confirm(`${a?.username || id}을(를) 관리 계정에서 뺍니다.\n\n이 계정은 관리 화면에 못 들어옵니다.`)) return;
+  await act(() => rpc("admin_admin_remove", { p_user: id }), refresh);
+}
+
 function passTab() {
   if (PASS_ERR) return loadFail("월간 패스 자료를 불러오지 못했습니다.", PASS_ERR,
                                 "131_monthly_pass.sql · 134_admin_pass_read.sql");
@@ -7176,7 +7244,8 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     ${TAB === "push" ? pushTab(pushErr) : ""}
     ${TAB === "audit" ? auditTable(auditErr) : ""}
     ${TAB === "server" ? serverTab(serverErr) : ""}
-    ${TAB === "pass" ? passTab() : ""}`;
+    ${TAB === "pass" ? passTab() : ""}
+    ${TAB === "admins" ? adminsTab() : ""}`;
 
   // 0뿐인 줄·칸·카드를 숨기고, 붙는 하위 탭이 머리 아래에 오게 머리 높이를 알린다(2026-10-08).
   pruneZeros($("#app"));
@@ -7534,6 +7603,13 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     });
   }
 
+  if (TAB === "admins") {
+    document.querySelectorAll("[data-adminadd]").forEach((b) => { b.onclick = () => addAdmin(); });
+    document.querySelectorAll("[data-adminoff]").forEach((b) => {
+      b.onclick = () => removeAdmin(b.dataset.adminoff);
+    });
+  }
+
   if (TAB === "pass") {
     document.querySelectorAll("[data-themeedit]").forEach((b) => {
       b.onclick = () => editTheme(b.dataset.themeedit);
@@ -7670,6 +7746,7 @@ const ROW_HANDLERS = {
   name: editName, score: editScores, heart: toggleSupporter, gift: openGrant,
   zero: resetScores, wipe: requestGameReset, del: removePlayer, log: toggleMember,
   testacct: (id) => setTestAccount(id, !TEST_SET.has(String(id))),
+  adminacct: addAdminFor,
   scoreblock: (id) => setScoreBlock(id, !BLOCK_SET.has(String(id))),
 };
 
@@ -7694,6 +7771,9 @@ function rowMenuItems(id) {
     ["heart", "응원 배지", "이름 옆 응원 배지를 켜고 끕니다"],
     ["gift", "보상 주기", ""],
     ["testacct", test ? "시험 계정 풀기" : "시험 계정으로", "시험 계정은 랭킹과 이벤트 순위에서 빠집니다"],
+    // 등록만 여기서 한다. **해제는 관리 계정 탭에서** — 마지막 한 명인지 알려면 목록이 있어야 하는데
+    // 회원 목록 탭은 그것을 받아 오지 않는다(137).
+    ["adminacct", "관리 계정으로 등록", "이 계정으로 관리 화면에 들어올 수 있게 됩니다"],
     null,
     ["scoreblock", blocked ? "점수 막기 풀기" : "점수 막기",
      blocked ? "지금부터 내는 점수는 다시 랭킹에 오릅니다" : "게임은 그대로 하고 막힌 동안 낸 점수만 랭킹에 오르지 않게 합니다", !blocked],
@@ -7795,6 +7875,7 @@ async function boot() {
     GRANTS = await rpc("admin_rank_grants", { p_days: WINNER_DAYS }).catch(() => null);
   }
   if (TAB === "pass") await loadPassAdmin();
+  if (TAB === "admins") await loadAdmins();
   const aerr = TAB === "audit" ? await loadAudit().catch((e) => e) : null;
   const vserr = TAB === "versus" ? await loadVersus() : null;
   // 설정 탭도 개별 사건 표를 그린다. 이 목록을 안 가져오면 versusEventsTable이 「장난 정의가 없습니다」로 잘못 알린다.
