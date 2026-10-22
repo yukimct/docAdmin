@@ -1,5 +1,5 @@
 // 관리자 화면 — 회원·점수 관리 / 이벤트 집계 / 보상 지급.
-import { sb, $, fmt, fmtDate, fmtDateTime, fmtTime, esc, kstToday, askReason, askReasonRequired, rpc, IS_DEV } from "./app.js";
+import { sb, $, fmt, fmtDate, fmtDateTime, fmtTime, esc, kstToday, askReason, askReasonRequired, rpc } from "./app.js";
 // 미션 기본 목록(1.7.0). 생성 파일이다. 원본은 missions/defaults.json이다.
 import { MISSION_DEFAULTS, MISSION_KINDS } from "./missions_defaults.js";
 
@@ -3439,11 +3439,10 @@ const NAV = [
   { label: "같이하기", items: [["versus", "현황"], ["versusset", "설정"]] },
   { label: "회원", items: [["players", "회원 목록"], ["rewards", "보상"], ["admins", "관리 계정"]] },
   { label: "기록", items: [["events", "앱 사용 기록"], ["audit", "관리 기록"]] },
-  // 「주의」 **월간 패스는 131·134가 들어간 서버에서만 보인다.** 지금은 개발 서버뿐이다.
-  // 운영에 그 둘을 넣으면 이 조건을 빼고 늘 보이게 한다(1.8.1 출시와 함께).
+  // 월간 패스는 131·134가 있어야 열린다. 2026-10-22에 운영에도 들어간 것을 확인하고
+  // 개발 전용 조건을 뺐다. 그전에는 운영 어드민에서 이 메뉴가 아예 보이지 않았다.
   { label: "운영", items: [["anomaly", "이상 징후"], ["update", "업데이트·게임 설정"],
-                          ["notices", "공지"], ["push", "푸시"],
-                          ...(IS_DEV ? [["pass", "월간 패스"]] : []),
+                          ["notices", "공지"], ["push", "푸시"], ["pass", "월간 패스"],
                           ["server", "서버 상태"]] },
 ];
 
