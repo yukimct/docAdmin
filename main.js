@@ -1453,17 +1453,17 @@ function admobUnitSection() {
   }
   const daily = rows.length ? `<div class="table-scroll"><table style="min-width:760px">
     <thead><tr><th>날짜</th><th>플랫폼</th><th>종류</th>
-      <th class="num">요청</th><th class="num">일치</th>
+      <th class="num">요청</th><th class="num">노출</th><th class="num">일치</th>
       <th class="num">일치율${infoTip("광고를 달라고 한 요청 중 광고가 실제로 돌아온 비율입니다. 요청이 스무 건이 안 되는 날은 한두 건으로 크게 흔들립니다.")}</th>
-      <th class="num">노출</th><th class="num">예상 수익</th></tr></thead>
+      <th class="num">예상 수익</th></tr></thead>
     <tbody>${moreRows("admobUnit", rows.map((r) => `<tr>
       <td class="nowrap">${esc(dayWithWeekday(r.day))}${r.day === kstDate(0) ? ' <span class="pill today">오늘</span>' : ""}</td>
       <td class="nowrap"><i style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${unitColor(r.platform, r.format)};margin-right:6px"></i>${esc(r.platform)}</td>
       <td class="nowrap">${esc(adFormatText(r.format))}</td>
       <td class="num">${fmt(r.req)}</td>
+      <td class="num">${fmt(r.imp)}</td>
       <td class="num">${fmt(r.matched)}</td>
       <td class="num">${pctCell(r.matched, r.req)}</td>
-      <td class="num">${fmt(r.imp)}</td>
       <td class="num">${r.earn ? usd(r.earn) : '<span class="muted">—</span>'}</td>
     </tr>`))}</tbody></table></div>${moreBar("admobUnit", rows.length)}`
     : `<div class="empty">쪼개 쌓은 줄이 없습니다</div>`;
@@ -1619,15 +1619,15 @@ function admobTab(err) {
   const pct = (a, b) => (b ? Math.round((a / b) * 1000) / 10 + "%" : "—");
   const table = rows.length ? `<div class="table-scroll"><table style="min-width:720px">
     <thead><tr><th>날짜</th><th class="num">예상 수익</th><th class="num">Android</th><th class="num">iOS</th>
-      <th class="num">노출</th><th class="num">요청</th><th class="num">일치율${infoTip("광고를 달라고 한 요청 중 광고가 실제로 돌아온 비율입니다.")}</th>
+      <th class="num">요청</th><th class="num">노출</th><th class="num">일치율${infoTip("광고를 달라고 한 요청 중 광고가 실제로 돌아온 비율입니다.")}</th>
       <th class="num">eCPM${infoTip("노출 1,000번당 예상 수익입니다.")}</th><th class="num">클릭</th></tr></thead>
     <tbody>${moreRows("admob", rows.map((a) => `<tr${!a.earn && !a.imp ? ' class="muted"' : ""}>
       <td class="nowrap">${esc(dayWithWeekday(a.day))}${a.day === kstDate(0) ? ' <span class="pill today">오늘</span>' : ""}</td>
       <td class="num"><b>${usd(a.earn)}</b></td>
       <td class="num">${a.Android ? usd(a.Android) : '<span class="muted">—</span>'}</td>
       <td class="num">${a.iOS ? usd(a.iOS) : '<span class="muted">—</span>'}</td>
-      <td class="num">${fmt(a.imp)}</td>
       <td class="num">${fmt(a.req)}</td>
+      <td class="num">${fmt(a.imp)}</td>
       <td class="num">${pct(a.matched, a.req)}</td>
       <td class="num">${a.imp ? usd((a.earn / a.imp) * 1000) : "—"}</td>
       <td class="num">${fmt(a.clicks)}</td>
@@ -3628,6 +3628,10 @@ async function loadRanking() {
   }
 }
 
+/** 판 색 테마 이름의 빈 칸 안내. 앱은 그 언어 칸이 비면 **한국어 이름**을 보여 준다(BoardTheme.nameFor). */
+const THEME_NAME_EMPTY_TIP = "비워 둔 언어는 한국어 이름을 그대로 보여 줍니다. "
+  + "예를 들어 일본어 칸이 비어 있으면 일본어로 켠 사람에게 「털실」처럼 한국어가 보입니다.";
+
 /** 052·054가 있어야 채워진다. 없는 서버에서는 조용히 빈 값으로 두고 안내만 띄운다 —
  *  관리자 페이지는 서버보다 먼저 배포될 수 있다. */
 /**
@@ -3638,37 +3642,62 @@ async function loadRanking() {
  */
 async function editTheme(id) {
   const t = PASS_THEMES.find((x) => x.id === id);
-  const isNew = !t;
-  const newId = isNew ? prompt("새 테마 id (영문 소문자·숫자·밑줄)", "") : id;
-  if (newId === null || !newId.trim()) return;
-  const ko = prompt("한국어 이름", t ? (t.names?.ko || "") : "");
-  if (ko === null) return;
-  const en = prompt("영어 이름 (비우면 한국어를 씁니다)", t ? (t.names?.en || "") : "");
-  if (en === null) return;
-  const cur = Array.isArray(t?.colors) ? t.colors.join(", ") : "";
-  const raw = prompt("색 스무 개를 쉼표로 (#RRGGBB)", cur);
-  if (raw === null) return;
+  const dlg = $("#themeDlg");
+  $("#thTitle").textContent = t ? "판 색 테마 고치기" : "새 판 색 테마";
+  $("#thId").value = t?.id || "";
+  $("#thId").disabled = !!t;
+  $("#thNameKo").value = t?.names?.ko || "";
+  $("#thColors").value = Array.isArray(t?.colors) ? t.colors.join(", ") : "";
+  $("#thRetired").checked = !!t?.retired;
+  $("#thErr").textContent = "";
 
-  const colors = raw.split(",").map((c) => c.trim()).filter(Boolean);
-  if (colors.length !== 20) { alert(`색이 스무 개여야 합니다. 지금 ${colors.length}개입니다`); return; }
-  const bad = colors.find((c) => !/^#[0-9a-fA-F]{6}$/.test(c));
-  if (bad) { alert(`색 꼴이 틀립니다: ${bad}\n#RRGGBB로 적어 주세요`); return; }
+  // 1.8.1까지는 한국어와 영어 둘만 받았다. 나머지 열두 언어는 앱에서 한국어 이름이 그대로 보였다
+  // (일본어로 켜도 「털실」). 앱은 처음부터 언어별 이름을 읽으므로(nameFor) 여기만 고치면 된다.
+  // 서버 names는 {언어: 이름} 한 겹이고 i18nBlock은 {언어: {칸: 값}}이라 드나들 때 바꿔 준다.
+  const i18n = i18nBlock($("#thNamesI18n"), {
+    id: "i18n.theme", emptyTip: THEME_NAME_EMPTY_TIP,
+    fields: [{ k: "name", label: "이름", src: "#thNameKo", max: leNameMax }],
+  });
+  i18n.fill(Object.fromEntries(Object.entries(t?.names || {})
+    .filter(([l, v]) => l !== "ko" && v).map(([l, v]) => [l, { name: String(v) }])));
 
-  const names = { ko };
-  if (en.trim()) names.en = en.trim();
-  await act(async () => {
-    const r = await rpc("admin_board_theme_save", {
-      p_id: newId.trim(), p_names: names, p_colors: colors, p_retired: t?.retired ?? false,
-    });
-    alert(r === "created" ? "새 테마를 만들었습니다"
-        : r === "updated_colors" ? "색을 바꿨습니다. 앱이 다시 받아 갑니다"
-        : r === "updated" ? "저장했습니다"
-        : r === "need_20_colors" ? "색이 스무 개가 아닙니다"
-        : r === "bad_color" ? "색 꼴이 틀립니다"
-        : r === "need_ko_name" ? "한국어 이름이 필요합니다"
-        : r === "invalid_id" ? "id는 영문 소문자로 시작하고 소문자·숫자·밑줄만 씁니다"
-        : "관리자만 할 수 있습니다");
-  }, refresh);
+  dlg.showModal();
+  $("#thCancel").onclick = () => dlg.close();
+  $("#thOk").onclick = async () => {
+    const newId = $("#thId").value.trim();
+    const ko = $("#thNameKo").value.trim();
+    const colors = $("#thColors").value.split(",").map((c) => c.trim()).filter(Boolean);
+    const errs = [];
+    if (!/^[a-z][a-z0-9_]*$/.test(newId)) errs.push("id는 영문 소문자로 시작하고 소문자·숫자·밑줄만 씁니다.");
+    if (!ko) errs.push("한국어 이름이 필요합니다.");
+    // **스무 개가 아니면 저장하지 않는다.** 서버도 막지만 여기서 먼저 알려 주는 편이 빠르다.
+    if (colors.length !== 20) errs.push(`색이 스무 개여야 합니다. 지금 ${colors.length}개입니다.`);
+    const bad = colors.find((c) => !/^#[0-9a-fA-F]{6}$/.test(c));
+    if (bad) errs.push(`색 꼴이 틀립니다: ${bad}. #RRGGBB로 적어 주세요.`);
+    errs.push(...i18n.errors());
+    if (errs.length) { $("#thErr").textContent = errs.join(" "); return; }
+
+    const names = { ko };
+    for (const [l, v] of Object.entries(i18n.values())) if (v.name) names[l] = v.name;
+    $("#thOk").disabled = true;
+    try {
+      await act(async () => {
+        const r = await rpc("admin_board_theme_save", {
+          p_id: newId, p_names: names, p_colors: colors, p_retired: $("#thRetired").checked,
+        });
+        // 색을 바꾸면 서버가 version을 올려 앱이 다시 받아 간다.
+        alert(r === "created" ? "새 테마를 만들었습니다"
+            : r === "updated_colors" ? "색을 바꿨습니다. 앱이 다시 받아 갑니다"
+            : r === "updated" ? "저장했습니다"
+            : r === "need_20_colors" ? "색이 스무 개가 아닙니다"
+            : r === "bad_color" ? "색 꼴이 틀립니다"
+            : r === "need_ko_name" ? "한국어 이름이 필요합니다"
+            : r === "invalid_id" ? "id는 영문 소문자로 시작하고 소문자·숫자·밑줄만 씁니다"
+            : "관리자만 할 수 있습니다");
+        dlg.close();
+      }, refresh);
+    } finally { $("#thOk").disabled = false; }
+  };
 }
 
 /**

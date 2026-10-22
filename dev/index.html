@@ -729,6 +729,23 @@
     <button id="nOk">올리기</button>
   </div>
 </dialog>
+<dialog id="themeDlg" style="width:min(640px,94vw)">
+  <h3 id="thTitle">판 색 테마</h3>
+  <div class="muted" style="font-size:12.5px">색 스무 개가 판의 구역 색입니다. 앱은 구역이 몇 개든 이 스무 칸을 돌려 씁니다.</div>
+  <label>id · 영문 소문자로 시작하고 소문자·숫자·밑줄만 씁니다<span data-infotip="앱과 서버가 테마를 가리키는 이름입니다. 만든 뒤에는 바꾸지 않습니다."></span></label>
+  <input type="text" id="thId" placeholder="예: yarn">
+  <label>한국어 이름</label>
+  <input type="text" id="thNameKo" placeholder="예: 털실">
+  <div id="thNamesI18n"></div>
+  <label>색 스무 개 · 쉼표로 나눠 적습니다 (#RRGGBB)</label>
+  <textarea id="thColors" rows="3" placeholder="#e8d8c3, #d9c2a7, …"></textarea>
+  <label class="switch" style="margin-top:12px"><input type="checkbox" id="thRetired"><span>더 이상 쓰지 않음</span><span data-infotip="새 달 패스에 고를 수 없게 합니다. 이미 가진 사람은 그대로 씁니다."></span></label>
+  <div class="err" id="thErr"></div>
+  <div class="actions" style="margin-top:16px;justify-content:flex-end">
+    <button class="ghost" id="thCancel">취소</button>
+    <button id="thOk">저장</button>
+  </div>
+</dialog>
 <script type="module" src="./main.js"></script>
 </body>
 </html>
