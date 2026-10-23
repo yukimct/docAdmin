@@ -2211,6 +2211,8 @@ function i18nBlock(host, { id, fields, langs = LANGS, emptyTip = "", onInput = n
     targets.forEach((l) => mark(l, ""));
     msg("");
     const prog = q("[data-i18n-prog]");
+    // 자료를 못 받아 「한 번 더」인 언어. finally에서 단추 이름에 쓰므로 try 밖에 둔다.
+    const again = [];
     try {
       // 「주의」 번역기 만들기(create)는 내려받기가 필요하면 **사용자가 누른 그 순간**에만 된다.
       // 그 자격(transient activation)은 `await`를 한 번만 거쳐도 풀린다.
@@ -2233,7 +2235,7 @@ function i18nBlock(host, { id, fields, langs = LANGS, emptyTip = "", onInput = n
           .catch((e) => { delete dl[l]; showDl(); return { error: e }; });
       });
       showDl();
-      const skipped = [], failed = [], again = [];
+      const skipped = [], failed = [];
       let done = 0;
       for (let i = 0; i < need.length; i++) {
         const l = need[i];
@@ -2264,7 +2266,10 @@ function i18nBlock(host, { id, fields, langs = LANGS, emptyTip = "", onInput = n
       prog.textContent = "";
       const parts = [];
       if (done) parts.push(`${done}개 언어를 채웠습니다. 기계 번역이라 어색할 수 있으니 저장하기 전에 읽어 보고 칸에서 바로 고치세요.`);
-      if (again.length) parts.push(`자료를 내려받지 못한 언어 ${again.length}개(${again.map(langName).join(", ")})는 「자동 번역」을 한 번 더 누르면 이어서 합니다.`);
+      // **크롬은 누름 한 번에 번역기 하나만 내려받게 한다**(2026-10-23 확인). 그래서 처음 쓰는 언어가
+      // 여럿이면 그 수만큼 눌러야 한다. 자료는 브라우저에 남으므로 **다음부터는 한 번이면 끝난다.**
+      // 왜 또 눌러야 하는지 모르면 고장으로 보이므로, 남은 수를 단추에 적어 준다.
+      if (again.length) parts.push(`${again.length}개 언어는 번역 자료를 받아야 합니다. 크롬이 누를 때마다 하나씩만 받게 해서, 단추를 ${again.length}번 더 눌러 주세요. **이 브라우저에 한 번만 받으면 다음부터는 한 번에 끝납니다.**`);
       if (skipped.length) parts.push(`이 브라우저가 번역하지 못하는 언어: ${skipped.map(langName).join(", ")}. 직접 채우거나 비워 두세요.`);
       if (failed.length) parts.push(`번역하지 못한 언어: ${failed.map(langName).join(", ")}.`);
       msg(parts.join(" "));
@@ -2272,7 +2277,12 @@ function i18nBlock(host, { id, fields, langs = LANGS, emptyTip = "", onInput = n
     } catch (e) {
       prog.textContent = "";
       msg(`자동 번역을 하지 못했습니다. ${e?.message || e}`);
-    } finally { go.disabled = false; }
+    } finally {
+      go.disabled = false;
+      // 남은 수를 단추에 적는다. 다 받았으면 본래 이름으로 돌린다.
+      const left = (again || []).length;
+      go.textContent = left ? `이어서 번역 (남은 ${left})` : "자동 번역";
+    }
   };
 
   const api = {
