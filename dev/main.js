@@ -2269,7 +2269,7 @@ function i18nBlock(host, { id, fields, langs = LANGS, emptyTip = "", onInput = n
       // **크롬은 누름 한 번에 번역기 하나만 내려받게 한다**(2026-10-23 확인). 그래서 처음 쓰는 언어가
       // 여럿이면 그 수만큼 눌러야 한다. 자료는 브라우저에 남으므로 **다음부터는 한 번이면 끝난다.**
       // 왜 또 눌러야 하는지 모르면 고장으로 보이므로, 남은 수를 단추에 적어 준다.
-      if (again.length) parts.push(`${again.length}개 언어는 번역 자료를 받아야 합니다. 크롬이 누를 때마다 하나씩만 받게 해서, 단추를 ${again.length}번 더 눌러 주세요. **이 브라우저에 한 번만 받으면 다음부터는 한 번에 끝납니다.**`);
+      if (again.length) parts.push(`${again.length}개 언어는 번역 자료를 받아야 합니다. 크롬이 누를 때마다 하나씩만 받게 해서, 단추를 ${again.length}번 더 눌러 주세요. 이 브라우저에 한 번만 받으면 다음부터는 한 번에 끝납니다.`);
       if (skipped.length) parts.push(`이 브라우저가 번역하지 못하는 언어: ${skipped.map(langName).join(", ")}. 직접 채우거나 비워 두세요.`);
       if (failed.length) parts.push(`번역하지 못한 언어: ${failed.map(langName).join(", ")}.`);
       msg(parts.join(" "));

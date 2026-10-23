@@ -2211,20 +2211,23 @@ function i18nBlock(host, { id, fields, langs = LANGS, emptyTip = "", onInput = n
     targets.forEach((l) => mark(l, ""));
     msg("");
     const prog = q("[data-i18n-prog]");
+    // 자료를 못 받아 「한 번 더」인 언어. finally에서 단추 이름에 쓰므로 try 밖에 둔다.
+    const again = [];
     try {
-      // 「주의」 번역기 만들기(create)는 내려받기가 필요하면 누른 직후(사용자 동작 안)에만 된다.
-      // 그래서 언어마다 기다리지 않고, 될지 한꺼번에 물은 다음 곧바로 전부 만들기 시작한다. 번역은 그 뒤에 하나씩 한다.
-      const avail = await Promise.all(need.map((l) => (TRANSLATORS.has(l) ? "available"
-        : Translator.availability({ sourceLanguage: "ko", targetLanguage: bcp47(l) }).catch(() => "unavailable"))));
+      // 「주의」 번역기 만들기(create)는 내려받기가 필요하면 **사용자가 누른 그 순간**에만 된다.
+      // 그 자격(transient activation)은 `await`를 한 번만 거쳐도 풀린다.
+      // 예전에는 여기서 availability를 먼저 물어보느라(= await) 그 뒤 create가 NotAllowedError로 떨어졌고,
+      // **언어마다 다시 눌러야 했다**(사용자 제보, 2026-10-23).
+      // 그래서 **아무것도 기다리지 않고 곧바로 전부 만든다.** 번역은 그 뒤에 하나씩 한다.
+      // availability는 따로 묻지 않는다 — 못 만드는 언어는 create가 거절하므로 거기서 갈라낸다.
       const dl = {};   // 내려받는 언어 → 0~1
       const showDl = () => {
         const xs = Object.entries(dl).filter(([, p]) => p < 1);
         prog.textContent = xs.length ? `번역 자료 내려받는 중 · ${xs.map(([l, p]) => `${langName(l)} ${Math.round(p * 100)}%`).join(", ")}` : "";
       };
-      const makers = need.map((l, i) => {
+      const makers = need.map((l) => {
         if (TRANSLATORS.has(l)) return Promise.resolve(TRANSLATORS.get(l));
-        if (avail[i] === "unavailable") return Promise.resolve(null);
-        if (avail[i] !== "available") dl[l] = 0;
+        dl[l] = 0;
         return Translator.create({
           sourceLanguage: "ko", targetLanguage: bcp47(l),
           monitor(m) { m.addEventListener("downloadprogress", (e) => { dl[l] = e.loaded; showDl(); }); },
@@ -2239,9 +2242,15 @@ function i18nBlock(host, { id, fields, langs = LANGS, emptyTip = "", onInput = n
         const tr = await makers[i];
         if (!tr) { skipped.push(l); mark(l, "자동 번역 안 됨"); continue; }
         if (tr.error) {
-          failed.push(l);
-          mark(l, tr.error?.name === "NotAllowedError" ? "내려받기를 못 했습니다. 한 번 더 눌러 주세요" : "번역기를 열지 못했습니다",
-            `${tr.error?.name || ""} ${tr.error?.message || ""}`.trim());
+          // 이 브라우저가 못 하는 언어와, 눌러야 열리는 것을 갈라 적는다.
+          // NotAllowedError만 「한 번 더」다. 나머지는 몇 번 눌러도 안 된다.
+          if (tr.error?.name === "NotAllowedError") {
+            again.push(l);
+            mark(l, "한 번 더 눌러 주세요", `${tr.error?.name} ${tr.error?.message || ""}`.trim());
+          } else {
+            skipped.push(l);
+            mark(l, "자동 번역 안 됨", `${tr.error?.name || ""} ${tr.error?.message || ""}`.trim());
+          }
           continue;
         }
         if (!Object.keys(dl).length) prog.textContent = `번역하는 중 · ${langName(l)} (${i + 1} / ${need.length})`;
@@ -2257,6 +2266,10 @@ function i18nBlock(host, { id, fields, langs = LANGS, emptyTip = "", onInput = n
       prog.textContent = "";
       const parts = [];
       if (done) parts.push(`${done}개 언어를 채웠습니다. 기계 번역이라 어색할 수 있으니 저장하기 전에 읽어 보고 칸에서 바로 고치세요.`);
+      // **크롬은 누름 한 번에 번역기 하나만 내려받게 한다**(2026-10-23 확인). 그래서 처음 쓰는 언어가
+      // 여럿이면 그 수만큼 눌러야 한다. 자료는 브라우저에 남으므로 **다음부터는 한 번이면 끝난다.**
+      // 왜 또 눌러야 하는지 모르면 고장으로 보이므로, 남은 수를 단추에 적어 준다.
+      if (again.length) parts.push(`${again.length}개 언어는 번역 자료를 받아야 합니다. 크롬이 누를 때마다 하나씩만 받게 해서, 단추를 ${again.length}번 더 눌러 주세요. 이 브라우저에 한 번만 받으면 다음부터는 한 번에 끝납니다.`);
       if (skipped.length) parts.push(`이 브라우저가 번역하지 못하는 언어: ${skipped.map(langName).join(", ")}. 직접 채우거나 비워 두세요.`);
       if (failed.length) parts.push(`번역하지 못한 언어: ${failed.map(langName).join(", ")}.`);
       msg(parts.join(" "));
@@ -2264,7 +2277,12 @@ function i18nBlock(host, { id, fields, langs = LANGS, emptyTip = "", onInput = n
     } catch (e) {
       prog.textContent = "";
       msg(`자동 번역을 하지 못했습니다. ${e?.message || e}`);
-    } finally { go.disabled = false; }
+    } finally {
+      go.disabled = false;
+      // 남은 수를 단추에 적는다. 다 받았으면 본래 이름으로 돌린다.
+      const left = (again || []).length;
+      go.textContent = left ? `이어서 번역 (남은 ${left})` : "자동 번역";
+    }
   };
 
   const api = {
