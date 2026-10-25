@@ -1039,7 +1039,23 @@ function delta(now, before) {
 
 /** 「오늘 앱을 켠 사람」과 「오늘 판을 깬 사람」은 이름이 비슷해 헷갈렸다(2026-10-08). 두 카드가 같은 설명을 나눠 쓴다. */
 const TIP_APP_OPEN = "한국시간 오늘 앱을 한 번이라도 켠 사람 수입니다. 판을 하나도 안 깼어도 셉니다. 맨 위 「오늘 판을 깬 사람」은 오늘 판을 하나 이상 깨서 오늘 점수가 생긴 사람만 셉니다. 두 숫자는 기록하는 곳이 달라 정확히 포개지지 않습니다.";
-const TIP_BOARD_CLEAR = "한국시간 오늘 판을 하나 이상 깨서 오늘 점수가 0보다 큰 사람 수입니다. 앱만 켜고 판을 안 깬 사람은 세지 않습니다. 앱을 켠 사람 수는 차트 메뉴 맨 위 「오늘 앱을 켠 사람」에 있습니다.";
+const TIP_BOARD_CLEAR = "한국시간 오늘 판을 하나 이상 깬 사람 수입니다(141). 레벨·오늘의 퍼즐·숫자·두 마리·이벤트·대전과 같이하기를 모두 셉니다. 한 사람이 여러 모드를 해도 한 번만 셉니다. 아래 작은 글씨가 모드별 사람 수인데, 겹치는 사람이 있어 더하면 위 숫자보다 클 수 있습니다. 앱만 켜고 판을 안 깬 사람은 세지 않습니다. 앱을 켠 사람 수는 차트 메뉴 맨 위 「오늘 앱을 켠 사람」에 있습니다.";
+
+/** 141 「오늘 판을 깬 사람」 카드 아래 작은 글씨. 0인 모드는 빼고, 모드가 하나도 없으면 안 그린다.
+ *  141 전 서버는 today_players_by_mode를 안 주므로 그때도 안 그린다. */
+const BOARD_CLEAR_MODES = [
+  ["level", "레벨"], ["daily", "오늘의 퍼즐"], ["number", "숫자"],
+  ["two_dog", "두 마리"], ["event", "이벤트"], ["versus", "대전·같이하기"],
+];
+function boardClearByMode(by) {
+  if (!by || typeof by !== "object") return "";
+  const parts = BOARD_CLEAR_MODES
+    .map(([k, label]) => [label, Number(by[k]) || 0])
+    .filter(([, n]) => n > 0)
+    .map(([label, n]) => `${esc(label)} ${fmt(n)}`);
+  if (!parts.length) return "";
+  return `<div class="muted" style="font-size:11.5px">${parts.join(" · ")}</div>`;
+}
 
 // 차트 맨 위 카드의 설명 배지. 카드 이름으로 찾는다.
 const KPI_TIPS = {
@@ -7239,8 +7255,8 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     ${warn ? `<div class="notice">${esc(warn)}</div>` : ""}
     <div class="cards">
       <div class="card"><div class="label">전체 회원</div><div class="value">${fmt(S.members)}</div></div>
-      <div class="card"><div class="label">오늘 판을 깬 사람${infoTip(TIP_BOARD_CLEAR)}</div><div class="value">${fmt(S.today_players)}</div></div>
-      <div class="card"><div class="label">오늘 최고 점수</div><div class="value">${Number(S.today_players) > 0 ? fmt(S.today_best) : "—"}</div></div>
+      <div class="card"><div class="label">오늘 판을 깬 사람${infoTip(TIP_BOARD_CLEAR)}</div><div class="value">${fmt(S.today_players)}</div>${boardClearByMode(S.today_players_by_mode)}</div>
+      <div class="card"><div class="label">오늘 최고 점수</div><div class="value">${Number(S.today_best) > 0 ? fmt(S.today_best) : "—"}</div></div>
       <div class="card" data-z><div class="label">응원 상품을 산 사람</div><div class="value">${fmt(S.supporters)}</div></div>
       <div class="card" data-z><div class="label">${esc(unclaimedLabel())}${server114() ? infoTip(UNCLAIMED_TIP_114) : ""}</div><div class="value">${fmt(S.unclaimed_rewards)}</div>${server114()
         ? `<div class="muted" style="font-size:11.5px">선물 ${fmt(S.unclaimed_gifts)} · 랭킹 ${fmt(S.unclaimed_rank)}</div>` : ""}</div>
