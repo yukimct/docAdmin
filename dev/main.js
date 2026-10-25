@@ -5018,6 +5018,9 @@ function memberEventsRow() {
 const EVENT_NAMES = {
   app_open: "앱 켬", tutorial_start: "튜토리얼 시작", tutorial_done: "튜토리얼 끝냄", level_clear: "레벨 판 깸",
   purchase_remove_ads: "광고 제거 구매", coin_earned: "코인 얻음",
+  // 광고 실패(2026-10-25). 값은 AdMob 오류 번호이고 플랫폼마다 번호가 다르다.
+  // Android는 3이 노필, iOS는 1이 노필이다. 요청은 있는데 노출이 0일 때 이 셋으로 가린다.
+  ad_load_fail: "광고 못 받음", ad_show_fail: "광고 못 띄움",
 };
 const EVENT_PARTS = {
   hints: "힌트", autos: "자동배치", revive: "부활", rename: "닉네임 변경", walk_bone: "산책 쉼터 뼈다귀",
@@ -5029,6 +5032,7 @@ function eventName(name) {
   const text = EVENT_NAMES[n]
     ?? (n.startsWith("coin_spent_") ? `코인 씀 · ${tail("coin_spent_")}`
       : n.startsWith("ad_watched_") ? `광고 봄 · ${tail("ad_watched_")}`
+      : n.startsWith("ad_tap_no_ad_") ? `광고 눌렀는데 없음 · ${tail("ad_tap_no_ad_")}`
       : n.startsWith("coin_rebase_") ? `코인 다시 맞춤 · ${tail("coin_rebase_")}`
       : null);
   return text ? `${esc(text)} <span class="muted" style="font-size:11px">${esc(n)}</span>` : esc(n);
