@@ -4929,6 +4929,7 @@ function playersTable() {
           ${played ? '<span class="pill today">오늘</span>' : ""}
           ${p.reset_requested_at ? '<span class="pill heart" title="다음에 앱을 켜면 게임이 처음부터 시작됩니다">게임 초기화 요청됨</span>' : ""}
           ${TEST_SET.has(String(p.id)) ? '<span class="pill dim">시험 계정</span>' : ""}
+          ${TEST_AD_SET.has(String(p.id)) ? '<span class="pill dim" title="이 계정에는 구글 테스트 광고가 나옵니다. 랭킹에는 영향이 없습니다">테스트 광고</span>' : ""}
           ${BLOCK_SET.has(String(p.id)) ? '<span class="pill warn" title="게임은 할 수 있지만 막힌 동안 낸 점수는 랭킹에 오르지 않습니다">점수 막힘</span>' : ""}
           ${looksIdle(p) ? `<span class="pill dim" title="가입하고 ${IDLE_JUDGE_HOURS}시간이 지났는데 판을 깬 적이 없고, 가입 뒤 ${IDLE_LAST_SEEN_MINUTES}분 안에 접속이 끊겼습니다. 점수, 대전, 결제, 푸시 동의 기록도 없습니다. 추정이라 실제 사용자일 수 있습니다">사용 안 함 추정</span>` : ""}</td>
         <td class="num">${p.max_level == null ? '<span class="muted">—</span>' : fmt(p.max_level)}</td>
@@ -6513,6 +6514,10 @@ let REC_ROWS = [], REC_TOTAL = 0, REC_PAGE = 0, REC_PERIOD = "", REC_ERR = null;
 const REC_SIZE = 50;
 /** 시험 계정(107). null이면 못 읽었다(107 전 서버). */
 let TEST_ACCOUNTS = null, TEST_SET = new Set();
+/** 시험 광고 명단(144). 「주의」 **시험 계정과 다른 명단이다.** 이쪽은 광고 단위만
+ *  구글 테스트 광고로 바꾸고 랭킹·이벤트 순위·정산에는 아무 영향이 없다.
+ *  2026-10-28 무효 트래픽 정지 뒤에 만들었다. 자기 기기로 실광고를 누르면 또 걸린다. */
+let TEST_AD_ACCOUNTS = null, TEST_AD_SET = new Set();
 /** 점수 막기(123). 지금 막힌 회원과 최근 30일 안에 푼 기록이다. null이면 못 읽었다. 123 전 서버라 그렇다. */
 let SCORE_BLOCKS = null, BLOCK_SET = new Set(), SCORE_BLOCKS_ERR = null;
 /** 점수 막기 집계(126 admin_score_block_stats)와 그 기간(일). 이상 징후 메뉴가 쓴다. */
@@ -6536,6 +6541,11 @@ async function loadTestAccounts() {
     TEST_ACCOUNTS = await rpc("admin_test_accounts") || [];
   } catch { TEST_ACCOUNTS = null; }
   TEST_SET = new Set((TEST_ACCOUNTS || []).map((t) => String(t.profile_id)));
+  // 144를 안 넣은 서버에서는 함수가 없어 던진다. 그때는 명단이 없는 것으로 본다.
+  try {
+    TEST_AD_ACCOUNTS = await rpc("admin_test_ad_profiles") || [];
+  } catch { TEST_AD_ACCOUNTS = null; }
+  TEST_AD_SET = new Set((TEST_AD_ACCOUNTS || []).map((t) => String(t.profile_id)));
 }
 
 async function loadScoreBlocks() {
@@ -6594,6 +6604,29 @@ function testAccountsSection() {
         <td>${esc(fmtDateTime(t.created_at))}</td>
         <td><button class="ghost sm" data-testoff="${esc(t.profile_id)}" data-name="${esc(t.username || "")}">시험 계정 풀기</button></td>
       </tr>`).join("")}</tbody></table></div>` : '<div class="empty">시험 계정이 없습니다</div>'}`);
+}
+
+/**
+ * 시험 광고 명단 표. 시험 계정 표 바로 아래에 둔다.
+ *
+ * 「주의」 **위 표와 다른 명단이다.** 둘을 나란히 두는 것은 헷갈리게 하려는 것이
+ * 아니라 **헷갈리지 않게 하려는 것**이다. 광고를 보려고 시험 계정으로 지정하면
+ * 그 회원의 랭킹이 통째로 안 쌓인다(2026-10-28에 이것 때문에 명단을 나눴다).
+ */
+function testAdAccountsSection() {
+  if (TEST_AD_ACCOUNTS === null) {
+    return sec("rank.testads", "시험 광고", loadFail("시험 광고 명단을 불러오지 못했습니다.", "", "sql/migrations/144_admin_test_ad_profiles.sql"));
+  }
+  return sec("rank.testads", `시험 광고 · ${fmt(TEST_AD_ACCOUNTS.length)}명`, `
+    <div class="muted" style="font-size:12.5px;margin-bottom:6px">이 명단에 있는 회원에게는 <b>구글 테스트 광고</b>가 나옵니다. 눌러도 안전합니다.
+      <b>랭킹·이벤트 순위·정산에는 아무 영향이 없습니다.</b> 위 「시험 계정」과 다른 명단입니다.
+      지정은 회원 목록의 「시험 광고로」 버튼으로 하고, 앱에는 1분 안에 닿습니다.</div>
+    ${TEST_AD_ACCOUNTS.length ? `<div class="table-scroll"><table>
+      <thead><tr><th>닉네임</th><th></th></tr></thead>
+      <tbody>${TEST_AD_ACCOUNTS.map((t) => `<tr>
+        <td>${t.profile_id ? `<button class="plink" data-member="${esc(t.profile_id)}">${esc(t.username || String(t.profile_id).slice(0, 8))}</button>` : '<span class="muted">탈퇴</span>'}</td>
+        <td><button class="ghost sm" data-testadoff="${esc(t.profile_id)}" data-name="${esc(t.username || "")}">시험 광고 풀기</button></td>
+      </tr>`).join("")}</tbody></table></div>` : '<div class="empty">시험 광고 계정이 없습니다</div>'}`);
 }
 
 /** 점수 막기가 하는 일. 확인창과 표 안내가 같은 말을 쓴다. */
@@ -6680,6 +6713,28 @@ async function setTestAccount(id, on, name = "") {
   }
 }
 
+/**
+ * 시험 광고 지정·해제(서버 admin_set_test_ad_profile). 지정은 사유가 필수다.
+ *
+ * 「주의」 **시험 계정과 헷갈리면 안 된다.** 시험 계정은 랭킹에서 빼는 것이고
+ * 이것은 광고 단위만 바꾸는 것이다. 광고를 보려고 시험 계정으로 지정하면
+ * 그 회원의 랭킹이 통째로 안 쌓인다.
+ */
+async function setTestAdProfile(id, on, name = "") {
+  const who = name || findPlayer(id)?.username || String(id).slice(0, 8);
+  if (on) {
+    if (!confirm(`${who} 회원에게 구글 테스트 광고를 보냅니다.\n\n그 계정에서는 광고를 눌러도 안전합니다. 랭킹·이벤트 순위·정산에는 영향이 없습니다.\n앱에는 1분 안에 닿습니다.\n계속할까요?`)) return;
+    const reason = askReasonRequired("시험 광고 지정");
+    if (reason === null) return;
+    await act(() => rpc("admin_set_test_ad_profile", { p_profile_id: id, p_on: true, p_reason: reason }), refresh);
+  } else {
+    if (!confirm(`${who} 회원의 시험 광고 지정을 풉니다. 다시 진짜 광고가 나옵니다.`)) return;
+    const reason = askReason("시험 광고 풀기");
+    if (reason === null) return;
+    await act(() => rpc("admin_set_test_ad_profile", { p_profile_id: id, p_on: false, p_reason: reason }), refresh);
+  }
+}
+
 /** 기록 랭킹 줄의 상태 이름. 서버 admin_play_reason_label과 같은 말(PLAY_LABEL_FALLBACK)이고 숫자 갈래 둘을 더한다. */
 const REC_STATUS = { ...PLAY_LABEL_FALLBACK, counted: "점수에 든 판 있음", rejected: "기록 확인 실패", late: "마감 뒤 도착" };
 /** 기록전 시작 방식(107 start_mode). */
@@ -6741,6 +6796,7 @@ function recordRankingTab() {
       : '<div class="empty">이 기간에 기록이 없습니다</div>'}`, { open: true })}
     ${sec(`rank.${kind}.reward`, `${esc(label)} 보상`, rankRewardEditor(`rank_rewards_${kind}`, label), { note: rewardNote(`rank_rewards_${kind}`) })}
     ${testAccountsSection()}
+    ${testAdAccountsSection()}
     ${scoreBlocksSection()}`;
 }
 
@@ -6773,7 +6829,7 @@ function rankingView(err) {
     `<button class="${RANK_VIEW === k ? "on" : ""}" data-rankview="${k}">${label}</button>`).join("")}</div>`;
   if (RANK_VIEW !== "today") return tabs + recordRankingTab();
   return tabs + rankingTab(err) + sec("rank.today.reward", "오늘 점수 보상", rankRewardEditor("rank_rewards", "오늘 점수"),
-    { note: rewardNote("rank_rewards") }) + testAccountsSection() + scoreBlocksSection();
+    { note: rewardNote("rank_rewards") }) + testAccountsSection() + testAdAccountsSection() + scoreBlocksSection();
 }
 
 // ------------------------------------------------------------------ 설정: 오늘의 퍼즐 기록전 · 숫자 퍼즐 (101·102)
@@ -7470,6 +7526,9 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     document.querySelectorAll("[data-testoff]").forEach((b) => {
       b.onclick = () => setTestAccount(b.dataset.testoff, false, b.dataset.name);
     });
+    document.querySelectorAll("[data-testadoff]").forEach((b) => {
+      b.onclick = () => setTestAdProfile(b.dataset.testadoff, false, b.dataset.name);
+    });
     document.querySelectorAll("[data-blockoff]").forEach((b) => {
       b.onclick = () => setScoreBlock(b.dataset.blockoff, false, b.dataset.name);
     });
@@ -7812,6 +7871,7 @@ const ROW_HANDLERS = {
   name: editName, score: editScores, heart: toggleSupporter, gift: openGrant,
   zero: resetScores, wipe: requestGameReset, del: removePlayer, log: toggleMember,
   testacct: (id) => setTestAccount(id, !TEST_SET.has(String(id))),
+  testad: (id) => setTestAdProfile(id, !TEST_AD_SET.has(String(id))),
   adminacct: addAdminFor,
   scoreblock: (id) => setScoreBlock(id, !BLOCK_SET.has(String(id))),
 };
@@ -7830,6 +7890,7 @@ function bindRowActions() {
 /** [작업, 이름, 설명, 위험한가]. 설명은 메뉴에 마우스를 올리면 보인다. */
 function rowMenuItems(id) {
   const test = TEST_SET.has(String(id));
+  const testAd = TEST_AD_SET.has(String(id));
   const blocked = BLOCK_SET.has(String(id));
   return [
     ["name", "닉네임 바꾸기", ""],
@@ -7837,6 +7898,8 @@ function rowMenuItems(id) {
     ["heart", "응원 배지", "이름 옆 응원 배지를 켜고 끕니다"],
     ["gift", "보상 주기", ""],
     ["testacct", test ? "시험 계정 풀기" : "시험 계정으로", "시험 계정은 랭킹과 이벤트 순위에서 빠집니다"],
+    ["testad", testAd ? "시험 광고 풀기" : "시험 광고로",
+     "구글 테스트 광고가 나옵니다. 눌러도 안전하고 랭킹에는 영향이 없습니다"],
     // 등록만 여기서 한다. **해제는 관리 계정 탭에서** — 마지막 한 명인지 알려면 목록이 있어야 하는데
     // 회원 목록 탭은 그것을 받아 오지 않는다(137).
     ["adminacct", "관리 계정으로 등록", "이 계정으로 관리 화면에 들어올 수 있게 됩니다"],
