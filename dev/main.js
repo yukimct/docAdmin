@@ -3471,7 +3471,8 @@ const NAV = [
   // 결제도 자주 본다. 광고 수익 옆으로 꺼냈다(사용자 지시, 2026-10-15). 두 메뉴 옆에 오늘 금액을 붙인다(navToday).
   { id: "purchases", label: "결제", today: "pay" },
   { label: "같이하기", items: [["versus", "현황"], ["versusset", "설정"]] },
-  { label: "회원", items: [["players", "회원 목록"], ["rewards", "보상"], ["admins", "관리 계정"]] },
+  { label: "회원", items: [["players", "회원 목록"], ["rewards", "보상"],
+                          ["special", "특별 계정"], ["admins", "관리 계정"]] },
   { label: "기록", items: [["events", "앱 사용 기록"], ["audit", "관리 기록"]] },
   // 월간 패스는 131·134가 있어야 열린다. 2026-10-22에 운영에도 들어간 것을 확인하고
   // 개발 전용 조건을 뺐다. 그전에는 운영 어드민에서 이 메뉴가 아예 보이지 않았다.
@@ -3815,6 +3816,83 @@ function adminsTab() {
     </div>`;
 
   return sec("admins.list", "관리 계정", table + add, { open: true, note: `${fmt(ADMINS.length)}명` });
+}
+
+/**
+ * 특별 계정 화면. 보통 회원과 다르게 다뤄지는 계정 **셋을 한자리에** 모은다.
+ *
+ * **왜 모으나** 세 명단이 서로 다른 일을 하는데 이름이 비슷해 섞여 쓰이기 쉽다.
+ * 특히 **시험 계정과 시험 광고는 전혀 다르다** — 광고를 테스트로 돌리려고 시험 계정에
+ * 넣으면 그 회원의 랭킹이 통째로 안 쌓인다. 2026-10-28에 실제로 그럴 뻔해서 모아 뒀다.
+ *
+ * | 명단 | 무엇이 달라지나 | 어디에 걸리나 |
+ * |---|---|---|
+ * | 시험 계정 | 랭킹·이벤트 순위·정산·집계에서 **빠진다** | 서버 함수 17곳 |
+ * | 시험 광고 | 구글 **테스트 광고**가 나온다 | app_signal_v2 한 곳 |
+ * | 관리 계정 | 이 화면에 **들어올 수 있다** | is_admin() |
+ *
+ * 「주의」 **등록은 여기서 하지 않는다.** 회원 목록의 줄 메뉴에서 한다.
+ * 누구인지 보고 골라야 하는데 이 화면에는 그 사람의 점수도 레벨도 없다.
+ * 여기서는 **빼기만** 한다. 관리 계정도 같은 이유로 해제만 여기 있었다(137).
+ */
+function specialAccountsTab() {
+  const link = (id, name) => id
+    ? `<button class="plink" data-member="${esc(id)}">${esc(name || String(id).slice(0, 8))}</button>`
+    : '<span class="muted">탈퇴</span>';
+
+  // 1. 시험 계정
+  const testBody = TEST_ACCOUNTS === null
+    ? loadFail("시험 계정 목록을 불러오지 못했습니다.", "", "107_admin_records.sql")
+    : `<div class="muted" style="font-size:12.5px;margin-bottom:6px">오늘 점수, 기록전, 숫자 퍼즐, 두 마리 랭킹과 이벤트 순위에서 <b>빠집니다.</b>
+         푸시를 순위 조건으로 보낼 때도 빠지고, 차트에서는 「시험 계정도 세기」를 켜야 셉니다.</div>
+       ${TEST_ACCOUNTS.length ? `<table class="tbl"><thead><tr>
+         <th>닉네임</th><th>까닭</th><th>지정한 때</th><th></th></tr></thead>
+         <tbody>${TEST_ACCOUNTS.map((t) => `<tr>
+           <td>${link(t.profile_id, t.username)}</td>
+           <td class="long">${esc(t.reason || "")}</td>
+           <td class="nowrap">${esc(fmtDateTime(t.created_at))}</td>
+           <td><button class="ghost sm" data-testoff="${esc(t.profile_id)}" data-name="${esc(t.username || "")}">빼기</button></td>
+         </tr>`).join("")}</tbody></table>` : '<div class="empty">시험 계정이 없습니다</div>'}`;
+
+  // 2. 시험 광고
+  const adBody = TEST_AD_ACCOUNTS === null
+    ? loadFail("시험 광고 명단을 불러오지 못했습니다.", "", "144_admin_test_ad_profiles.sql")
+    : `<div class="muted" style="font-size:12.5px;margin-bottom:6px">구글 <b>테스트 광고</b>가 나옵니다. 그 계정에서는 광고를 눌러도 안전합니다.
+         <b>랭킹에는 아무 영향이 없습니다.</b> 앱에는 1분 안에 닿습니다.</div>
+       ${TEST_AD_ACCOUNTS.length ? `<table class="tbl"><thead><tr>
+         <th>닉네임</th><th></th></tr></thead>
+         <tbody>${TEST_AD_ACCOUNTS.map((t) => `<tr>
+           <td>${link(t.profile_id, t.username)}</td>
+           <td><button class="ghost sm" data-testadoff="${esc(t.profile_id)}" data-name="${esc(t.username || "")}">빼기</button></td>
+         </tr>`).join("")}</tbody></table>` : '<div class="empty">시험 광고 계정이 없습니다</div>'}`;
+
+  // 3. 관리 계정. 마지막 한 명은 빼지 못한다 — 전부 빠지면 이 화면 자체가 막힌다.
+  const last = ADMINS.length <= 1;
+  const adminBody = ADMINS_ERR
+    ? loadFail("관리 계정을 불러오지 못했습니다.", ADMINS_ERR, "137_admin_accounts.sql")
+    : `<div class="muted" style="font-size:12.5px;margin-bottom:6px">이 계정으로 관리 화면에 들어올 수 있습니다.
+         <b>마지막 한 명은 뺄 수 없습니다.</b> 전부 빠지면 아무도 못 들어옵니다.</div>
+       ${ADMINS.length ? `<table class="tbl"><thead><tr>
+         <th>닉네임</th><th>들어온 길</th><th>메모</th><th>등록</th><th></th></tr></thead>
+         <tbody>${ADMINS.map((a) => `<tr>
+           <td>${esc(a.username || "—")}</td>
+           <td class="c">${a.is_anonymous ? "게임 앱" : "이메일"}</td>
+           <td class="long">${esc(a.note || "")}</td>
+           <td class="nowrap">${fmtDate(a.created_at)}</td>
+           <td>${last ? '<span class="muted">마지막 한 명</span>'
+                      : `<button class="ghost sm" data-adminoff="${esc(a.user_id)}">빼기</button>`}</td>
+         </tr>`).join("")}</tbody></table>` : '<div class="empty">관리 계정이 없습니다</div>'}`;
+
+  const howTo = `<div class="muted" style="font-size:12.5px">세 명단 모두 <b>등록은 회원 목록의 줄 메뉴</b>에서 합니다.
+    누구인지 보고 골라야 해서입니다. 여기서는 빼기만 합니다.</div>`;
+
+  return sec("special.test", "시험 계정", testBody,
+             { open: true, note: TEST_ACCOUNTS === null ? "" : `${fmt(TEST_ACCOUNTS.length)}명` })
+       + sec("special.testad", "시험 광고", adBody,
+             { open: true, note: TEST_AD_ACCOUNTS === null ? "" : `${fmt(TEST_AD_ACCOUNTS.length)}명` })
+       + sec("special.admins", "관리 계정", adminBody,
+             { open: true, note: ADMINS_ERR ? "" : `${fmt(ADMINS.length)}명` })
+       + sec("special.how", "등록하는 법", howTo, { open: true });
 }
 
 // 서버가 막으면 rpc가 예외를 던지고 act가 알아듣는 말로 알린다(「마지막 관리 계정은 해제할 수
@@ -7367,7 +7445,8 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     ${TAB === "audit" ? auditTable(auditErr) : ""}
     ${TAB === "server" ? serverTab(serverErr) : ""}
     ${TAB === "pass" ? passTab() : ""}
-    ${TAB === "admins" ? adminsTab() : ""}`;
+    ${TAB === "admins" ? adminsTab() : ""}
+    ${TAB === "special" ? specialAccountsTab() : ""}`;
 
   // 0뿐인 줄·칸·카드를 숨기고, 붙는 하위 탭이 머리 아래에 오게 머리 높이를 알린다(2026-10-08).
   pruneZeros($("#app"));
@@ -7728,10 +7807,19 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     });
   }
 
-  if (TAB === "admins") {
+  if (TAB === "admins" || TAB === "special") {
     document.querySelectorAll("[data-adminadd]").forEach((b) => { b.onclick = () => addAdmin(); });
     document.querySelectorAll("[data-adminoff]").forEach((b) => {
       b.onclick = () => removeAdmin(b.dataset.adminoff);
+    });
+  }
+  // 특별 계정 화면의 「빼기」 둘. 랭킹 탭의 같은 단추와 같은 이름을 쓴다.
+  if (TAB === "special") {
+    document.querySelectorAll("[data-testoff]").forEach((b) => {
+      b.onclick = () => setTestAccount(b.dataset.testoff, false, b.dataset.name);
+    });
+    document.querySelectorAll("[data-testadoff]").forEach((b) => {
+      b.onclick = () => setTestAdProfile(b.dataset.testadoff, false, b.dataset.name);
     });
   }
 
@@ -8005,6 +8093,8 @@ async function boot() {
   }
   if (TAB === "pass") await loadPassAdmin();
   if (TAB === "admins") await loadAdmins();
+  // 특별 계정 화면은 세 명단을 한자리에 그린다. 셋 다 받아야 한다.
+  if (TAB === "special") { await loadAdmins(); await loadTestAccounts(); }
   const aerr = TAB === "audit" ? await loadAudit().catch((e) => e) : null;
   const vserr = TAB === "versus" ? await loadVersus() : null;
   // 설정 탭도 개별 사건 표를 그린다. 이 목록을 안 가져오면 versusEventsTable이 「장난 정의가 없습니다」로 잘못 알린다.
