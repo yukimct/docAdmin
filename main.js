@@ -1578,7 +1578,51 @@ async function deletePayout(month) {
   }, refresh);
 }
 
+/**
+ * 광고 전체 스위치(app_config.ads). 1.8.4부터 앱이 이 값을 본다.
+ *
+ * 끄면 앱이 광고 요청을 **아예 보내지 않고** 배너와 광고 단추, 광고를 말하는 문구를 전부 뺀다.
+ * 광고 동의 화면은 그대로 뜬다. 시험 광고 명단에 있는 계정은 꺼져 있어도 테스트 광고를 받는다.
+ * 앱은 켤 때와 1분마다 받는 신호로 알아채고, 받은 값을 기기에 남겨 다음에 켤 때 먼저 쓴다.
+ *
+ * 「주의」 **키가 없으면 켬이다.** 앱도 같은 판단을 한다.
+ * 1.8.3 이하 앱은 이 값을 모르고 코드에 박힌 2026-11-27까지 쉰다.
+ *
+ * 수익을 못 불러와도 스위치는 보여야 해서 admobTab의 오류 갈래보다 먼저 그린다.
+ */
+function adsSwitch() {
+  const on = CONFIG?.ads?.enabled !== false;
+  return `
+    <div class="toolbar">
+      <span style="min-width:120px"><b>광고</b></span>
+      <label class="tgl">
+        <input type="checkbox" id="toggleAds" ${on ? "checked" : ""}>
+        <span class="tgl-track"><span class="tgl-thumb"></span></span>
+        <b class="tgl-state" style="color:${on ? "var(--accent)" : "var(--dim)"}">${on ? "켜짐" : "꺼짐"}</b>
+      </label>
+      <span class="muted" style="font-size:12.5px">끄면 앱이 광고를 요청하지 않고 배너와 광고 단추도 전부 사라집니다.
+        앱은 1분 안에 알아챕니다. 1.8.4 이상 앱에만 듣습니다.</span>
+    </div>`;
+}
+
+async function toggleAds() {
+  const next = CONFIG?.ads?.enabled === false;
+  if (!confirm(next
+    ? "광고를 켭니다.\n\n앱이 다시 광고를 요청하고 배너와 광고 단추가 돌아옵니다.\nAdMob 계정이 정상인지 먼저 확인하세요."
+    : "광고를 끕니다.\n\n앱이 광고 요청을 보내지 않고 배너와 광고 단추가 전부 사라집니다.\n광고로 받던 부활·힌트·자동배치는 코인으로만 할 수 있습니다.")) return false;
+  let ok = false;
+  await act(async () => {
+    await rpc("admin_set_config", { p_key: "ads", p_value: { ...(CONFIG?.ads || {}), enabled: next } });
+    ok = true;   // refresh가 실패해도 저장은 된 것이다
+  }, refresh);
+  return ok;
+}
+
 function admobTab(err) {
+  return adsSwitch() + admobBody(err);
+}
+
+function admobBody(err) {
   if (err) return loadFail("광고 수익을 불러오지 못했습니다.", err, "117_admob_daily.sql · Edge Function admob-sync");
   const by = admobByDay();
   // 오늘부터 n일 동안(오늘 포함)의 합
@@ -7799,6 +7843,13 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
   }
 
   if (TAB === "admob") {
+    const adsEl = $("#toggleAds");
+    if (adsEl) adsEl.onchange = async () => {
+      adsEl.disabled = true;   // 응답을 기다리는 동안 두 번 눌러 상태가 엇갈리는 것을 막는다
+      try {
+        if (!(await toggleAds())) adsEl.checked = !adsEl.checked;
+      } finally { adsEl.disabled = false; }
+    };
     document.querySelectorAll("[data-payoutedit]").forEach((b) => {
       b.onclick = () => editPayout(b.dataset.payoutedit);
     });
