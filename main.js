@@ -3827,6 +3827,16 @@ async function loadAdmins() {
   catch (e) { ADMINS_ERR = e; }
 }
 
+// 앱에서 서버를 오갈 수 있는 게임 계정(139). admins와 다른 표다. docs/27 4절 A
+let SWITCHERS = [], SWITCHERS_ERR = null, SWITCH_SET = new Set();
+
+async function loadSwitchers() {
+  SWITCHERS_ERR = null;
+  try { SWITCHERS = (await rpc("admin_switchers", {})) || []; }
+  catch (e) { SWITCHERS = []; SWITCHERS_ERR = e; }
+  SWITCH_SET = new Set(SWITCHERS.map((s) => String(s.user_id)));
+}
+
 /**
  * 관리 계정 화면(137).
  *
@@ -3863,9 +3873,9 @@ function adminsTab() {
 }
 
 /**
- * 특별 계정 화면. 보통 회원과 다르게 다뤄지는 계정 **셋을 한자리에** 모은다.
+ * 특별 계정 화면. 보통 회원과 다르게 다뤄지는 계정 **넷을 한자리에** 모은다.
  *
- * **왜 모으나** 세 명단이 서로 다른 일을 하는데 이름이 비슷해 섞여 쓰이기 쉽다.
+ * **왜 모으나** 네 명단이 서로 다른 일을 하는데 이름이 비슷해 섞여 쓰이기 쉽다.
  * 특히 **시험 계정과 시험 광고는 전혀 다르다** — 광고를 테스트로 돌리려고 시험 계정에
  * 넣으면 그 회원의 랭킹이 통째로 안 쌓인다. 2026-10-28에 실제로 그럴 뻔해서 모아 뒀다.
  *
@@ -3874,6 +3884,7 @@ function adminsTab() {
  * | 시험 계정 | 랭킹·이벤트 순위·정산·집계에서 **빠진다** | 서버 함수 17곳 |
  * | 시험 광고 | 구글 **테스트 광고**가 나온다 | app_signal_v2 한 곳 |
  * | 관리 계정 | 이 화면에 **들어올 수 있다** | is_admin() |
+ * | 서버 전환 | 앱이 **개발 서버 주소**를 받는다 | app_can_switch_server()·dev_api_url() (139) |
  *
  * 「주의」 **등록은 여기서 하지 않는다.** 회원 목록의 줄 메뉴에서 한다.
  * 누구인지 보고 골라야 하는데 이 화면에는 그 사람의 점수도 레벨도 없다.
@@ -3927,7 +3938,22 @@ function specialAccountsTab() {
                       : `<button class="ghost sm" data-adminoff="${esc(a.user_id)}">빼기</button>`}</td>
          </tr>`).join("")}</tbody></table>` : '<div class="empty">관리 계정이 없습니다</div>'}`;
 
-  const howTo = `<div class="muted" style="font-size:12.5px">세 명단 모두 <b>등록은 회원 목록의 줄 메뉴</b>에서 합니다.
+  // 4. 서버 전환. 관리 계정과 다른 표다 — 익명 계정을 admins에 넣으면 관리자가 0명이 될 수 있다(2-1절).
+  const switchBody = SWITCHERS_ERR
+    ? loadFail("서버 전환 명단을 불러오지 못했습니다.", SWITCHERS_ERR, "139_admin_email_only_app_switch.sql")
+    : `<div class="muted" style="font-size:12.5px;margin-bottom:6px">이 게임 계정은 앱에서 <b>개발 서버 주소</b>를 받을 수 있습니다.
+         관리 화면에는 들어오지 못합니다. 앱의 「서버 바꾸기」 화면은 아직 없어서 지금은 명단만 관리합니다.</div>
+       ${SWITCHERS.length ? `<table class="tbl"><thead><tr>
+         <th>닉네임</th><th>들어온 길</th><th>메모</th><th>등록</th><th></th></tr></thead>
+         <tbody>${SWITCHERS.map((w) => `<tr>
+           <td>${link(w.username ? w.user_id : null, w.username)}</td>
+           <td class="c">${w.is_anonymous ? "게임 앱" : "이메일"}</td>
+           <td class="long">${esc(w.note || "")}</td>
+           <td class="nowrap">${fmtDate(w.created_at)}</td>
+           <td><button class="ghost sm" data-switchoff="${esc(w.user_id)}">빼기</button></td>
+         </tr>`).join("")}</tbody></table>` : '<div class="empty">서버 전환이 허용된 계정이 없습니다</div>'}`;
+
+  const howTo = `<div class="muted" style="font-size:12.5px">네 명단 모두 <b>등록은 회원 목록의 줄 메뉴</b>에서 합니다.
     누구인지 보고 골라야 해서입니다. 여기서는 빼기만 합니다.</div>`;
 
   return sec("special.test", "시험 계정", testBody,
@@ -3936,6 +3962,8 @@ function specialAccountsTab() {
              { open: true, note: TEST_AD_ACCOUNTS === null ? "" : `${fmt(TEST_AD_ACCOUNTS.length)}명` })
        + sec("special.admins", "관리 계정", adminBody,
              { open: true, note: ADMINS_ERR ? "" : `${fmt(ADMINS.length)}명` })
+       + sec("special.switch", "서버 전환", switchBody,
+             { open: true, note: SWITCHERS_ERR ? "" : `${fmt(SWITCHERS.length)}명` })
        + sec("special.how", "등록하는 법", howTo, { open: true });
 }
 
@@ -3956,6 +3984,20 @@ async function addAdminFor(id) {
   const note = prompt("메모 (누구의 계정인지 적어 두면 나중에 압니다)", who);
   if (note === null) return;
   await act(() => rpc("admin_admin_add", { p_user: id, p_note: note }), refresh);
+}
+
+// 서버 전환 허용(139). 서버가 이미 있는 계정이면 메모만 고친다.
+async function setSwitcher(id, on) {
+  const who = findPlayer(id)?.username || SWITCHERS.find((x) => x.user_id === id)?.username || id.slice(0, 8);
+  if (on) {
+    if (!confirm(`${who}에게 서버 전환을 허용합니다.\n\n이 계정은 앱에서 개발 서버 주소를 받을 수 있게 됩니다. 관리 화면에는 들어오지 못합니다.`)) return;
+    const note = prompt("메모 (누구의 기기인지 적어 두면 나중에 압니다)", who);
+    if (note === null) return;
+    await act(() => rpc("admin_switcher_add", { p_user: id, p_note: note }), refresh);
+  } else {
+    if (!confirm(`${who}의 서버 전환 허용을 뺍니다.\n\n이 계정은 개발 서버 주소를 더 받지 못합니다.`)) return;
+    await act(() => rpc("admin_switcher_remove", { p_user: id }), refresh);
+  }
 }
 
 async function removeAdmin(id) {
@@ -7872,6 +7914,9 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     document.querySelectorAll("[data-testadoff]").forEach((b) => {
       b.onclick = () => setTestAdProfile(b.dataset.testadoff, false, b.dataset.name);
     });
+    document.querySelectorAll("[data-switchoff]").forEach((b) => {
+      b.onclick = () => setSwitcher(b.dataset.switchoff, false);
+    });
   }
 
   if (TAB === "pass") {
@@ -8012,6 +8057,7 @@ const ROW_HANDLERS = {
   testacct: (id) => setTestAccount(id, !TEST_SET.has(String(id))),
   testad: (id) => setTestAdProfile(id, !TEST_AD_SET.has(String(id))),
   adminacct: addAdminFor,
+  switcher: (id) => setSwitcher(id, !SWITCH_SET.has(String(id))),
   scoreblock: (id) => setScoreBlock(id, !BLOCK_SET.has(String(id))),
 };
 
@@ -8031,6 +8077,7 @@ function rowMenuItems(id) {
   const test = TEST_SET.has(String(id));
   const testAd = TEST_AD_SET.has(String(id));
   const blocked = BLOCK_SET.has(String(id));
+  const switcher = SWITCH_SET.has(String(id));
   return [
     ["name", "닉네임 바꾸기", ""],
     ["score", "점수 고치기", ""],
@@ -8042,6 +8089,9 @@ function rowMenuItems(id) {
     // 등록만 여기서 한다. **해제는 관리 계정 탭에서** — 마지막 한 명인지 알려면 목록이 있어야 하는데
     // 회원 목록 탭은 그것을 받아 오지 않는다(137).
     ["adminacct", "관리 계정으로 등록", "이 계정으로 관리 화면에 들어올 수 있게 됩니다"],
+    ["switcher", switcher ? "서버 전환 풀기" : "서버 전환 허용",
+     switcher ? "이 계정은 개발 서버 주소를 더 받지 못합니다"
+              : "이 게임 계정이 앱에서 개발 서버로 옮길 수 있게 됩니다. 관리 화면에는 못 들어옵니다"],
     null,
     ["scoreblock", blocked ? "점수 막기 풀기" : "점수 막기",
      blocked ? "지금부터 내는 점수는 다시 랭킹에 오릅니다" : "게임은 그대로 하고 막힌 동안 낸 점수만 랭킹에 오르지 않게 합니다", !blocked],
@@ -8144,8 +8194,10 @@ async function boot() {
   }
   if (TAB === "pass") await loadPassAdmin();
   if (TAB === "admins") await loadAdmins();
-  // 특별 계정 화면은 세 명단을 한자리에 그린다. 셋 다 받아야 한다.
-  if (TAB === "special") { await loadAdmins(); await loadTestAccounts(); }
+  // 특별 계정 화면은 네 명단을 한자리에 그린다. 넷 다 받아야 한다.
+  if (TAB === "special") { await loadAdmins(); await loadTestAccounts(); await loadSwitchers(); }
+  // 회원 줄 메뉴가 「서버 전환 허용」과 「풀기」를 고르려면 명단이 있어야 한다.
+  if (TAB === "players") await loadSwitchers();
   const aerr = TAB === "audit" ? await loadAudit().catch((e) => e) : null;
   const vserr = TAB === "versus" ? await loadVersus() : null;
   // 설정 탭도 개별 사건 표를 그린다. 이 목록을 안 가져오면 versusEventsTable이 「장난 정의가 없습니다」로 잘못 알린다.
