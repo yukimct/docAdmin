@@ -48,7 +48,8 @@ let COUNTRIES = null;
 let COUNTRY_COUNTS = null;
 /** 이벤트 이력을 펼쳐 놓은 회원. */
 let OPEN_MEMBER = null, MEMBER_EVENTS = [], MEMBER_PAYS = [];
-let SORT = "total", QUERY = "", EMAIL = "";
+/** 회원 목록을 열면 최근 가입순으로 본다(2026-11-11). DESC 기본값 true와 짝이다. */
+let SORT = "created", QUERY = "", EMAIL = "";
 /** 회원 목록도 끊어 받는다(079). **찾기는 서버가 한다** — 브라우저에서 거르면
  *  지금 쪽 안에서만 찾게 되어, 3쪽에 있는 사람이 「없다」고 나온다. */
 let PLAYER_PAGE = 0, PLAYER_TOTAL = 0;
