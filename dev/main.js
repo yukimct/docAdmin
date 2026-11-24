@@ -70,7 +70,23 @@ const defaultDesc = (key) => key !== "username";
 const SORT_BY_COL = {
   username: "username", level: "level", total: "total", daily: "daily", coins: "coins",
   vs: "vs_wins", coop: "coop_wins", played: "played", created: "created",
+  // 151 모드별 오늘 깬 판 수
+  t_daily: "today_daily", t_number: "today_number", t_two_dog: "today_two_dog",
+  t_event: "today_event", t_versus: "today_versus",
 };
+/** 151 회원 목록의 모드별 오늘 칸. [머리글 키, 서버 칸 이름, 머리글, 설명]. 레벨은 「오늘 점수」 칸이 따로 있다.
+ *  「깸」의 조건은 맨 위 「오늘 판을 깬 사람」 카드(141)와 같다. */
+const TODAY_MODE_COLS = [
+  ["t_daily",   "today_daily",   "오늘의 퍼즐", "한국시간 오늘 오늘의 퍼즐을 깼으면 「깸」입니다."],
+  ["t_number",  "today_number",  "숫자 오늘",   "한국시간 오늘 깬 숫자 판 수입니다."],
+  ["t_two_dog", "today_two_dog", "두 마리 오늘", "한국시간 오늘 깬 두 마리 판 수입니다."],
+  ["t_event",   "today_event",   "이벤트 오늘", "한국시간 오늘 끝난 이벤트·산책길에서 센 판 수입니다."],
+  ["t_versus",  "today_versus",  "대전 오늘",   "한국시간 오늘 끝까지 한 대전·같이하기 판 수입니다."],
+];
+/** 오늘 어느 모드든 한 판이라도 깼나. 151 칸이 없는 옛 서버면 레벨만 본다. */
+const playedTodayAny = (p, today) =>
+  (p.daily_date === today && (p.daily_score || 0) > 0)
+  || TODAY_MODE_COLS.some(([, f]) => Number(p[f]) > 0);
 /** 다중 삭제용 선택 목록. 검색어를 바꿔도 선택은 유지된다 — 여러 번 걸러 가며
  *  고르는 게 자연스럽고, 안 보이는 걸 지우는 사고는 삭제 직전 명단 확인으로 막는다. */
 let SELECTED = new Set();
@@ -446,7 +462,8 @@ async function loadAnomalies() {
  */
 async function loadPlayers() {
   const serverSorts = ["total", "level", "daily", "coins", "vs_wins", "coop_wins",
-                       "created", "username", "played"];
+                       "created", "username", "played",
+                       "today_daily", "today_number", "today_two_dog", "today_event", "today_versus"];
   if (serverSorts.includes(SORT)) {
     // ⚠️ **방향·찾기·끊어 받기를 모두 서버가 한다**(075·079). 한 쪽만 받아 와서
     // 브라우저에서 뒤집거나 거르면 **그 쪽 안에서만** 맞는 답이 나온다.
@@ -5046,11 +5063,13 @@ function versusPlayersTable() {
  * 지금 세우는 기준에는 화살표를 붙인다 — 어느 칸으로 세웠는지 머리글만 보고 알아야
  * 선택 상자를 다시 확인하지 않는다. 결제 칸은 서버가 못 세우므로 이걸 안 쓴다.
  */
-function th(col, label, cls) {
+function th(col, label, cls, keep, tip) {
   const on = SORT_BY_COL[col] === SORT;
   const arrow = on ? (DESC ? " ↓" : " ↑") : "";
   // cls는 칸 정렬 class다(숫자 칸은 "num"). 값 칸과 같은 class를 줘야 머리글이 값 위에 선다.
-  return `<th data-sort="${col}" class="sortable${on ? " on" : ""}${cls ? ` ${cls}` : ""}">`
+  // keep이면 이 쪽 값이 전부 0이어도 칸을 숨기지 않는다(pruneZeros). tip은 마우스를 올리면 뜨는 설명.
+  return `<th data-sort="${col}" class="sortable${on ? " on" : ""}${cls ? ` ${cls}` : ""}"`
+       + `${keep ? " data-keep" : ""}${tip ? ` title="${esc(tip)}"` : ""}>`
        + `${label}${arrow}</th>`;
 }
 
@@ -5072,7 +5091,8 @@ function playersTable() {
       ${th("username", "닉네임", "pin")}
       ${th("level", "레벨", "num")}
       ${th("total", "누적 점수", "num")}
-      ${th("daily", "오늘 점수", "num")}
+      ${th("daily", "오늘 점수", "num", true, "한국시간 오늘 레벨 모드 점수입니다. 다른 모드는 오른쪽 칸에 있습니다.")}
+      ${TODAY_MODE_COLS.map(([k, , label, tip]) => th(k, label, "num", true, tip)).join("")}
       ${th("coins", "코인", "num")}
       ${th("vs", "대전 승-패-무", "num")}
       ${th("coop", "협동 이김 / 판", "num")}
@@ -5085,13 +5105,14 @@ function playersTable() {
       <th>관리</th>
     </tr></thead><tbody>${moreRows(key, list.map((p, i) => {
       const played = p.daily_date === today && (p.daily_score || 0) > 0;
+      const playedAny = playedTodayAny(p, today);
       return `<tr>
         <td class="nopin"><input type="checkbox" data-pick="${p.id}" ${SELECTED.has(p.id) ? "checked" : ""}></td>
         <td class="num muted fit">${i + 1}</td>
         <td class="pin">${esc(p.username || "(이름 없음)")}
           ${p.supporter ? '<span class="pill heart">응원</span>' : ""}
           ${p.no_ads ? '<span class="pill" title="광고 제거를 가지고 있습니다. 복원으로 켜진 것도 포함이라 결제 원장과 다를 수 있습니다">광고 제거</span>' : ""}
-          ${played ? '<span class="pill today">오늘</span>' : ""}
+          ${playedAny ? '<span class="pill today" title="한국시간 오늘 어느 모드든 판을 깼습니다">오늘</span>' : ""}
           ${p.reset_requested_at ? '<span class="pill heart" title="다음에 앱을 켜면 게임이 처음부터 시작됩니다">게임 초기화 요청됨</span>' : ""}
           ${TEST_SET.has(String(p.id)) ? '<span class="pill dim">시험 계정</span>' : ""}
           ${TEST_AD_SET.has(String(p.id)) ? '<span class="pill dim" title="이 계정에는 구글 테스트 광고가 나옵니다. 랭킹에는 영향이 없습니다">테스트 광고</span>' : ""}
@@ -5100,6 +5121,11 @@ function playersTable() {
         <td class="num">${p.max_level == null ? '<span class="muted">—</span>' : fmt(p.max_level)}</td>
         <td class="num">${fmt(p.total_score)}</td>
         <td class="num">${played ? fmt(p.daily_score) : '<span class="muted">—</span>'}</td>
+        ${TODAY_MODE_COLS.map(([k, f]) => {
+          const n = Number(p[f]) || 0;
+          if (n <= 0) return '<td class="num"><span class="muted">—</span></td>';
+          return `<td class="num">${k === "t_daily" ? "깸" : fmt(n)}</td>`;
+        }).join("")}
         <td class="num">${p.coins == null ? '<span class="muted">—</span>' : fmt(p.coins)}</td>
         <td class="num">${p.vs_played == null ? '<span class="muted">—</span>'
           : Number(p.vs_played) === 0 ? '<span class="muted">0</span>'
@@ -7496,6 +7522,11 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
           <option value="total">누적 점수순</option>
           <option value="level">레벨 높은순</option>
           <option value="daily">오늘 점수순</option>
+          <option value="today_daily">오늘의 퍼즐 오늘 깬 순</option>
+          <option value="today_number">숫자 오늘 많이 깬 순</option>
+          <option value="today_two_dog">두 마리 오늘 많이 깬 순</option>
+          <option value="today_event">이벤트 오늘 많이 깬 순</option>
+          <option value="today_versus">대전 오늘 많이 한 순</option>
           <option value="coins">코인 많은순</option>
           <option value="vs_wins">대전 많이 이긴 순</option>
           <option value="coop_wins">협동 많이 이긴 순</option>
