@@ -353,6 +353,59 @@ function syncHeadH() {
 }
 window.addEventListener("resize", syncHeadH);
 
+/**
+ * 152 요약 카드를 누르면 관련 화면으로 간다(2026-11-26 사용자 요청).
+ * 회원 목록으로 갈 때는 카드와 같은 조건을 걸어 목록의 사람 수가 카드 숫자와 같게 한다.
+ * 조건 키(today_mode·active_today·signup_today·exclude_test)는 서버 152 admin_players_ranked가 받는다.
+ *   tab     갈 메뉴. 없으면 지금 화면에 머문다
+ *   filter  회원 목록 조건. label은 목록 위 이름표
+ *   sort    회원 목록 정렬
+ *   sec     펴고 그 자리로 내려갈 접는 칸. anchor가 있으면 칸 안의 그 자리로
+ */
+const goAttr = (g) => ` data-go="${esc(JSON.stringify(g))}"`;
+/** 다시 그린 뒤 내려갈 자리. 다른 메뉴로 넘어가면 그린 다음에야 자리가 생긴다. */
+let GO_SCROLL = null;
+function goScroll() {
+  const g = GO_SCROLL;
+  GO_SCROLL = null;
+  if (!g) return;
+  const box = document.querySelector(`[data-sec="${CSS.escape(g.sec)}"]`);
+  if (!box) return;
+  box.open = true;
+  const el = (g.anchor && document.getElementById(g.anchor)) || box;
+  // 머리와 그 아래 붙는 하위 탭(.subtabs.stick)이 화면 위를 가리므로 그 높이만큼 덜 내려간다.
+  // 개발 서버 띠(--env-h)도 맨 위에 붙는다.
+  const env = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--env-h")) || 0;
+  const cover = env + [...document.querySelectorAll(".head, .subtabs.stick")].reduce((a, x) => a + x.offsetHeight, 0);
+  window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - cover - 12, behavior: "smooth" });
+}
+function goTo(g) {
+  if (g.sec) GO_SCROLL = { sec: g.sec, anchor: g.anchor };
+  // 같은 화면 안에서 내려가기만 할 때는 다시 불러오지 않는다.
+  if (!g.tab || (g.tab === TAB && !g.filter && g.tab !== "players")) {
+    if (g.tab === "charts" && CHART_VIEW !== "all") { CHART_VIEW = "all"; refresh(); return; }
+    goScroll();
+    return;
+  }
+  BELL_OPEN = false;
+  if (g.tab === "players") {
+    PLAYER_FILTER = g.filter ? { label: g.label, arg: g.filter } : null;
+    QUERY = "";
+    PLAYER_PAGE = 0;
+  }
+  if (g.sort) { SORT = g.sort; DESC = defaultDesc(SORT); }
+  if (g.tab === "charts") CHART_VIEW = "all";
+  TAB = g.tab;
+  refresh();
+}
+// 화면을 다시 그려도 동작하게 문서에 한 번만 건다. 카드 안의 작은 글씨에도 data-go가 있으면 안쪽이 이긴다.
+document.addEventListener("click", (e) => {
+  const el = e.target.closest?.("[data-go]");
+  if (!el) return;
+  e.stopPropagation();
+  goTo(JSON.parse(el.dataset.go));
+});
+
 // ------------------------------------------------------------------ 로그인
 function renderLogin(msg) {
   $("#app").innerHTML = `
@@ -1039,9 +1092,19 @@ function kpiRow() {
     ["쓴 코인 ÷ 번 코인 · 30일", ratio == null ? "—" : String(ratio), ""],
   ];
   return `<div class="cards">${cards.map(([label, value, d]) => `
-    <div class="card"><div class="label">${label}${infoTip(KPI_TIPS[label])}</div>
+    <div class="card${KPI_GO[label] ? " click" : ""}"${KPI_GO[label] ? goAttr(KPI_GO[label]) : ""}><div class="label">${label}${infoTip(KPI_TIPS[label])}</div>
       <div class="value">${value} ${d}</div></div>`).join("")}</div>`;
 }
+
+/** 152 차트 맨 위 카드를 누르면 가는 곳. 카드 이름으로 찾는다. */
+const KPI_GO = {
+  "오늘 앱을 켠 사람": { tab: "players", filter: { active_today: true }, label: "오늘 앱을 켠 사람" },
+  "오늘 새로 가입": { tab: "players", filter: { signup_today: true }, label: "오늘 새로 가입한 사람", sort: "created" },
+  "최근 7일 하루 평균 앱을 켠 사람": { sec: "charts.people" },
+  "다음 날 다시 온 비율": { sec: "charts.people", anchor: "retentionAnchor" },
+  "오늘 늘어난 코인 · 번 것 − 쓴 것": { sec: "charts.economy" },
+  "쓴 코인 ÷ 번 코인 · 30일": { sec: "charts.economy" },
+};
 
 /** 어제(또는 지난주) 대비. 0에서 늘어난 건 비율로 말할 수 없어 숫자만 적는다.
  *  before가 null이면 견줄 날이 없는 것이라 아무것도 안 붙인다. */
@@ -1068,12 +1131,20 @@ const BOARD_CLEAR_MODES = [
 function boardClearByMode(by) {
   if (!by || typeof by !== "object") return "";
   const parts = BOARD_CLEAR_MODES
-    .map(([k, label]) => [label, Number(by[k]) || 0])
-    .filter(([, n]) => n > 0)
-    .map(([label, n]) => `${esc(label)} ${fmt(n)}`);
+    .map(([k, label]) => [k, label, Number(by[k]) || 0])
+    .filter(([, , n]) => n > 0)
+    .map(([k, label, n]) => `<span class="go-link"${goAttr({
+      tab: "players", filter: { today_mode: k }, label: `오늘 판을 깬 사람 · ${label}`, sort: BOARD_CLEAR_SORT[k],
+    })}>${esc(label)} ${fmt(n)}</span>`);
   if (!parts.length) return "";
   return `<div class="muted" style="font-size:11.5px">${parts.join(" · ")}</div>`;
 }
+
+/** 152 모드별 글씨를 눌러 회원 목록으로 갈 때의 정렬. 레벨은 「오늘 점수순」이다. */
+const BOARD_CLEAR_SORT = {
+  level: "daily", daily: "today_daily", number: "today_number",
+  two_dog: "today_two_dog", event: "today_event", versus: "today_versus",
+};
 
 // 차트 맨 위 카드의 설명 배지. 카드 이름으로 찾는다.
 const KPI_TIPS = {
@@ -1124,7 +1195,7 @@ function chartsTab(err) {
       { name: "새로 가입", color: "#17b3a8", values: STATS.map((r) => Number(r.signups)) },
       { name: "앱을 켠 사람", color: "#7aa2f7", values: STATS.map((r) => Number(r.active)) },
     ])}
-    <h3 class="sub">다시 온 사람 · 가입한 날 기준</h3>
+    <h3 class="sub" id="retentionAnchor">다시 온 사람 · 가입한 날 기준</h3>
     <div class="muted" style="font-size:12px;margin:-4px 0 6px">${PEOPLE_CHART_NOTE()}</div>
     ${retentionTable()}`, { open: true })}
 
@@ -7505,12 +7576,12 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
     </div>
     ${warn ? `<div class="notice">${esc(warn)}</div>` : ""}
     <div class="cards">
-      <div class="card"><div class="label">전체 회원</div><div class="value">${fmt(S.members)}</div></div>
-      <div class="card"><div class="label">오늘 판을 깬 사람${infoTip(TIP_BOARD_CLEAR)}</div><div class="value">${fmt(S.today_players)}</div>${boardClearByMode(S.today_players_by_mode)}</div>
-      <div class="card"><div class="label">오늘 최고 점수</div><div class="value">${Number(S.today_best) > 0 ? fmt(S.today_best) : "—"}</div></div>
-      <div class="card" data-z><div class="label">응원 상품을 산 사람</div><div class="value">${fmt(S.supporters)}</div></div>
-      <div class="card" data-z><div class="label">${esc(unclaimedLabel())}${server114() ? infoTip(UNCLAIMED_TIP_114) : ""}</div><div class="value">${fmt(S.unclaimed_rewards)}</div>${server114()
-        ? `<div class="muted" style="font-size:11.5px">선물 ${fmt(S.unclaimed_gifts)} · 랭킹 ${fmt(S.unclaimed_rank)}</div>` : ""}</div>
+      <div class="card click"${goAttr({ tab: "players", filter: { exclude_test: true }, label: "전체 회원 · 시험 계정 뺌" })}><div class="label">전체 회원</div><div class="value">${fmt(S.members)}</div></div>
+      <div class="card click"${goAttr({ tab: "players", filter: { today_mode: "any" }, label: "오늘 판을 깬 사람" })}><div class="label">오늘 판을 깬 사람${infoTip(TIP_BOARD_CLEAR)}</div><div class="value">${fmt(S.today_players)}</div>${boardClearByMode(S.today_players_by_mode)}</div>
+      <div class="card click"${goAttr({ tab: "players", filter: { today_mode: "level" }, label: "오늘 판을 깬 사람 · 레벨", sort: "daily" })}><div class="label">오늘 최고 점수</div><div class="value">${Number(S.today_best) > 0 ? fmt(S.today_best) : "—"}</div></div>
+      <div class="card click" data-z${goAttr({ tab: "purchases" })}><div class="label">응원 상품을 산 사람</div><div class="value">${fmt(S.supporters)}</div></div>
+      <div class="card click" data-z${goAttr({ tab: "rewards" })}><div class="label">${esc(unclaimedLabel())}${server114() ? infoTip(UNCLAIMED_TIP_114) : ""}</div><div class="value">${fmt(S.unclaimed_rewards)}</div>${server114()
+        ? `<div class="muted" style="font-size:11.5px">선물 ${fmt(S.unclaimed_gifts)} · <span class="go-link"${goAttr({ tab: "rewards", sec: "rewards.grants" })}>랭킹 ${fmt(S.unclaimed_rank)}</span></div>` : ""}</div>
     </div>
 
     ${TAB === "players" ? `
@@ -7570,6 +7641,7 @@ function render(warn, eventsErr, statsErr, noticesErr, payErr, auditErr, vsErr, 
   pruneZeros($("#app"));
   syncHeadH();
   closeRowMenu();
+  requestAnimationFrame(goScroll);
   $("#refresh").onclick = refresh;
   bindBell();
   const orphan = $("#cleanupOrphans");
