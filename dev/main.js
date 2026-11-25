@@ -373,9 +373,11 @@ function goScroll() {
   if (!box) return;
   box.open = true;
   const el = (g.anchor && document.getElementById(g.anchor)) || box;
-  // 머리가 화면 위에 붙어 있어서 그 높이만큼 덜 내려간다.
-  const head = document.querySelector(".head")?.offsetHeight || 0;
-  window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - head - 8, behavior: "smooth" });
+  // 머리와 그 아래 붙는 하위 탭(.subtabs.stick)이 화면 위를 가리므로 그 높이만큼 덜 내려간다.
+  // 개발 서버 띠(--env-h)도 맨 위에 붙는다.
+  const env = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--env-h")) || 0;
+  const cover = env + [...document.querySelectorAll(".head, .subtabs.stick")].reduce((a, x) => a + x.offsetHeight, 0);
+  window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - cover - 12, behavior: "smooth" });
 }
 function goTo(g) {
   if (g.sec) GO_SCROLL = { sec: g.sec, anchor: g.anchor };
